@@ -1,5 +1,9 @@
 * text=auto
 
+# Workflows and shell scripts must be LF on every checkout.
+.github/workflows/*.yml text eol=lf
+*.sh text eol=lf
+
 # Signed manifest files are verified byte-for-byte: never let git rewrite their line endings.
 manifest/*.json -text
 *.json.sig -text
