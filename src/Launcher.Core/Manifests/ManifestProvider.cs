@@ -131,9 +131,11 @@ namespace DreamWeave.Launcher.Core.Manifests
     /// Fetches the manifest from each source in order, verifies it, and caches the verified pair.
     /// <list type="bullet">
     /// <item>Rollback floor = max(state's highest serial, the cached pair's serial if the cache
-    /// verifies, the verifier's compiled-in floor). It is computed once per load and used for
-    /// every source and for the cache fallback, so losing the state file alone cannot reopen a
-    /// rollback while a valid cache exists.</item>
+    /// verifies, the highest serial this provider instance has accepted, the verifier's
+    /// compiled-in floor). It is computed once per load and used for every source and for the
+    /// cache fallback, so losing the state file alone cannot reopen a rollback while a valid
+    /// cache exists, and a failed cache or state write cannot reopen one within the session.
+    /// Hold ONE provider for the process lifetime so the in-session floor covers every load.</item>
     /// <item>Every response is size-capped (<see cref="MaxManifestBytes"/>, <see cref="ManifestSignature.MaxFileBytes"/>).</item>
     /// <item>A source whose pair fails the signature check is refetched ONCE with a cache-busting
     /// query (a CDN can briefly serve a new manifest with the old signature); any other failure,
@@ -162,6 +164,7 @@ namespace DreamWeave.Launcher.Core.Manifests
         private readonly AppPaths _paths;
         private readonly StateStore _state;
         private readonly IReadOnlyList<ManifestSource> _sources;
+        private long _acceptedThisProcess;
 
         /// <summary>Creates a provider.</summary>
         /// <param name="fetcher">HTTP transport.</param>
@@ -193,6 +196,7 @@ namespace DreamWeave.Launcher.Core.Manifests
             VerifiedManifest cacheAtStart = TryReadCache(0, null);
             long floor = Math.Max(_state.HighestManifestSerial, cacheAtStart == null ? 0 : cacheAtStart.Serial);
             floor = Math.Max(floor, _verifier.MinimumSerial);
+            floor = Math.Max(floor, Interlocked.Read(ref _acceptedThisProcess));
 
             foreach (ManifestSource source in _sources)
             {
@@ -271,6 +275,14 @@ namespace DreamWeave.Launcher.Core.Manifests
         // denied); each failure is recorded as an attempt note so the caller can log it.
         private void Accept(VerifiedManifest verified, List<ManifestSourceAttempt> attempts)
         {
+            // Remember the acceptance in memory first: it must hold even when both writes below fail.
+            long accepted = verified.Serial;
+            long seen;
+            while ((seen = Interlocked.Read(ref _acceptedThisProcess)) < accepted)
+            {
+                Interlocked.CompareExchange(ref _acceptedThisProcess, accepted, seen);
+            }
+
             try
             {
                 WriteCache(verified);
@@ -278,7 +290,8 @@ namespace DreamWeave.Launcher.Core.Manifests
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
                 // Do NOT advance the persisted floor past what the cache holds, or the offline
-                // fallback would reject its own cached copy as a rollback.
+                // fallback in a LATER session would reject its own cached copy as a rollback.
+                // Within this session the in-memory floor above still refuses anything lower.
                 LauncherException le = ex as LauncherException ?? LauncherException.FromIo(ex, "caching the download list");
                 attempts.Add(new ManifestSourceAttempt("cache-write", le.Code, le.Detail));
                 return;

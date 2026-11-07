@@ -54,6 +54,9 @@ namespace DreamWeave.Launcher.Core
         /// <summary>The operating system denied access to a file or folder.</summary>
         AccessDenied = 41,
 
+        /// <summary>The launcher's state file is held locked by another launcher instance and the wait timed out.</summary>
+        StateLocked = 42,
+
         /// <summary>The player declined the UAC elevation prompt.</summary>
         ElevationDeclined = 50,
 

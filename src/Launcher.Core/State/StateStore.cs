@@ -22,11 +22,23 @@ namespace DreamWeave.Launcher.Core.State
     /// A missing file starts fresh; an unreadable (corrupt) file found at open is renamed aside to
     /// <c>state.json.corrupt-&lt;utc ticks&gt;</c> and the store starts fresh.
     /// </para>
+    /// <para>
+    /// Every call does synchronous file I/O and can WAIT (up to the lock timeout, 30 seconds by
+    /// default) for another launcher instance to release the lock file, so never call the
+    /// constructor, <see cref="Update"/> or <see cref="Open"/> on the UI thread; run them on a
+    /// background thread. A timed-out wait throws <see cref="LauncherError.StateLocked"/>.
+    /// </para>
     /// </summary>
     public sealed class StateStore
     {
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
-        private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(30);
+        /// <summary>Default wait for another instance to release the lock file.</summary>
+        internal static readonly TimeSpan DefaultLockTimeout = TimeSpan.FromSeconds(30);
+
+        private const int ErrorSharingViolation = 0x20;
+        private const int ErrorLockViolation = 0x21;
+
+        private readonly TimeSpan _lockTimeout;
         private readonly object _gate = new object();
         private readonly string _path;
         private readonly string _lockPath;
@@ -38,7 +50,14 @@ namespace DreamWeave.Launcher.Core.State
         /// </summary>
         /// <exception cref="LauncherException">When the file cannot be written or the lock cannot be taken.</exception>
         public StateStore(string stateFilePath)
+            : this(stateFilePath, DefaultLockTimeout)
         {
+        }
+
+        /// <summary>As the public constructor, with an explicit lock-file wait (tests use a short one).</summary>
+        internal StateStore(string stateFilePath, TimeSpan lockTimeout)
+        {
+            _lockTimeout = lockTimeout;
             _path = Path.GetFullPath(stateFilePath);
             _lockPath = _path + ".lock";
             lock (_gate)
@@ -159,16 +178,28 @@ namespace DreamWeave.Launcher.Core.State
                 {
                     throw LauncherException.FromIo(ex, "locking launcher state");
                 }
-                catch (IOException ex)
+                catch (IOException ex) when (IsSharingOrLockViolation(ex))
                 {
-                    if (clock.Elapsed > LockTimeout)
+                    if (clock.Elapsed > _lockTimeout)
                     {
-                        throw new LauncherException(LauncherError.Unknown, "Another copy of the launcher is holding its settings file locked.", ex);
+                        throw new LauncherException(LauncherError.StateLocked, "Another copy of the launcher is holding its settings file locked. Close it and try again.", ex);
                     }
 
                     Thread.Sleep(random.Next(2, 15));
                 }
+                catch (IOException ex)
+                {
+                    // Anything else (disk full, path problems, device errors) will not clear by waiting.
+                    throw LauncherException.FromIo(ex, "locking launcher state");
+                }
             }
+        }
+
+        /// <summary>True only for ERROR_SHARING_VIOLATION (0x20) and ERROR_LOCK_VIOLATION (0x21), the two errors another holder of the lock file produces.</summary>
+        internal static bool IsSharingOrLockViolation(IOException ex)
+        {
+            int code = ex.HResult & 0xFFFF;
+            return code == ErrorSharingViolation || code == ErrorLockViolation;
         }
 
         private static LauncherState LoadOrNew(string path, out bool needsSave)

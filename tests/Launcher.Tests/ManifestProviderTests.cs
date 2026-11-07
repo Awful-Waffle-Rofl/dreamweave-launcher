@@ -144,6 +144,36 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void InSessionAcceptance_RefusesLowerSerial_EvenWhenNothingPersisted()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                var state = StateStore.Open(paths);
+                var fetcher = new FakeHttpFetcher();
+                var provider = new ManifestProvider(fetcher, new ManifestVerifier(new[] { _key.PublicKey }), paths, state, Sources());
+
+                // Create the cache file (serial 1) so it can be locked, then lock it for the session.
+                Serve(fetcher, PrimaryUrl, 1);
+                Assert.AreEqual(LauncherError.None, provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult().Status);
+                using (new FileStream(paths.ManifestCacheFile, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    Serve(fetcher, PrimaryUrl, 7);
+                    ManifestLoadResult seven = provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert.AreEqual(7L, seven.Manifest.Serial);
+                    Assert.IsTrue(seven.Attempts.Any(a => a.SourceName == "cache-write" && a.Error != LauncherError.None), "precondition: 7 was not cached");
+                    Assert.AreEqual(1L, state.HighestManifestSerial, "precondition: 7 was not persisted");
+
+                    Serve(fetcher, PrimaryUrl, 6);
+                    ManifestLoadResult six = provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+                    Assert.AreEqual(LauncherError.ManifestRollback, six.Attempts[0].Error);
+                    Assert.IsNull(six.Manifest, "serial 6 must not be accepted after 7 in the same session");
+                }
+            }
+        }
+
+        [TestMethod]
         public void PrimaryDown_FallsBackToSecondary()
         {
             using (var dir = new TempDir())

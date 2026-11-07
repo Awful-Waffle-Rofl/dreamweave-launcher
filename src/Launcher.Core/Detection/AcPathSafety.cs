@@ -5,16 +5,18 @@ namespace DreamWeave.Launcher.Core.Detection
 {
     /// <summary>
     /// Resolves manifest-relative paths under the Asheron's Call folder, refusing anything that
-    /// could escape it or name a Windows device. Enforced at use time because the manifest parser
-    /// does not (yet) reject every such shape. Does not follow or detect junctions/symlinks.
+    /// could escape it or name a Windows device. The same lexical rules run twice: at manifest
+    /// load (ManifestParser.Validate calls <see cref="CheckRelativePath"/>, so a bad manifest is
+    /// rejected whole) and again here at use time as defense in depth. Does not follow or detect
+    /// junctions/symlinks.
     /// </summary>
     public static class AcPathSafety
     {
         private static readonly string[] ReservedBaseNames =
         {
             "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
-            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
             // Windows also treats the superscript digit forms (U+00B9, U+00B2, U+00B3) of COM1-3 and LPT1-3 as devices.
             "COM\u00B9", "COM\u00B2", "COM\u00B3", "LPT\u00B9", "LPT\u00B2", "LPT\u00B3",
         };
@@ -50,6 +52,15 @@ namespace DreamWeave.Launcher.Core.Detection
         public static bool IsSafeRelativePath(string relativePath)
         {
             return Check(relativePath) == null;
+        }
+
+        /// <summary>
+        /// The first lexical rule <paramref name="relativePath"/> breaks, in plain words, or null when
+        /// it is acceptable. Shared with the manifest parser so load-time and use-time rules cannot drift.
+        /// </summary>
+        internal static string CheckRelativePath(string relativePath)
+        {
+            return Check(relativePath);
         }
 
         /// <summary>The first rule the path breaks, in plain words, or null when it is acceptable.</summary>
