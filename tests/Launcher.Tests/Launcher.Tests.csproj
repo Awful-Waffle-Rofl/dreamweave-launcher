@@ -15,6 +15,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Launcher.Core\Launcher.Core.csproj" />
+    <ProjectReference Include="..\..\src\Launcher\Launcher.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\manifest\manifest.sample.json" Link="manifest.sample.json" CopyToOutputDirectory="PreserveNewest" />

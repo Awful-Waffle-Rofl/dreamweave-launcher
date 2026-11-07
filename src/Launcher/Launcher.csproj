@@ -10,6 +10,9 @@
     <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Launcher.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
