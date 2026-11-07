@@ -20,7 +20,16 @@ DreamWeave.
   End-of-Retail data from an existing community mega.nz link. Every download is
   verified by SHA-256 against a signed manifest that we host.
 - It launches `acclient.exe` with login arguments for DreamWeave only.
-- It never modifies, patches or injects into client files or client processes.
+- By default it never modifies the client, never injects into client files or
+  client processes, and never requires a modified client to play.
+- It offers exactly one optional fix, which is off by default: the community
+  palette memory-leak fix from
+  [eriknihlen/ac-eor-palette-leak-fix](https://github.com/eriknihlen/ac-eor-palette-leak-fix)
+  (MIT). It replaces 6 bytes in `acclient.exe` with NOPs (two 3-byte
+  instructions). It is applied only if the player ticks it. The launcher checks
+  the file's SHA-256 before and after the change and keeps the original so the
+  fix can be reverted. The patched file is produced on the player's own machine
+  and is never distributed.
 - It has an uninstaller. Telemetry, if any is ever added, will be opt-in with a
   published privacy policy.
 - Everything in this repository is under the MIT license. Code signing is
@@ -34,7 +43,10 @@ No Asheron's Call logos or artwork are used in this repository.
 - `src/Launcher` - the WinForms executable (`DreamWeaveLauncher.exe`). Referenced
   assemblies are embedded with Costura.Fody.
 - `tools/ManifestTool` - console tool for generating keys and signing and
-  verifying the download manifest (stubs for now).
+  verifying the download manifest (`keygen`, `sign`, `verify`).
+- `manifest/manifest.sample.json` - a sample schema-1 manifest with the real
+  download hashes. See `Docs/manifest-compat.md` for the rules for changing the
+  manifest.
 - `tests/Launcher.Tests` - MSTest unit tests.
 
 All projects target `net48`. The `Microsoft.NETFramework.ReferenceAssemblies`
@@ -54,3 +66,10 @@ CI builds on Windows and fails if the launcher exe grows past 3 MB.
 
 MIT, see `LICENSE`. Third-party components are listed in
 `THIRD-PARTY-NOTICES.md`.
+
+## Credits
+
+- The optional palette leak fix (its offsets, original bytes and before/after
+  hashes) comes from
+  [eriknihlen/ac-eor-palette-leak-fix](https://github.com/eriknihlen/ac-eor-palette-leak-fix),
+  MIT licensed.

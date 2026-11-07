@@ -12,6 +12,14 @@ namespace DreamWeave.Launcher.Core.Manifests
     /// can be added without a schema bump; bump <see cref="Schema"/> only for a change an older
     /// launcher must NOT act on (it then blocks downloads and launches from its cache).
     /// </summary>
+    /// <remarks>
+    /// Compatibility contract (see Docs/manifest-compat.md): <c>manifest.json</c> stays schema 1
+    /// and changes only additively for the life of every v1 launcher, because a v1 launcher that
+    /// sees any other schema can no longer read the self-update pointer. A breaking schema ships
+    /// as a NEW file (<c>manifest.v2.json</c> plus its <c>.sig</c>) that newer launchers try first,
+    /// falling back to <c>manifest.json</c>; the schema-1 file keeps pointing old launchers at a
+    /// release that understands v2.
+    /// </remarks>
     [JsonObject(MemberSerialization.OptIn)]
     public sealed class LauncherManifest
     {
@@ -68,6 +76,13 @@ namespace DreamWeave.Launcher.Core.Manifests
 
         /// <summary>Non-fatal problems found while parsing (for the launcher log). Never null.</summary>
         public IReadOnlyList<string> Warnings { get; internal set; } = new string[0];
+
+        /// <summary>
+        /// Ids of components marked <c>required</c> that were skipped because their kind is unknown
+        /// to this launcher. Non-empty means this launcher cannot fully install the server's client
+        /// setup; callers should prompt for a launcher update. Never null.
+        /// </summary>
+        public IReadOnlyList<string> SkippedRequired { get; internal set; } = new string[0];
 
         /// <summary><see cref="Issued"/> parsed as a UTC timestamp, or null when absent or unparseable.</summary>
         public DateTimeOffset? IssuedUtc

@@ -12,6 +12,13 @@ namespace DreamWeave.Launcher.Core.Manifests
     /// </summary>
     public static class TrustedKeys
     {
+        /// <summary>
+        /// Compiled-in rollback floor: no manifest with a lower serial is ever accepted, even on a
+        /// fresh install with no state or cache. Raise it in a launcher release to retire old,
+        /// still-validly-signed manifests. Never below 1.
+        /// </summary>
+        public const long MinimumSerial = 1;
+
         /// <summary>The compiled-in production key set.</summary>
         public static IReadOnlyList<TrustedKey> Production { get; } = new TrustedKey[]
         {

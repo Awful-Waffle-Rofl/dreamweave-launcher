@@ -23,8 +23,9 @@ namespace DreamWeave.Launcher.Core
             DataDir = Path.Combine(Root, "DreamWeave");
             StagingDir = Path.Combine(DataDir, "staging");
             StateFile = Path.Combine(DataDir, "state.json");
-            ManifestCacheFile = Path.Combine(DataDir, "manifest.json");
-            ManifestSigCacheFile = Path.Combine(DataDir, "manifest.json.sig");
+            ManifestCacheFile = Path.Combine(DataDir, "manifest.cache.json");
+            LegacyManifestCacheFile = Path.Combine(DataDir, "manifest.json");
+            LegacyManifestSigCacheFile = Path.Combine(DataDir, "manifest.json.sig");
         }
 
         /// <summary>Path set rooted at the current user's %LOCALAPPDATA%.</summary>
@@ -48,10 +49,16 @@ namespace DreamWeave.Launcher.Core
         /// <summary>The persisted <see cref="State.LauncherState"/>: <c>DataDir\state.json</c>.</summary>
         public string StateFile { get; }
 
-        /// <summary>Last verified manifest bytes: <c>DataDir\manifest.json</c>.</summary>
+        /// <summary>
+        /// Last verified manifest AND its signature, kept together in one atomically written file
+        /// (<c>DataDir\manifest.cache.json</c>, holding both as base64) so the pair can never be torn.
+        /// </summary>
         public string ManifestCacheFile { get; }
 
-        /// <summary>Detached signature for <see cref="ManifestCacheFile"/>: <c>DataDir\manifest.json.sig</c>.</summary>
-        public string ManifestSigCacheFile { get; }
+        /// <summary>Pre-release two-file cache location (manifest bytes). Never read; deleted after a successful cache write.</summary>
+        internal string LegacyManifestCacheFile { get; }
+
+        /// <summary>Pre-release two-file cache location (signature). Never read; deleted after a successful cache write.</summary>
+        internal string LegacyManifestSigCacheFile { get; }
     }
 }

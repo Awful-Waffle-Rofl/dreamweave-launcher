@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.State;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -40,7 +41,7 @@ namespace DreamWeave.Launcher.Tests
                 }
 
                 Assert.AreEqual(5L, new StateStore(paths.StateFile).HighestManifestSerial);
-                string[] leftovers = Directory.GetFiles(paths.DataDir).Select(Path.GetFileName).Where(f => f != "state.json").ToArray();
+                string[] leftovers = Directory.GetFiles(paths.DataDir).Select(Path.GetFileName).Where(f => f != "state.json" && f != "state.json.lock").ToArray();
                 Assert.AreEqual(0, leftovers.Length, "unexpected files: " + string.Join(", ", leftovers));
             }
         }
@@ -100,6 +101,94 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void ParallelWriters_AcrossFourStores_ZeroFailures()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                StateStore[] stores = Enumerable.Range(0, 4).Select(_ => StateStore.Open(paths)).ToArray();
+                const int writers = 128;
+                int failures = 0;
+
+                Parallel.For(0, writers, new ParallelOptions { MaxDegreeOfParallelism = 16 }, i =>
+                {
+                    try
+                    {
+                        stores[i % stores.Length].Update(s => s.FileVerifyCache["file" + i] = new FileVerifyEntry { Size = i, Sha256 = new string('A', 64) });
+                    }
+                    catch (Exception)
+                    {
+                        System.Threading.Interlocked.Increment(ref failures);
+                    }
+                });
+
+                Assert.AreEqual(0, failures);
+                int entries = StateStore.Open(paths).Read(s => s.FileVerifyCache.Count);
+                Assert.AreEqual(writers, entries, "every writer's entry must survive (read-modify-write under the lock file)");
+                Assert.AreEqual(0, Directory.GetFiles(paths.DataDir, "*.tmp").Length, "no temp files left behind");
+            }
+        }
+
+        [TestMethod]
+        public void TwoStores_RacingSerialUpdates_KeepTheMaximum()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                var a = StateStore.Open(paths);
+                var b = StateStore.Open(paths);
+
+                Parallel.Invoke(
+                    () => { for (int i = 1; i <= 10; i++) { int n = i; a.Update(s => s.HighestManifestSerial = n); } },
+                    () => { for (int i = 1; i <= 10; i++) { int n = i; b.Update(s => s.HighestManifestSerial = n); } });
+
+                Assert.IsTrue(StateStore.Open(paths).HighestManifestSerial >= 10);
+
+                // Monotonic: a stale store cannot lower it either.
+                var stale = StateStore.Open(paths);
+                stale.Update(s => s.HighestManifestSerial = 2);
+                Assert.AreEqual(10L, StateStore.Open(paths).HighestManifestSerial);
+            }
+        }
+
+        [TestMethod]
+        public void ThrowingMutator_LeavesStateAndFileUnchanged()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                var store = StateStore.Open(paths);
+                store.Update(s => s.AcFolder = "before");
+                string fileBefore = File.ReadAllText(paths.StateFile);
+
+                Assert.ThrowsExactly<InvalidOperationException>(() => store.Update(s =>
+                {
+                    s.AcFolder = "half-done";
+                    throw new InvalidOperationException("mutator failed");
+                }));
+
+                Assert.AreEqual("before", store.Read(s => s.AcFolder));
+                Assert.AreEqual(fileBefore, File.ReadAllText(paths.StateFile));
+            }
+        }
+
+        [TestMethod]
+        public void AtomicFile_UsesUniqueTempNames()
+        {
+            using (var dir = new TempDir())
+            {
+                string target = Path.Combine(dir.Path, "x.json");
+                Parallel.For(0, 32, i => AtomicFile.WriteAllBytes(Path.Combine(dir.Path, "f" + i + ".json"), new byte[] { (byte)i }));
+                AtomicFile.WriteAllBytes(target, new byte[] { 1 });
+                AtomicFile.WriteAllBytes(target, new byte[] { 2 });
+
+                CollectionAssert.AreEqual(new byte[] { 2 }, File.ReadAllBytes(target));
+                Assert.AreEqual(0, Directory.GetFiles(dir.Path, "*.tmp").Length);
+                Assert.AreEqual(33, Directory.GetFiles(dir.Path, "*.json").Length);
+            }
+        }
+
+        [TestMethod]
         public void AppPaths_DeriveFromRoot()
         {
             using (var dir = new TempDir())
@@ -109,8 +198,7 @@ namespace DreamWeave.Launcher.Tests
                 Assert.AreEqual(Path.Combine(dir.Path, "DreamWeave"), p.DataDir);
                 Assert.AreEqual(Path.Combine(p.DataDir, "staging"), p.StagingDir);
                 Assert.AreEqual(Path.Combine(p.DataDir, "state.json"), p.StateFile);
-                Assert.AreEqual(Path.Combine(p.DataDir, "manifest.json"), p.ManifestCacheFile);
-                Assert.AreEqual(p.ManifestCacheFile + ".sig", p.ManifestSigCacheFile);
+                Assert.AreEqual(Path.Combine(p.DataDir, "manifest.cache.json"), p.ManifestCacheFile);
             }
         }
     }

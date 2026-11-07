@@ -55,7 +55,7 @@ namespace DreamWeave.ManifestTool
                 Console.Error.WriteLine("FAILED (" + ex.Code + "): " + ex.Detail);
                 return 1;
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException)
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is PlatformNotSupportedException || ex is System.Security.Cryptography.CryptographicException)
             {
                 Console.Error.WriteLine("FAILED: " + ex.Message);
                 return 1;

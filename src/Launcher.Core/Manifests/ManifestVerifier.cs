@@ -21,12 +21,19 @@ namespace DreamWeave.Launcher.Core.Manifests
         private readonly Dictionary<string, TrustedKey> _keys = new Dictionary<string, TrustedKey>(StringComparer.Ordinal);
 
         /// <summary>Creates a verifier trusting exactly <paramref name="trustedKeys"/>.</summary>
-        public ManifestVerifier(IEnumerable<TrustedKey> trustedKeys)
+        /// <param name="trustedKeys">The keys whose signatures are accepted.</param>
+        /// <param name="minimumSerial">
+        /// Compiled-in rollback floor applied to every <see cref="Verify"/> call in addition to the
+        /// caller's floor; values below 1 are raised to 1. Production uses <see cref="TrustedKeys.MinimumSerial"/>.
+        /// </param>
+        public ManifestVerifier(IEnumerable<TrustedKey> trustedKeys, long minimumSerial = 1)
         {
             if (trustedKeys == null)
             {
                 throw new ArgumentNullException(nameof(trustedKeys));
             }
+
+            MinimumSerial = Math.Max(1, minimumSerial);
 
             foreach (TrustedKey k in trustedKeys)
             {
@@ -40,8 +47,11 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// <summary>A verifier over the compiled-in <see cref="TrustedKeys.Production"/> set.</summary>
         public static ManifestVerifier CreateProduction()
         {
-            return new ManifestVerifier(TrustedKeys.Production);
+            return new ManifestVerifier(TrustedKeys.Production, TrustedKeys.MinimumSerial);
         }
+
+        /// <summary>The compiled-in rollback floor (at least 1).</summary>
+        public long MinimumSerial { get; }
 
         /// <summary>Number of trusted keys (0 means every manifest is rejected).</summary>
         public int TrustedKeyCount => _keys.Count;
@@ -90,17 +100,21 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// <summary>Full verification (steps 1 to 4).</summary>
         /// <param name="manifestBytes">Exact manifest file bytes.</param>
         /// <param name="signatureFileBytes">Exact signature file bytes.</param>
-        /// <param name="minimumSerial">Highest serial already accepted (pass 0 when there is no history).</param>
+        /// <param name="minimumSerial">
+        /// Caller's rollback floor (highest serial already accepted; 0 when there is no history).
+        /// The effective floor is the larger of this and <see cref="MinimumSerial"/>.
+        /// </param>
         /// <exception cref="LauncherException">ManifestSignatureInvalid, ManifestSchemaUnsupported, ManifestInvalid or ManifestRollback.</exception>
         public VerifiedManifest Verify(byte[] manifestBytes, byte[] signatureFileBytes, long minimumSerial)
         {
             ManifestSignature sig = VerifySignature(manifestBytes, signatureFileBytes);
             LauncherManifest manifest = ManifestParser.Parse(manifestBytes);
-            if (manifest.Serial < minimumSerial)
+            long floor = Math.Max(minimumSerial, MinimumSerial);
+            if (manifest.Serial < floor)
             {
                 throw new LauncherException(
                     LauncherError.ManifestRollback,
-                    "The server's download list is older (serial " + manifest.Serial + ") than one this launcher already accepted (serial " + minimumSerial + "), so it was refused.");
+                    "The server's download list is older (serial " + manifest.Serial + ") than this launcher accepts (serial " + floor + " or newer), so it was refused.");
             }
 
             return new VerifiedManifest(manifest, manifestBytes, signatureFileBytes, sig.KeyId);

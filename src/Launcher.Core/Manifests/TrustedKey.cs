@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using System.Security.Cryptography;
 
 namespace DreamWeave.Launcher.Core.Manifests
@@ -39,6 +40,11 @@ namespace DreamWeave.Launcher.Core.Manifests
                 throw new ArgumentException("Key id '" + keyId + "' does not match the key (expected '" + derived + "').", nameof(keyId));
             }
 
+            if (!IsOnCurve(x, y))
+            {
+                throw new ArgumentException("The coordinates are not a point on P-256.");
+            }
+
             _x = (byte[])x.Clone();
             _y = (byte[])y.Clone();
             KeyId = derived;
@@ -49,10 +55,48 @@ namespace DreamWeave.Launcher.Core.Manifests
                 {
                 }
             }
-            catch (CryptographicException ex)
+            catch (Exception ex) when (ex is CryptographicException || ex is PlatformNotSupportedException)
             {
-                throw new ArgumentException("The coordinates are not a valid P-256 public key.", ex);
+                throw new ArgumentException("The coordinates are not a usable P-256 public key on this system.", ex);
             }
+        }
+
+        /// <summary>
+        /// Explicit curve-membership check (y^2 = x^3 - 3x + b mod p, both coordinates below p),
+        /// so an off-curve key is refused the same way on every platform instead of depending on
+        /// what the OS crypto provider validates at import.
+        /// </summary>
+        internal static bool IsOnCurve(byte[] x, byte[] y)
+        {
+            BigInteger bx = FromBigEndian(x);
+            BigInteger by = FromBigEndian(y);
+            if (bx >= P256Prime || by >= P256Prime)
+            {
+                return false;
+            }
+
+            BigInteger lhs = BigInteger.ModPow(by, 2, P256Prime);
+            BigInteger rhs = (BigInteger.ModPow(bx, 3, P256Prime) - (3 * bx) + P256B) % P256Prime;
+            if (rhs.Sign < 0)
+            {
+                rhs += P256Prime;
+            }
+
+            return lhs == rhs;
+        }
+
+        private static readonly BigInteger P256Prime = FromBigEndian(HexBytes.Parse("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF"));
+        private static readonly BigInteger P256B = FromBigEndian(HexBytes.Parse("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B"));
+
+        private static BigInteger FromBigEndian(byte[] bigEndian)
+        {
+            var little = new byte[bigEndian.Length + 1];
+            for (int i = 0; i < bigEndian.Length; i++)
+            {
+                little[i] = bigEndian[bigEndian.Length - 1 - i];
+            }
+
+            return new BigInteger(little);
         }
 
         /// <summary>The derived key id.</summary>

@@ -36,12 +36,13 @@ jobs:
           if ($exe.Length -gt 3145728) { Write-Error "Exe exceeds 3 MB limit (3145728 bytes)"; exit 1 }
           "EXE_PATH=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Check no unembedded DLLs
+      - name: Check no unembedded files
         shell: pwsh
         run: |
           $dir = Split-Path $env:EXE_PATH
-          $dlls = Get-ChildItem $dir -Filter *.dll
-          if ($dlls) { Write-Error "Unembedded DLLs: $($dlls.Name -join ', ')"; exit 1 }
+          $allowed = @('DreamWeaveLauncher.exe', 'DreamWeaveLauncher.exe.config', 'DreamWeaveLauncher.pdb')
+          $extra = Get-ChildItem $dir -File | Where-Object { $allowed -notcontains $_.Name }
+          if ($extra) { Write-Error "Unexpected files next to the exe: $($extra.Name -join ', ')"; exit 1 }
 
       - uses: actions/upload-artifact@v4
         with:

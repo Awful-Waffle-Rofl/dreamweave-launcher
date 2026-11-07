@@ -76,11 +76,76 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
-        public void TlsConfig_LeavesTls12Available()
+        public void TlsConfig_DoesNotLeaveAnExplicitListWithoutTls12()
         {
-            TlsConfig.EnsureModernTls();
-            var p = ServicePointManager.SecurityProtocol;
-            Assert.IsTrue(p == SecurityProtocolType.SystemDefault || (p & SecurityProtocolType.Tls12) != 0, "protocol set: " + p);
+            // Only checks the configured protocol flags after EnsureModernTls. It cannot prove which
+            // version the OS negotiates (SystemDefault defers that to SChannel), so it is not a
+            // minimum-TLS guarantee.
+            SecurityProtocolType saved = ServicePointManager.SecurityProtocol;
+            try
+            {
+                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls11;
+                TlsConfig.EnsureModernTls();
+                Assert.IsTrue((ServicePointManager.SecurityProtocol & SecurityProtocolType.Tls12) != 0, "protocol set: " + ServicePointManager.SecurityProtocol);
+            }
+            finally
+            {
+                ServicePointManager.SecurityProtocol = saved;
+            }
+        }
+
+        [TestMethod]
+        public void Redirects_AreFollowed_UpToTheCap()
+        {
+            byte[] body;
+            var handler = new RedirectHandler(HttpFetcher.MaxRedirects, "https");
+            Assert.AreEqual(LauncherError.None, Fetch(handler, 100, out body));
+            Assert.AreEqual(HttpFetcher.MaxRedirects + 1, handler.Calls);
+            Assert.AreEqual(4, body.Length);
+        }
+
+        [TestMethod]
+        public void TooManyRedirects_AreRefused()
+        {
+            byte[] body;
+            Assert.AreEqual(LauncherError.SourceHttpError, Fetch(new RedirectHandler(HttpFetcher.MaxRedirects + 1, "https"), 100, out body));
+        }
+
+        [TestMethod]
+        public void HttpsToHttpRedirect_IsRefused_BeforeFollowing()
+        {
+            byte[] body;
+            var handler = new RedirectHandler(1, "http");
+            Assert.AreEqual(LauncherError.SourceHttpError, Fetch(handler, 100, out body));
+            Assert.AreEqual(1, handler.Calls, "the insecure location must never be requested");
+        }
+
+        /// <summary>Answers 302 for the first <c>hops</c> requests (to a new path on <c>scheme</c>), then 200 with a 4-byte body.</summary>
+        private sealed class RedirectHandler : HttpMessageHandler
+        {
+            private readonly int _hops;
+            private readonly string _scheme;
+
+            public RedirectHandler(int hops, string scheme)
+            {
+                _hops = hops;
+                _scheme = scheme;
+            }
+
+            public int Calls { get; private set; }
+
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                Calls++;
+                if (Calls <= _hops)
+                {
+                    var r = new HttpResponseMessage(HttpStatusCode.Found);
+                    r.Headers.Location = new Uri(_scheme + "://example.test/hop" + Calls);
+                    return Task.FromResult(r);
+                }
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[4]) });
+            }
         }
 
         private sealed class StubHandler : HttpMessageHandler

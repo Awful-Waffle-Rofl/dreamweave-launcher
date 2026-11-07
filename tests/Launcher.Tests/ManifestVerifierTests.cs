@@ -191,6 +191,32 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void OffCurveKey_IsRejectedAsArgumentException()
+        {
+            byte[] x = _key.PublicKey.GetX();
+            byte[] y = _key.PublicKey.GetY();
+            y[31] ^= 0x01; // still 32 bytes, no longer on the curve
+            Assert.IsFalse(TrustedKey.IsOnCurve(x, y));
+            Assert.ThrowsExactly<ArgumentException>(() => new TrustedKey(TrustedKey.ComputeKeyId(x, y), x, y));
+
+            byte[] tooBig = Enumerable.Repeat((byte)0xFF, 32).ToArray(); // >= p
+            Assert.ThrowsExactly<ArgumentException>(() => new TrustedKey(TrustedKey.ComputeKeyId(tooBig, y), tooBig, y));
+
+            Assert.IsTrue(TrustedKey.IsOnCurve(_key.PublicKey.GetX(), _key.PublicKey.GetY()), "control: a real key is on the curve");
+        }
+
+        [TestMethod]
+        public void CompiledFloor_AppliesEvenWhenCallerPassesZero()
+        {
+            byte[] manifest = TestManifests.Build(3);
+            byte[] sig = _key.Sign(manifest).ToFileBytes();
+
+            Assert.AreEqual(LauncherError.ManifestRollback, CodeOf(() => new ManifestVerifier(new[] { _key.PublicKey }, 5).Verify(manifest, sig, 0)));
+            Assert.AreEqual(1L, new ManifestVerifier(new[] { _key.PublicKey }, -7).MinimumSerial, "floor never below 1");
+            Assert.AreEqual(TrustedKeys.MinimumSerial, ManifestVerifier.CreateProduction().MinimumSerial);
+        }
+
+        [TestMethod]
         public void SigningKey_JsonRoundTrip_SignsVerifiably()
         {
             SigningKey reloaded = SigningKey.FromJson(_key.ToJson());

@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core.Net;
 using DreamWeave.Launcher.Core.State;
+using Newtonsoft.Json.Linq;
 
 namespace DreamWeave.Launcher.Core.Manifests
 {
@@ -71,7 +73,7 @@ namespace DreamWeave.Launcher.Core.Manifests
             Detail = detail;
         }
 
-        /// <summary>Source name (or <c>cache</c>).</summary>
+        /// <summary>Source name, <c>&lt;name&gt; (refetch)</c> for a cache-busting retry, <c>cache</c>, or <c>cache-write</c>/<c>state-write</c> for a persistence note.</summary>
         public string SourceName { get; }
 
         /// <summary><see cref="LauncherError.None"/> on success.</summary>
@@ -95,7 +97,7 @@ namespace DreamWeave.Launcher.Core.Manifests
 
         /// <summary>
         /// The manifest to use, or null when neither a source nor the cache produced one. Always
-        /// signature-verified and never a rollback.
+        /// signature-verified and never below the rollback floor.
         /// </summary>
         public VerifiedManifest Verified { get; }
 
@@ -115,7 +117,7 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// <summary>Name of the source that supplied <see cref="Manifest"/> (<c>cache</c> for the cache), or null.</summary>
         public string SourceName { get; }
 
-        /// <summary>Every source tried, in order, including the cache.</summary>
+        /// <summary>Every source tried, in order, including retries, the cache, and persistence notes.</summary>
         public IReadOnlyList<ManifestSourceAttempt> Attempts { get; }
 
         /// <summary>Whether the caller may download/install from <see cref="Manifest"/> (false on schema-unsupported or no manifest).</summary>
@@ -126,21 +128,34 @@ namespace DreamWeave.Launcher.Core.Manifests
     }
 
     /// <summary>
-    /// Fetches the manifest from each source in order, verifies it, and caches the verified
-    /// pair. Rules:
-    /// - every response is size-capped (<see cref="MaxManifestBytes"/>, <see cref="ManifestSignature.MaxFileBytes"/>);
-    /// - a source that fails for ANY reason (network, bad signature, rollback, invalid) is skipped;
-    /// - the first source that verifies wins: its pair is written to the cache (manifest then
-    ///   signature, each atomically) and only then is a higher serial persisted to state;
-    /// - an authentic but newer-schema manifest is neither cached nor persisted (so the cached
-    ///   schema-1 copy stays launchable), and the result reports ManifestSchemaUnsupported;
-    /// - if no source verifies, the cached pair is re-verified against the persisted serial and
-    ///   used, with status ManifestUnavailable.
+    /// Fetches the manifest from each source in order, verifies it, and caches the verified pair.
+    /// <list type="bullet">
+    /// <item>Rollback floor = max(state's highest serial, the cached pair's serial if the cache
+    /// verifies, the verifier's compiled-in floor). It is computed once per load and used for
+    /// every source and for the cache fallback, so losing the state file alone cannot reopen a
+    /// rollback while a valid cache exists.</item>
+    /// <item>Every response is size-capped (<see cref="MaxManifestBytes"/>, <see cref="ManifestSignature.MaxFileBytes"/>).</item>
+    /// <item>A source whose pair fails the signature check is refetched ONCE with a cache-busting
+    /// query (a CDN can briefly serve a new manifest with the old signature); any other failure,
+    /// including any unexpected exception, moves on to the next source.</item>
+    /// <item>The first source that verifies wins. Its pair is written to <see cref="AppPaths.ManifestCacheFile"/>
+    /// as ONE atomic file; only if that succeeds is a higher serial persisted to state, so the
+    /// cache and the floor never disagree in a way that would strand the offline fallback.</item>
+    /// <item>An authentic newer-schema manifest is neither cached nor persisted, so the cached
+    /// schema-1 copy stays launchable; the result reports ManifestSchemaUnsupported.</item>
+    /// <item>If no source verifies, the cached pair (re-verified against the floor) is used, with
+    /// status ManifestUnavailable.</item>
+    /// </list>
     /// </summary>
     public sealed class ManifestProvider
     {
         /// <summary>Hard cap on a manifest download.</summary>
         public const long MaxManifestBytes = 256 * 1024;
+
+        /// <summary>Hard cap on the cache file (base64 of both files plus JSON framing).</summary>
+        internal const long MaxCacheFileBytes = 512 * 1024;
+
+        private const string CacheFormat = "dreamweave-manifest-cache-1";
 
         private readonly IHttpFetcher _fetcher;
         private readonly ManifestVerifier _verifier;
@@ -150,8 +165,8 @@ namespace DreamWeave.Launcher.Core.Manifests
 
         /// <summary>Creates a provider.</summary>
         /// <param name="fetcher">HTTP transport.</param>
-        /// <param name="verifier">Verifier holding the trusted keys.</param>
-        /// <param name="paths">Supplies the cache file locations.</param>
+        /// <param name="verifier">Verifier holding the trusted keys and the compiled-in serial floor.</param>
+        /// <param name="paths">Supplies the cache file location.</param>
         /// <param name="state">Supplies and persists the highest accepted serial.</param>
         /// <param name="sources">Sources to try in order; null means <see cref="ManifestSources.Default"/>.</param>
         public ManifestProvider(IHttpFetcher fetcher, ManifestVerifier verifier, AppPaths paths, StateStore state, IEnumerable<ManifestSource> sources = null)
@@ -163,48 +178,75 @@ namespace DreamWeave.Launcher.Core.Manifests
             _sources = (sources ?? ManifestSources.Default).ToList();
         }
 
-        /// <summary>Loads the best available manifest. Never throws for source or cache failures.</summary>
-        /// <exception cref="LauncherException">Cancelled, when <paramref name="cancellationToken"/> fires; or a state/cache write failure.</exception>
+        /// <summary>
+        /// Loads the best available manifest. Source, cache and persistence failures never throw;
+        /// they are reported through <see cref="ManifestLoadResult.Status"/> and
+        /// <see cref="ManifestLoadResult.Attempts"/>.
+        /// </summary>
+        /// <exception cref="LauncherException">Only <see cref="LauncherError.Cancelled"/>, when <paramref name="cancellationToken"/> fires.</exception>
         public async Task<ManifestLoadResult> LoadAsync(CancellationToken cancellationToken)
         {
             var attempts = new List<ManifestSourceAttempt>();
             bool sawNewerSchema = false;
 
+            // Floor: state, the cache's own serial (signature-checked only), the compiled floor.
+            VerifiedManifest cacheAtStart = TryReadCache(0, null);
+            long floor = Math.Max(_state.HighestManifestSerial, cacheAtStart == null ? 0 : cacheAtStart.Serial);
+            floor = Math.Max(floor, _verifier.MinimumSerial);
+
             foreach (ManifestSource source in _sources)
             {
-                ThrowIfCancelled(cancellationToken);
-                VerifiedManifest verified;
-                try
+                VerifiedManifest verified = null;
+                for (int pass = 0; pass < 2 && verified == null; pass++)
                 {
-                    byte[] sig = await _fetcher.GetBytesAsync(source.SignatureUri, ManifestSignature.MaxFileBytes, cancellationToken).ConfigureAwait(false);
-                    byte[] manifest = await _fetcher.GetBytesAsync(source.ManifestUri, MaxManifestBytes, cancellationToken).ConfigureAwait(false);
-                    verified = _verifier.Verify(manifest, sig, _state.HighestManifestSerial);
-                }
-                catch (OperationCanceledException ex)
-                {
-                    throw new LauncherException(LauncherError.Cancelled, "Cancelled.", ex);
-                }
-                catch (LauncherException ex) when (ex.Code == LauncherError.Cancelled)
-                {
-                    throw;
-                }
-                catch (LauncherException ex)
-                {
-                    if (ex.Code == LauncherError.ManifestSchemaUnsupported)
+                    ThrowIfCancelled(cancellationToken);
+                    string name = pass == 0 ? source.Name : source.Name + " (refetch)";
+                    try
                     {
-                        sawNewerSchema = true;
+                        Uri sigUri = pass == 0 ? source.SignatureUri : CacheBust(source.SignatureUri);
+                        Uri manifestUri = pass == 0 ? source.ManifestUri : CacheBust(source.ManifestUri);
+                        byte[] sig = await _fetcher.GetBytesAsync(sigUri, ManifestSignature.MaxFileBytes, cancellationToken).ConfigureAwait(false);
+                        byte[] manifest = await _fetcher.GetBytesAsync(manifestUri, MaxManifestBytes, cancellationToken).ConfigureAwait(false);
+                        verified = _verifier.Verify(manifest, sig, floor);
+                        attempts.Add(new ManifestSourceAttempt(name, LauncherError.None, "Verified serial " + verified.Serial + "."));
                     }
+                    catch (OperationCanceledException ex)
+                    {
+                        throw new LauncherException(LauncherError.Cancelled, "Cancelled.", ex);
+                    }
+                    catch (LauncherException ex) when (ex.Code == LauncherError.Cancelled)
+                    {
+                        throw;
+                    }
+                    catch (LauncherException ex)
+                    {
+                        attempts.Add(new ManifestSourceAttempt(name, ex.Code, ex.Detail));
+                        if (ex.Code == LauncherError.ManifestSchemaUnsupported)
+                        {
+                            sawNewerSchema = true;
+                        }
 
-                    attempts.Add(new ManifestSourceAttempt(source.Name, ex.Code, ex.Detail));
-                    continue;
+                        if (ex.Code != LauncherError.ManifestSignatureInvalid)
+                        {
+                            break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Untrusted input must never crash the load: classify and move on.
+                        attempts.Add(new ManifestSourceAttempt(name, LauncherError.ManifestInvalid, "Unexpected error reading the download list: " + ex.Message));
+                        break;
+                    }
                 }
 
-                attempts.Add(new ManifestSourceAttempt(source.Name, LauncherError.None, "Verified serial " + verified.Serial + "."));
-                Accept(verified, attempts);
-                return new ManifestLoadResult(verified, LauncherError.None, false, source.Name, attempts.AsReadOnly());
+                if (verified != null)
+                {
+                    Accept(verified, attempts);
+                    return new ManifestLoadResult(verified, LauncherError.None, false, source.Name, attempts.AsReadOnly());
+                }
             }
 
-            VerifiedManifest cached = TryLoadCache(attempts);
+            VerifiedManifest cached = TryReadCache(floor, attempts);
             LauncherError status = sawNewerSchema ? LauncherError.ManifestSchemaUnsupported : LauncherError.ManifestUnavailable;
             return new ManifestLoadResult(cached, status, cached != null, cached != null ? "cache" : null, attempts.AsReadOnly());
         }
@@ -217,92 +259,112 @@ namespace DreamWeave.Launcher.Core.Manifests
             }
         }
 
+        private static Uri CacheBust(Uri uri)
+        {
+            var b = new UriBuilder(uri);
+            string token = "cb=" + Guid.NewGuid().ToString("N");
+            b.Query = string.IsNullOrEmpty(b.Query) || b.Query == "?" ? token : b.Query.TrimStart('?') + "&" + token;
+            return b.Uri;
+        }
+
         // A verified manifest is used even if caching or persisting fails (disk full, access
-        // denied); the failure is recorded as an attempt note so the caller can log it.
+        // denied); each failure is recorded as an attempt note so the caller can log it.
         private void Accept(VerifiedManifest verified, List<ManifestSourceAttempt> attempts)
         {
             try
             {
-                WriteCacheIfChanged(verified);
+                WriteCache(verified);
             }
-            catch (LauncherException ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                attempts.Add(new ManifestSourceAttempt("cache-write", ex.Code, ex.Detail));
-            }
-
-            long serial = verified.Serial;
-            if (serial > _state.HighestManifestSerial)
-            {
-                try
-                {
-                    _state.Update(s =>
-                    {
-                        if (serial > s.HighestManifestSerial)
-                        {
-                            s.HighestManifestSerial = serial;
-                        }
-                    });
-                }
-                catch (LauncherException ex)
-                {
-                    attempts.Add(new ManifestSourceAttempt("state-write", ex.Code, ex.Detail));
-                }
-            }
-        }
-
-        private void WriteCacheIfChanged(VerifiedManifest verified)
-        {
-            byte[] manifest = verified.GetManifestBytes();
-            byte[] sig = verified.GetSignatureBytes();
-            if (SameBytes(_paths.ManifestCacheFile, manifest) && SameBytes(_paths.ManifestSigCacheFile, sig))
-            {
+                // Do NOT advance the persisted floor past what the cache holds, or the offline
+                // fallback would reject its own cached copy as a rollback.
+                LauncherException le = ex as LauncherException ?? LauncherException.FromIo(ex, "caching the download list");
+                attempts.Add(new ManifestSourceAttempt("cache-write", le.Code, le.Detail));
                 return;
             }
 
-            // A crash between the two writes leaves a mismatched pair, which simply fails
-            // verification on the next cache read: safe, never trusted.
-            AtomicFile.WriteAllBytes(_paths.ManifestCacheFile, manifest);
-            AtomicFile.WriteAllBytes(_paths.ManifestSigCacheFile, sig);
+            long serial = verified.Serial;
+            try
+            {
+                _state.Update(s =>
+                {
+                    if (serial > s.HighestManifestSerial)
+                    {
+                        s.HighestManifestSerial = serial;
+                    }
+                });
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                LauncherException le = ex as LauncherException ?? LauncherException.FromIo(ex, "saving launcher state");
+                attempts.Add(new ManifestSourceAttempt("state-write", le.Code, le.Detail));
+            }
         }
 
-        private VerifiedManifest TryLoadCache(List<ManifestSourceAttempt> attempts)
+        private void WriteCache(VerifiedManifest verified)
+        {
+            var obj = new JObject
+            {
+                ["format"] = CacheFormat,
+                ["manifestB64"] = Convert.ToBase64String(verified.GetManifestBytes()),
+                ["sigB64"] = Convert.ToBase64String(verified.GetSignatureBytes()),
+            };
+            byte[] bytes = new UTF8Encoding(false).GetBytes(obj.ToString(Newtonsoft.Json.Formatting.None) + "\n");
+            if (!SameBytes(_paths.ManifestCacheFile, bytes))
+            {
+                AtomicFile.WriteAllBytes(_paths.ManifestCacheFile, bytes);
+            }
+
+            // The pre-release two-file cache is never read; remove it once the new file exists.
+            TryDelete(_paths.LegacyManifestCacheFile);
+            TryDelete(_paths.LegacyManifestSigCacheFile);
+        }
+
+        /// <summary>Reads and verifies the cache pair against <paramref name="floor"/>; null on any problem (noted in <paramref name="attempts"/> when given).</summary>
+        private VerifiedManifest TryReadCache(long floor, List<ManifestSourceAttempt> attempts)
         {
             try
             {
-                if (!File.Exists(_paths.ManifestCacheFile) || !File.Exists(_paths.ManifestSigCacheFile))
+                if (!File.Exists(_paths.ManifestCacheFile))
                 {
-                    attempts.Add(new ManifestSourceAttempt("cache", LauncherError.ManifestUnavailable, "No cached download list."));
+                    attempts?.Add(new ManifestSourceAttempt("cache", LauncherError.ManifestUnavailable, "No cached download list."));
                     return null;
                 }
 
-                byte[] manifest = ReadCapped(_paths.ManifestCacheFile, MaxManifestBytes);
-                byte[] sig = ReadCapped(_paths.ManifestSigCacheFile, ManifestSignature.MaxFileBytes);
-                VerifiedManifest verified = _verifier.Verify(manifest, sig, _state.HighestManifestSerial);
-                attempts.Add(new ManifestSourceAttempt("cache", LauncherError.None, "Using cached serial " + verified.Serial + "."));
+                if (new FileInfo(_paths.ManifestCacheFile).Length > MaxCacheFileBytes)
+                {
+                    throw new LauncherException(LauncherError.ManifestInvalid, "The cached download list is too large.");
+                }
+
+                JObject obj = ManifestParser.ReadRoot(File.ReadAllBytes(_paths.ManifestCacheFile));
+                if ((string)obj["format"] != CacheFormat)
+                {
+                    throw new LauncherException(LauncherError.ManifestInvalid, "The cached download list has an unknown format.");
+                }
+
+                byte[] manifest = Convert.FromBase64String((string)obj["manifestB64"] ?? string.Empty);
+                byte[] sig = Convert.FromBase64String((string)obj["sigB64"] ?? string.Empty);
+                VerifiedManifest verified = _verifier.Verify(manifest, sig, floor);
+                attempts?.Add(new ManifestSourceAttempt("cache", LauncherError.None, "Using cached serial " + verified.Serial + "."));
                 return verified;
             }
             catch (LauncherException ex)
             {
-                attempts.Add(new ManifestSourceAttempt("cache", ex.Code, ex.Detail));
+                attempts?.Add(new ManifestSourceAttempt("cache", ex.Code, ex.Detail));
                 return null;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
                 LauncherException le = LauncherException.FromIo(ex, "reading the cached download list");
-                attempts.Add(new ManifestSourceAttempt("cache", le.Code, le.Detail));
+                attempts?.Add(new ManifestSourceAttempt("cache", le.Code, le.Detail));
                 return null;
             }
-        }
-
-        private static byte[] ReadCapped(string path, long max)
-        {
-            var info = new FileInfo(path);
-            if (info.Length > max)
+            catch (Exception ex)
             {
-                throw new LauncherException(LauncherError.ResponseTooLarge, Path.GetFileName(path) + " is larger than " + max + " bytes.");
+                attempts?.Add(new ManifestSourceAttempt("cache", LauncherError.ManifestInvalid, "The cached download list is unreadable: " + ex.Message));
+                return null;
             }
-
-            return File.ReadAllBytes(path);
         }
 
         private static bool SameBytes(string path, byte[] expected)
@@ -319,6 +381,23 @@ namespace DreamWeave.Launcher.Core.Manifests
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
                 return false;
+            }
+        }
+
+        private static void TryDelete(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
             }
         }
     }
