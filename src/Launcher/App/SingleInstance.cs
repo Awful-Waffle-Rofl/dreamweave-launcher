@@ -50,7 +50,13 @@ namespace DreamWeave.Launcher.App
         /// </summary>
         public static SingleInstance Acquire(TimeSpan wait)
         {
-            var mutex = new Mutex(false, MutexName);
+            return Acquire(MutexName, wait);
+        }
+
+        /// <summary>As <see cref="Acquire(TimeSpan)"/> on an explicit mutex name (tests use a unique one).</summary>
+        internal static SingleInstance Acquire(string name, TimeSpan wait)
+        {
+            var mutex = new Mutex(false, name);
             bool owned;
             try
             {

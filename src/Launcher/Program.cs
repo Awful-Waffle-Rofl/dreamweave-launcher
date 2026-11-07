@@ -15,8 +15,6 @@ namespace DreamWeave.Launcher
 {
     internal static class Program
     {
-        /// <summary>How long <c>--updated</c> and <c>--uninstall</c> wait for the previous launcher to release the mutex.</summary>
-        internal static readonly TimeSpan HandoverWait = TimeSpan.FromSeconds(30);
 
         [STAThread]
         private static int Main(string[] args)
@@ -42,7 +40,7 @@ namespace DreamWeave.Launcher
             Application.ThreadException += (s, e) =>
                 MessageBox.Show(ErrorMessages.For(LauncherError.Unknown), LauncherInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Error);
 
-            using (SingleInstance instance = SingleInstance.Acquire(parsed.HandsOverToRunningInstance ? TimeSpan.Zero : HandoverWait))
+            using (SingleInstance instance = SingleInstance.Acquire(parsed.MutexWait))
             {
                 if (!instance.Owned)
                 {
@@ -68,9 +66,12 @@ namespace DreamWeave.Launcher
         {
             AppPaths paths = AppPaths.CreateDefault();
             string running = ExePaths.Running();
+
+            // 0 when the player cancels at the confirmation; once uninstall starts, Unknown until a result arrives.
             int exit = 0;
             var form = new UninstallForm(removeClient =>
             {
+                exit = (int)LauncherError.Unknown;
                 var options = new UninstallOptions
                 {
                     CurrentExePath = ExePaths.UninstallCurrentExePath(running, paths),

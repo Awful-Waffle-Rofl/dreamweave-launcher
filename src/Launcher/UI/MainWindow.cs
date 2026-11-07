@@ -38,6 +38,36 @@ namespace DreamWeave.Launcher.UI
             Controls.Add(footer);
         }
 
+        /// <summary>While an install runs: what closing the window should do (null: close normally).</summary>
+        public Func<CloseDecision> CloseGuard { get; set; }
+
+        /// <summary>Called when the player confirms "Stop the install?"; the owner cancels and closes once the run returns.</summary>
+        public Action StopRequested { get; set; }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            CloseDecision decision = CloseGuard?.Invoke() ?? CloseDecision.Allow;
+            if (decision == CloseDecision.Block)
+            {
+                e.Cancel = true;
+                MessageBox.Show(this, UiText.CloseBlocked, LauncherInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            if (decision == CloseDecision.AskToStop)
+            {
+                e.Cancel = true;
+                if (MessageBox.Show(this, UiText.StopInstallPrompt, LauncherInfo.ProductName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                {
+                    StopRequested?.Invoke();
+                }
+
+                return;
+            }
+
+            base.OnFormClosing(e);
+        }
+
         /// <summary>Replaces the content area with <paramref name="screen"/>.</summary>
         public void ShowScreen(Control screen)
         {

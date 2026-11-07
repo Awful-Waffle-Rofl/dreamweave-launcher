@@ -159,22 +159,47 @@ namespace DreamWeave.Launcher.UI
 
                 telemetry.Checked = optIn;
                 telemetry.Enabled = true;
+                bool reverting = false;
                 telemetry.CheckedChanged += async (s2, e2) =>
                 {
+                    if (reverting)
+                    {
+                        return;
+                    }
+
+                    bool wanted = telemetry.Checked;
                     telemetry.Enabled = false;
+                    LauncherError failure = LauncherError.None;
                     try
                     {
-                        await _services.Telemetry.SetOptInAsync(telemetry.Checked);
+                        await _services.Telemetry.SetOptInAsync(wanted);
                     }
                     catch (LauncherException ex)
                     {
-                        _message.Text = ErrorMessages.For(ex.Code);
+                        failure = ex.Code;
                     }
 
-                    if (!IsDisposed)
+                    if (IsDisposed)
                     {
-                        telemetry.Enabled = true;
+                        return;
                     }
+
+                    if (failure != LauncherError.None)
+                    {
+                        _message.Text = ErrorMessages.For(failure);
+                    }
+
+                    // A failed opt-IN leaves telemetry off, so the box goes back to unticked. A failed
+                    // opt-OUT still leaves telemetry off (the client drops its queue and writes its opt-out
+                    // marker before the state write that failed), so the unticked box is already the truth.
+                    if (failure != LauncherError.None && wanted)
+                    {
+                        reverting = true;
+                        telemetry.Checked = false;
+                        reverting = false;
+                    }
+
+                    telemetry.Enabled = true;
                 };
             };
         }
@@ -189,6 +214,9 @@ namespace DreamWeave.Launcher.UI
     /// <summary>The <c>--uninstall</c> window: confirm (with the optional client checkbox), then run, then report.</summary>
     internal sealed class UninstallForm : Form
     {
+        /// <summary>How long the result stays on screen before the window closes itself (the self-delete helper waits about 60 s).</summary>
+        internal static readonly TimeSpan AutoCloseAfter = TimeSpan.FromSeconds(20);
+
         public UninstallForm(Func<bool, Task<Core.SelfInstall.UninstallResult>> uninstall)
         {
             AutoScaleMode = AutoScaleMode.Dpi;
@@ -226,50 +254,41 @@ namespace DreamWeave.Launcher.UI
                 }
                 catch (Exception ex) when (ex is ArgumentException || ex is LauncherException || ex is System.IO.IOException || ex is UnauthorizedAccessException)
                 {
-                    // Refused outright (for example unexpected folders): nothing was removed.
+                    // Refused outright (for example unexpected folders): the caller's exit code stays Unknown.
+                }
+                finally
+                {
+                    running = false;
                 }
 
-                running = false;
                 if (IsDisposed)
                 {
                     return;
                 }
 
                 ControlBox = true;
-                if (result == null)
-                {
-                    body.Text = ErrorMessages.For(LauncherError.Unknown);
-                    alsoClient.Visible = false;
-                    go.Visible = false;
-                    cancel.Text = UiText.Close;
-                    cancel.Enabled = true;
-                    return;
-                }
-
-                if (result.Complete && result.AcClient != Core.SelfInstall.AcClientUninstallOutcome.NotFound && result.AcClient != Core.SelfInstall.AcClientUninstallOutcome.Declined)
+                if (UninstallReport.CloseImmediately(result))
                 {
                     // Exit at once: the self-delete helper waits only about a minute for this process to end.
                     Close();
                     return;
                 }
 
-                var lines = new List<string>();
-                lines.Add(result.Complete ? UiText.UninstallDone : ErrorMessages.For(result.Code) + " " + UiText.UninstallLeftOver);
-                lines.AddRange(result.Failures);
-                if (result.AcClient == Core.SelfInstall.AcClientUninstallOutcome.NotFound)
-                {
-                    lines.Add(UiText.UninstallClientNotFound);
-                }
-                else if (result.AcClient == Core.SelfInstall.AcClientUninstallOutcome.Declined)
-                {
-                    lines.Add(UiText.UninstallClientDeclined);
-                }
-
-                body.Text = string.Join(Environment.NewLine, lines);
+                body.Text = string.Join(Environment.NewLine, UninstallReport.Lines(result));
                 alsoClient.Visible = false;
                 go.Visible = false;
                 cancel.Text = UiText.Close;
                 cancel.Enabled = true;
+
+                // Close on its own after a while, well inside the self-delete helper's one-minute window.
+                var timer = new System.Windows.Forms.Timer { Interval = (int)AutoCloseAfter.TotalMilliseconds };
+                timer.Tick += (s2, e2) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    Close();
+                };
+                timer.Start();
             };
         }
     }

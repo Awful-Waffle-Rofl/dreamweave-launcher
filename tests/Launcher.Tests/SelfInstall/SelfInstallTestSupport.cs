@@ -207,7 +207,20 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             _real.DeleteFile(path);
         }
 
-        public void DeleteTree(string folder, string preserveFile, ICollection<string> failures) => _real.DeleteTree(folder, preserveFile, failures);
+        /// <summary>When set, a non-null result for a folder is recorded as a failure (and the folder is left alone).</summary>
+        public Func<string, string> TreeFailure { get; set; }
+
+        public void DeleteTree(string folder, string preserveFile, ICollection<string> failures)
+        {
+            string failure = TreeFailure?.Invoke(folder);
+            if (failure != null)
+            {
+                failures.Add(failure);
+                return;
+            }
+
+            _real.DeleteTree(folder, preserveFile, failures);
+        }
     }
 
     /// <summary>Writes scripted bytes to the request's destination, as a successful download would.</summary>

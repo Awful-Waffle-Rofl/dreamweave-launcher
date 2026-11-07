@@ -67,7 +67,7 @@ namespace DreamWeave.Launcher.Tests.App
             ComponentRow patch = s.Rows.Single(r => r.Id == "palette-leak-fix");
             Assert.IsFalse(patch.Checked);
             Assert.IsTrue(patch.CanToggle);
-            Assert.AreEqual("Two 3-byte changes", patch.Note, "an optional row carries its own manifest description");
+            Assert.IsNull(patch.Note, "the source label has its own line; the manifest has no description to repeat");
 
             var selected = new ComponentSelection(AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: true)), new[]
             {
@@ -152,6 +152,22 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.IsFalse(client.CoveredByOverlay);
             Assert.IsTrue(client.Checked);
             Assert.IsNull(client.Note);
+        }
+
+        [TestMethod]
+        public void UnreadableRequiredComponent_BlocksWithCheckAgainText()
+        {
+            var s = new ComponentSelection(AppFixtures.Sample(), new[]
+            {
+                AppFixtures.Status("ac-client", ComponentState.Satisfied),
+                AppFixtures.Status("eor-dats", ComponentState.Unknown, AppFixtures.File("client_portal.dat", FileState.Locked)),
+            });
+            Assert.IsFalse(s.CanContinue);
+            Assert.AreEqual("\"End-of-Retail game data\" could not be checked, usually because Asheron's Call is running. Close the game, then click Check again.", s.NextBlockedReason);
+            Assert.IsTrue(s.OffersCheckAgain);
+            s.SetChecked("eor-dats", true);
+            Assert.IsTrue(s.CanContinue, "ticking it (a repair) unblocks");
+            Assert.IsFalse(s.OffersCheckAgain);
         }
 
         [TestMethod]

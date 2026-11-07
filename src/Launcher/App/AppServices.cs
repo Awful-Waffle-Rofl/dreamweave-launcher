@@ -22,6 +22,7 @@ namespace DreamWeave.Launcher.App
     {
         private readonly HttpFetcher _fetcher;
         private int _disposed;
+        private int _shutdown;
 
         private AppServices(AppPaths paths, string runningExePath)
         {
@@ -42,6 +43,7 @@ namespace DreamWeave.Launcher.App
             Verifier = new FileVerifier(AcFileSystem, State);
             Evaluator = new ComponentEvaluator(Verifier);
             Elevated = new ElevatedCopyRunner(InstallEnvironment.Processes, runningExePath);
+            FlushForShutdown = FlushTelemetry;
         }
 
         public AppPaths Paths { get; }
@@ -93,18 +95,21 @@ namespace DreamWeave.Launcher.App
             return Task.Run(() => State.Update(mutate));
         }
 
-        /// <summary>Sends what is queued (bounded), then stops telemetry. Called once at a normal exit.</summary>
+        /// <summary>
+        /// Sends what is queued (bounded), then stops telemetry. Idempotent: only the first call flushes
+        /// and disposes (Settings > Uninstall shuts down before the window closes, and Main's
+        /// <c>finally</c> calls it again).
+        /// </summary>
         public void Shutdown()
         {
+            if (Interlocked.Exchange(ref _shutdown, 1) != 0)
+            {
+                return;
+            }
+
             try
             {
-                if (Telemetry.IsEnabled)
-                {
-                    using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
-                    {
-                        Task.Run(() => Telemetry.FlushNowAsync(cts.Token)).Wait(TimeSpan.FromSeconds(4));
-                    }
-                }
+                FlushForShutdown();
             }
             catch (AggregateException)
             {
@@ -112,6 +117,20 @@ namespace DreamWeave.Launcher.App
             }
 
             Dispose();
+        }
+
+        /// <summary>The bounded final flush; replaceable so tests can count calls.</summary>
+        internal Action FlushForShutdown { get; set; }
+
+        private void FlushTelemetry()
+        {
+            if (Telemetry.IsEnabled)
+            {
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
+                {
+                    Task.Run(() => Telemetry.FlushNowAsync(cts.Token)).Wait(TimeSpan.FromSeconds(4));
+                }
+            }
         }
 
         /// <inheritdoc />

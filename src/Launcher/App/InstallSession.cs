@@ -66,28 +66,126 @@ namespace DreamWeave.Launcher.App
         public string AcFolder { get; }
     }
 
+    /// <summary>What an install is doing right now, for the close-window decision.</summary>
+    internal enum InstallPhase
+    {
+        /// <summary>Nothing is running.</summary>
+        Idle = 0,
+
+        /// <summary>Downloading, verifying or waiting for the installer: safe to stop (downloads resume).</summary>
+        Stoppable = 1,
+
+        /// <summary>Writing into the game folder (overlay commit, patch, elevated copy): must not be interrupted.</summary>
+        Critical = 2,
+    }
+
+    /// <summary>What closing the window should do.</summary>
+    internal enum CloseDecision
+    {
+        /// <summary>Close normally.</summary>
+        Allow = 0,
+
+        /// <summary>Ask "Stop the install?"; on yes cancel, and close once the run has returned.</summary>
+        AskToStop = 1,
+
+        /// <summary>Refuse to close until the step finishes.</summary>
+        Block = 2,
+    }
+
+    /// <summary>The close-window rule, kept apart from the form so it can be tested.</summary>
+    internal static class InstallCloseRules
+    {
+        public static CloseDecision Decide(InstallPhase phase)
+        {
+            switch (phase)
+            {
+                case InstallPhase.Stoppable:
+                    return CloseDecision.AskToStop;
+                case InstallPhase.Critical:
+                    return CloseDecision.Block;
+                default:
+                    return CloseDecision.Allow;
+            }
+        }
+    }
+
+    /// <summary>Everything an <see cref="InstallSession"/> touches, so tests can substitute each piece.</summary>
+    internal sealed class InstallDependencies
+    {
+        public AppPaths Paths { get; set; }
+
+        public IDownloader Downloads { get; set; }
+
+        public IDiskSpace Disk { get; set; }
+
+        public AcInstallLocator Locator { get; set; }
+
+        public ComponentEvaluator Evaluator { get; set; }
+
+        public ITelemetrySink Telemetry { get; set; } = NullTelemetrySink.Instance;
+
+        /// <summary>Reads the game folder saved in state (may return null).</summary>
+        public Func<string> ReadSavedFolder { get; set; } = () => null;
+
+        /// <summary>Saves a detected game folder to state (blocking; called on a pool thread).</summary>
+        public Action<string> SaveFolder { get; set; } = f => { };
+
+        /// <summary>Runs the elevated copy for a task file, then the clean-up; returns its error code.</summary>
+        public Func<string, Action, LauncherError> RunElevated { get; set; }
+
+        /// <summary>Starts verified installers (the real one by default; tests pass a fake process starter).</summary>
+        public InstallerRunner Installers { get; set; } = new InstallerRunner();
+
+        /// <summary>How often the installer hand-off polls detection.</summary>
+        public TimeSpan PollInterval { get; set; } = InstallSession.HandoffPollInterval;
+
+        /// <summary>The production wiring over the process's <see cref="AppServices"/>.</summary>
+        public static InstallDependencies From(AppServices s)
+        {
+            return new InstallDependencies
+            {
+                Paths = s.Paths,
+                Downloads = s.Downloads,
+                Disk = s.Disk,
+                Locator = s.Locator,
+                Evaluator = s.Evaluator,
+                Telemetry = s.TelemetrySink,
+                ReadSavedFolder = () => s.State.Read(st => st.AcFolder),
+                SaveFolder = folder => s.State.Update(st => st.AcFolder = folder),
+                RunElevated = (task, cleanUp) => s.Elevated.Run(task, cleanUp),
+            };
+        }
+    }
+
     /// <summary>
     /// Runs the selected components in manifest order, entirely off the UI thread, and reports through
     /// an <see cref="IProgress{T}"/> the caller created on the UI thread. Telemetry records each component
     /// (outcome and error code only). Cancelling leaves partial downloads in place to resume later.
+    /// One session serves every Retry of the same Progress screen, so it remembers which installers it
+    /// has already launched: a retry detects the install first and only relaunches when it is not there.
     /// </summary>
     internal sealed class InstallSession
     {
         /// <summary>How often the installer hand-off polls detection.</summary>
         public static readonly TimeSpan HandoffPollInterval = TimeSpan.FromSeconds(2);
 
-        private readonly AppServices _services;
+        private readonly InstallDependencies _deps;
         private readonly LauncherManifest _manifest;
         private readonly object _pokeGate = new object();
+        private readonly HashSet<string> _launchedInstallers = new HashSet<string>(StringComparer.Ordinal);
         private TaskCompletionSource<bool> _poke = NewPoke();
         private string _acFolder;
+        private int _phase;
 
-        public InstallSession(AppServices services, LauncherManifest manifest, string acFolder)
+        public InstallSession(InstallDependencies deps, LauncherManifest manifest, string acFolder)
         {
-            _services = services ?? throw new ArgumentNullException(nameof(services));
+            _deps = deps ?? throw new ArgumentNullException(nameof(deps));
             _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
             _acFolder = acFolder;
         }
+
+        /// <summary>What the session is doing now (read from any thread).</summary>
+        public InstallPhase Phase => (InstallPhase)Volatile.Read(ref _phase);
 
         /// <summary>"I finished": run a detection pass now instead of waiting for the next poll.</summary>
         public void CheckInstallNow()
@@ -98,36 +196,52 @@ namespace DreamWeave.Launcher.App
             }
         }
 
-        /// <summary>Runs <paramref name="components"/>. Never throws for a classified failure; see the result.</summary>
-        public async Task<InstallRunResult> RunAsync(IReadOnlyList<ManifestComponent> components, IProgress<InstallEvent> events, CancellationToken cancellationToken)
+        /// <summary>
+        /// Runs <paramref name="components"/> on the thread pool (the first download never starts on the
+        /// caller's thread). Never throws for a classified failure; see the result.
+        /// </summary>
+        public Task<InstallRunResult> RunAsync(IReadOnlyList<ManifestComponent> components, IProgress<InstallEvent> events, CancellationToken cancellationToken)
         {
-            foreach (ManifestComponent c in components)
+            return Task.Run(() => RunCoreAsync(components, events, cancellationToken));
+        }
+
+        private async Task<InstallRunResult> RunCoreAsync(IReadOnlyList<ManifestComponent> components, IProgress<InstallEvent> events, CancellationToken cancellationToken)
+        {
+            try
             {
-                ITelemetrySink t = _services.TelemetrySink;
-                t.RecordComponent(c.Id, TelemetryOutcome.Started);
-                Stopwatch clock = Stopwatch.StartNew();
-                events.Report(new InstallEvent(InstallEventKind.StepStarted, c.Id));
-                try
+                foreach (ManifestComponent c in components)
                 {
-                    bool didWork = await RunOneAsync(c, events, cancellationToken).ConfigureAwait(false);
-                    t.RecordComponent(c.Id, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
-                    events.Report(new InstallEvent(didWork ? InstallEventKind.StepDone : InstallEventKind.StepSkipped, c.Id));
-                }
-                catch (Exception ex)
-                {
-                    LauncherError code = Classify(ex, cancellationToken);
-                    t.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, clock.Elapsed);
-                    if (!(ex is LauncherException) && !(ex is OperationCanceledException) && !IsExpectedIo(ex))
+                    ITelemetrySink t = _deps.Telemetry;
+                    t.RecordComponent(c.Id, TelemetryOutcome.Started);
+                    Stopwatch clock = Stopwatch.StartNew();
+                    SetPhase(InstallPhase.Stoppable);
+                    events.Report(new InstallEvent(InstallEventKind.StepStarted, c.Id));
+                    try
                     {
-                        // A programming error: surface it as Unknown rather than crash the wizard.
-                        Trace.TraceError("Install step failed unexpectedly: " + ex.GetType().FullName);
+                        bool didWork = await RunOneAsync(c, events, cancellationToken).ConfigureAwait(false);
+                        t.RecordComponent(c.Id, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
+                        events.Report(new InstallEvent(didWork ? InstallEventKind.StepDone : InstallEventKind.StepSkipped, c.Id));
                     }
+                    catch (Exception ex)
+                    {
+                        LauncherError code = Classify(ex, cancellationToken);
+                        t.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, clock.Elapsed);
+                        if (!(ex is LauncherException) && !(ex is OperationCanceledException) && !IsExpectedIo(ex))
+                        {
+                            // A programming error: surface it as Unknown rather than crash the wizard.
+                            Trace.TraceError("Install step failed unexpectedly: " + ex.GetType().FullName);
+                        }
 
-                    return new InstallRunResult(code, c.Id, _acFolder);
+                        return new InstallRunResult(code, c.Id, _acFolder);
+                    }
                 }
-            }
 
-            return new InstallRunResult(LauncherError.None, null, _acFolder);
+                return new InstallRunResult(LauncherError.None, null, _acFolder);
+            }
+            finally
+            {
+                SetPhase(InstallPhase.Idle);
+            }
         }
 
         private async Task<bool> RunOneAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
@@ -136,8 +250,7 @@ namespace DreamWeave.Launcher.App
             switch (c.Kind)
             {
                 case ComponentKinds.Installer:
-                    await RunInstallerAsync(c, progress, events, ct).ConfigureAwait(false);
-                    return true;
+                    return await RunInstallerAsync(c, progress, events, ct).ConfigureAwait(false);
                 case ComponentKinds.ZipOverlay:
                     return await RunOverlayAsync(c, progress, events, ct).ConfigureAwait(false);
                 case ComponentKinds.BytePatch:
@@ -147,22 +260,33 @@ namespace DreamWeave.Launcher.App
             }
         }
 
-        private async Task RunInstallerAsync(ManifestComponent c, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
+        private async Task<bool> RunInstallerAsync(ManifestComponent c, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
         {
+            if (_launchedInstallers.Contains(c.Id))
+            {
+                // A retry after the hand-off was stopped: the player may have finished the installer meanwhile.
+                string already = await Task.Run(() => Detect(c, ct), ct).ConfigureAwait(false);
+                if (already != null)
+                {
+                    await AdoptFolderAsync(already).ConfigureAwait(false);
+                    return true;
+                }
+            }
+
             DownloadResult file = await DownloadAsync(c, c.Id + ".exe", progress, ct).ConfigureAwait(false);
 
             // InstallerRunner.Start re-hashes the staged installer through a deny-write handle and keeps
             // that handle open until the (elevated) process exists, so the bytes that run are the bytes verified.
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Verifying));
-            InstallerProcess process = await Task.Run(() => new InstallerRunner().Start(c, file.Path, progress, ct), ct).ConfigureAwait(false);
+            InstallerProcess process = await Task.Run(() => _deps.Installers.Start(c, file.Path, progress, ct), ct).ConfigureAwait(false);
+            _launchedInstallers.Add(c.Id);
             using (process)
             {
                 events.Report(new InstallEvent(InstallEventKind.HandoffStarted, c.Id, text: UiText.InstallerHandoff));
                 try
                 {
                     string folder = await WaitForInstallAsync(c, events, ct).ConfigureAwait(false);
-                    _acFolder = folder;
-                    await _services.UpdateStateAsync(s => s.AcFolder = folder).ConfigureAwait(false);
+                    await AdoptFolderAsync(folder).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -171,13 +295,19 @@ namespace DreamWeave.Launcher.App
             }
 
             TryDeleteStaged(file.Path);
+            return true;
+        }
+
+        private async Task AdoptFolderAsync(string folder)
+        {
+            _acFolder = folder;
+            await Task.Run(() => _deps.SaveFolder(folder)).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Polls every <see cref="HandoffPollInterval"/> (or at once when "I finished" is clicked) until
-        /// the client is detected. The installer process exiting is never the signal: an InstallShield
-        /// self-extractor exits early. Detected means: a folder was located and the installer component
-        /// is satisfied, or differs only in files a zip overlay in this manifest replaces (C1).
+        /// Polls every <see cref="InstallDependencies.PollInterval"/> (or at once when "I finished" is
+        /// clicked) until the client is detected. The installer process exiting is never the signal: an
+        /// InstallShield self-extractor exits early.
         /// </summary>
         private async Task<string> WaitForInstallAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
         {
@@ -187,11 +317,6 @@ namespace DreamWeave.Launcher.App
                 Task<bool> poke;
                 lock (_pokeGate)
                 {
-                    if (_poke.Task.IsCompleted)
-                    {
-                        _poke = NewPoke();
-                    }
-
                     poke = _poke.Task;
                 }
 
@@ -201,10 +326,19 @@ namespace DreamWeave.Launcher.App
                     return found;
                 }
 
-                Task delay = Task.Delay(HandoffPollInterval, ct);
+                Task delay = Task.Delay(_deps.PollInterval, ct);
                 Task first = await Task.WhenAny(delay, poke).ConfigureAwait(false);
                 if (first == poke)
                 {
+                    // Consume the click BEFORE detecting, so a click during this pass is not lost.
+                    lock (_pokeGate)
+                    {
+                        if (_poke.Task == poke)
+                        {
+                            _poke = NewPoke();
+                        }
+                    }
+
                     found = await Task.Run(() => Detect(c, ct), ct).ConfigureAwait(false);
                     if (found != null)
                     {
@@ -220,18 +354,21 @@ namespace DreamWeave.Launcher.App
             }
         }
 
-        private string Detect(ManifestComponent c, CancellationToken ct)
+        /// <summary>
+        /// Detected means: a folder was located and the installer component is satisfied, or differs
+        /// only in files a zip overlay in this manifest replaces (C1). Null for "not yet".
+        /// </summary>
+        internal string Detect(ManifestComponent c, CancellationToken ct)
         {
             try
             {
-                string saved = _services.State.Read(s => s.AcFolder);
-                AcInstallLocation where = _services.Locator.LocateFrom(saved);
+                AcInstallLocation where = _deps.Locator.LocateFrom(_deps.ReadSavedFolder());
                 if (!where.Found)
                 {
                     return null;
                 }
 
-                ComponentStatus status = _services.Evaluator.Evaluate(c, _manifest, where.Folder, null, ct);
+                ComponentStatus status = _deps.Evaluator.Evaluate(c, _manifest, where.Folder, null, ct);
                 if (status.State == ComponentState.Satisfied || (status.State == ComponentState.NeedsRepair && ComponentSelection.IsCoveredByOverlay(_manifest, status)))
                 {
                     return where.Folder;
@@ -250,17 +387,25 @@ namespace DreamWeave.Launcher.App
             string folder = RequireFolder();
             DownloadResult file = await DownloadAsync(c, c.Id + ".zip", progress, ct).ConfigureAwait(false);
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Installing));
-            var installer = new ZipOverlayInstaller(_services.Paths, _services.Disk);
-            ZipOverlayResult result = await Task.Run(() => installer.Install(_manifest, c, file.Path, folder, progress, ct), ct).ConfigureAwait(false);
-            if (result.Outcome == InstallOutcome.ElevationRequired)
+            var installer = new ZipOverlayInstaller(_deps.Paths, _deps.Disk);
+            SetPhase(InstallPhase.Critical);
+            try
             {
-                events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.AskingPermission));
-                await RunElevatedAsync(result.TaskPath, result.CleanUp).ConfigureAwait(false);
-                await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
-            }
+                ZipOverlayResult result = await Task.Run(() => installer.Install(_manifest, c, file.Path, folder, progress, ct), ct).ConfigureAwait(false);
+                if (result.Outcome == InstallOutcome.ElevationRequired)
+                {
+                    events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.AskingPermission));
+                    await RunElevatedAsync(result.TaskPath, result.CleanUp).ConfigureAwait(false);
+                    await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
+                }
 
-            TryDeleteStaged(file.Path);
-            return result.Outcome != InstallOutcome.NothingToDo;
+                TryDeleteStaged(file.Path);
+                return result.Outcome != InstallOutcome.NothingToDo;
+            }
+            finally
+            {
+                SetPhase(InstallPhase.Stoppable);
+            }
         }
 
         private async Task<bool> RunPatchAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
@@ -269,28 +414,41 @@ namespace DreamWeave.Launcher.App
 
             // Evaluated now, not when the screen was built: the game data step may just have put the
             // patch's input file in place.
-            ComponentStatus status = await Task.Run(() => _services.Evaluator.Evaluate(c, _manifest, folder, null, ct), ct).ConfigureAwait(false);
+            ComponentStatus status = await Task.Run(() => _deps.Evaluator.Evaluate(c, _manifest, folder, null, ct), ct).ConfigureAwait(false);
             if (status.State != ComponentState.Missing)
             {
                 return false;
             }
 
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Installing));
-            var patcher = new BytePatcher(_services.Paths, _services.Disk);
-            BytePatchResult result = await Task.Run(() => patcher.Apply(c, folder), ct).ConfigureAwait(false);
-            if (result.Outcome == InstallOutcome.ElevationRequired)
+            var patcher = new BytePatcher(_deps.Paths, _deps.Disk);
+            SetPhase(InstallPhase.Critical);
+            try
             {
-                events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.AskingPermission));
-                await RunElevatedAsync(result.TaskPath, result.CleanUp).ConfigureAwait(false);
-                await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
-            }
+                BytePatchResult result = await Task.Run(() => patcher.Apply(c, folder), ct).ConfigureAwait(false);
+                if (result.Outcome == InstallOutcome.ElevationRequired)
+                {
+                    events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.AskingPermission));
+                    await RunElevatedAsync(result.TaskPath, result.CleanUp).ConfigureAwait(false);
+                    await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
+                }
 
-            return result.Outcome != InstallOutcome.NothingToDo;
+                return result.Outcome != InstallOutcome.NothingToDo;
+            }
+            finally
+            {
+                SetPhase(InstallPhase.Stoppable);
+            }
         }
 
         private async Task RunElevatedAsync(string taskPath, Action cleanUp)
         {
-            LauncherError code = await Task.Run(() => _services.Elevated.Run(taskPath, cleanUp)).ConfigureAwait(false);
+            if (_deps.RunElevated == null)
+            {
+                throw new LauncherException(LauncherError.ElevationRequired, ErrorMessages.For(LauncherError.ElevationRequired));
+            }
+
+            LauncherError code = await Task.Run(() => _deps.RunElevated(taskPath, cleanUp)).ConfigureAwait(false);
             if (code != LauncherError.None)
             {
                 throw new LauncherException(code, ErrorMessages.For(code));
@@ -300,7 +458,7 @@ namespace DreamWeave.Launcher.App
         // The helper's exit code is trusted only as far as the files bear it out.
         private async Task RequireSatisfiedAsync(ManifestComponent c, string folder, CancellationToken ct)
         {
-            ComponentStatus after = await Task.Run(() => _services.Evaluator.Evaluate(c, _manifest, folder, null, ct), ct).ConfigureAwait(false);
+            ComponentStatus after = await Task.Run(() => _deps.Evaluator.Evaluate(c, _manifest, folder, null, ct), ct).ConfigureAwait(false);
             if (after.State != ComponentState.Satisfied)
             {
                 throw new LauncherException(LauncherError.Unknown, "The administrator step finished but the files are not in place.");
@@ -309,8 +467,8 @@ namespace DreamWeave.Launcher.App
 
         private Task<DownloadResult> DownloadAsync(ManifestComponent c, string fileName, IProgress<ProgressReport> progress, CancellationToken ct)
         {
-            DownloadRequest request = DownloadRequest.FromComponent(c, _services.Paths, fileName);
-            return _services.Downloads.DownloadAsync(request, progress, ct);
+            DownloadRequest request = DownloadRequest.FromComponent(c, _deps.Paths, fileName);
+            return _deps.Downloads.DownloadAsync(request, progress, ct);
         }
 
         private string RequireFolder()
@@ -321,6 +479,11 @@ namespace DreamWeave.Launcher.App
             }
 
             return _acFolder;
+        }
+
+        private void SetPhase(InstallPhase phase)
+        {
+            Volatile.Write(ref _phase, (int)phase);
         }
 
         private static void TryDeleteStaged(string path)

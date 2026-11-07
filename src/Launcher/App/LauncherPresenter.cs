@@ -70,6 +70,35 @@ namespace DreamWeave.Launcher.App
             _acFolder = acFolder ?? throw new ArgumentNullException(nameof(acFolder));
         }
 
+        /// <summary>
+        /// The account whose SAVED password is currently in the password box, or null when the box
+        /// holds nothing from the credential store (empty, or typed by the player).
+        /// </summary>
+        public string FilledFor { get; private set; }
+
+        /// <summary>Records that the password box was just filled with <paramref name="account"/>'s saved password.</summary>
+        public void MarkFilled(string account)
+        {
+            FilledFor = string.IsNullOrEmpty(account) ? null : account;
+        }
+
+        /// <summary>
+        /// Call on every change of the account text or selection. Returns true when the password box
+        /// holds another account's saved password (the name no longer matches <see cref="FilledFor"/>,
+        /// case-insensitively): the caller must then clear the password and untick Remember, so one
+        /// account's saved password is never sent for, or saved under, another account.
+        /// </summary>
+        public bool AccountChanged(string accountText)
+        {
+            if (FilledFor == null || string.Equals(FilledFor, accountText ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            FilledFor = null;
+            return true;
+        }
+
         /// <summary>The current update decision; <see cref="UpdateGate.None"/> until the check has run.</summary>
         public UpdateGate Update { get; set; } = UpdateGate.None;
 

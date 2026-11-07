@@ -28,11 +28,33 @@ namespace DreamWeave.Launcher.App
         /// <summary>Switch that runs the elevated copy helper.</summary>
         public const string ElevatedCopySwitch = "--elevated-copy";
 
-        private StartupArgs(StartupMode mode, string taskPath)
+        /// <summary>
+        /// Second argument of <c>--uninstall</c> when the launcher's own Settings started it: the
+        /// starting window is about to exit, so the mutex is waited for instead of refused at once.
+        /// </summary>
+        public const string HandoverSwitch = "--handover";
+
+        /// <summary>How long a hand-over (<c>--updated</c>, <c>--uninstall --handover</c>) waits for the previous launcher's mutex.</summary>
+        public static readonly TimeSpan HandoverWait = TimeSpan.FromSeconds(30);
+
+        private StartupArgs(StartupMode mode, string taskPath, bool handover = false)
         {
             Mode = mode;
             TaskPath = taskPath;
+            IsHandover = handover;
         }
+
+        /// <summary>
+        /// True when the previous launcher is exiting on purpose and will release the mutex:
+        /// <c>--updated</c>, and <c>--uninstall --handover</c>.
+        /// </summary>
+        public bool IsHandover { get; }
+
+        /// <summary>
+        /// How long to wait for the mutex: zero for a normal start (hand over to the open window) and for a
+        /// plain <c>--uninstall</c> (an open window is reported at once); <see cref="HandoverWait"/> for a hand-over.
+        /// </summary>
+        public TimeSpan MutexWait => IsHandover ? HandoverWait : TimeSpan.Zero;
 
         /// <summary>The selected mode.</summary>
         public StartupMode Mode { get; }
@@ -68,12 +90,13 @@ namespace DreamWeave.Launcher.App
 
             if (string.Equals(first, SelfInstallLayout.UninstallSwitch, StringComparison.Ordinal))
             {
-                return new StartupArgs(StartupMode.Uninstall, null);
+                bool handover = args.Length >= 2 && string.Equals(args[1], HandoverSwitch, StringComparison.Ordinal);
+                return new StartupArgs(StartupMode.Uninstall, null, handover);
             }
 
             if (string.Equals(first, SelfInstallLayout.UpdatedSwitch, StringComparison.Ordinal))
             {
-                return new StartupArgs(StartupMode.Updated, null);
+                return new StartupArgs(StartupMode.Updated, null, true);
             }
 
             return new StartupArgs(StartupMode.Invalid, null);

@@ -1,3 +1,4 @@
+using System;
 using DreamWeave.Launcher.App;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -34,12 +35,24 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void Uninstall_WaitsForMutex_DoesNotHandOver()
+        public void Uninstall_FromAppsAndFeatures_DoesNotWait()
         {
             StartupArgs a = StartupArgs.Parse(new[] { "--uninstall" });
             Assert.AreEqual(StartupMode.Uninstall, a.Mode);
             Assert.IsTrue(a.UsesMutex);
             Assert.IsFalse(a.HandsOverToRunningInstance);
+            Assert.IsFalse(a.IsHandover);
+            Assert.AreEqual(TimeSpan.Zero, a.MutexWait, "an open launcher window is reported at once");
+        }
+
+        [TestMethod]
+        public void Uninstall_FromSettings_WaitsForTheHandover()
+        {
+            StartupArgs a = StartupArgs.Parse(new[] { "--uninstall", "--handover" });
+            Assert.AreEqual(StartupMode.Uninstall, a.Mode);
+            Assert.IsTrue(a.IsHandover);
+            Assert.AreEqual(StartupArgs.HandoverWait, a.MutexWait);
+            Assert.AreEqual(TimeSpan.FromSeconds(30), StartupArgs.HandoverWait);
         }
 
         [TestMethod]
@@ -49,6 +62,13 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual(StartupMode.Updated, a.Mode);
             Assert.IsTrue(a.UsesMutex);
             Assert.IsFalse(a.HandsOverToRunningInstance, "--updated must wait for the old process, not hand over to it");
+            Assert.AreEqual(StartupArgs.HandoverWait, a.MutexWait);
+        }
+
+        [TestMethod]
+        public void Normal_DoesNotWait()
+        {
+            Assert.AreEqual(TimeSpan.Zero, StartupArgs.Parse(new string[0]).MutexWait);
         }
 
         [TestMethod]

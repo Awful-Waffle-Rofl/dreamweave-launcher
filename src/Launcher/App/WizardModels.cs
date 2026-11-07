@@ -5,6 +5,7 @@ using System.IO;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Detection;
 using DreamWeave.Launcher.Core.Downloads;
+using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
 
 namespace DreamWeave.Launcher.App
@@ -66,11 +67,19 @@ namespace DreamWeave.Launcher.App
     {
         private readonly IAcFileSystem _fs;
         private readonly IDiskSpace _disk;
+        private readonly Func<string, long, string, long, FreeSpacePreview> _preview;
 
         public LocationPresenter(IAcFileSystem fileSystem, IDiskSpace disk)
+            : this(fileSystem, disk, null)
+        {
+        }
+
+        /// <summary>Test constructor: <paramref name="preview"/> replaces Core's <see cref="AcWriter.PreviewFreeSpace(IDiskSpace, string, long, string, long)"/>.</summary>
+        internal LocationPresenter(IAcFileSystem fileSystem, IDiskSpace disk, Func<string, long, string, long, FreeSpacePreview> preview)
         {
             _fs = fileSystem ?? throw new ArgumentNullException(nameof(fileSystem));
             _disk = disk ?? throw new ArgumentNullException(nameof(disk));
+            _preview = preview ?? ((a, ab, b, bb) => AcWriter.PreviewFreeSpace(_disk, a, ab, b, bb));
         }
 
         /// <summary>
@@ -100,74 +109,45 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>
-        /// The free-space line. Downloads are staged under <paramref name="stagingDir"/> and the game is
-        /// written to <paramref name="acFolder"/>: when both are on the same volume the whole
-        /// <paramref name="requiredBytes"/> must fit there; on separate volumes the downloads must fit
-        /// in staging and the remainder in the game folder. Advisory only: each step checks again.
+        /// The free-space line, from Core's <see cref="AcWriter.PreviewFreeSpace(IDiskSpace, string, long, string, long)"/>:
+        /// the downloads (<paramref name="downloadBytes"/>) are staged under <paramref name="stagingDir"/> and the
+        /// rest of <paramref name="requiredBytes"/> is written to <paramref name="acFolder"/>. On one volume the
+        /// combined need is shown; on two, each volume's own. Advisory only: each step checks again.
         /// </summary>
         public string FreeSpaceText(string stagingDir, string acFolder, long requiredBytes, long downloadBytes)
         {
             try
             {
-                string stagingProbe = ExistingAncestor(stagingDir);
-                string acProbe = ExistingAncestor(acFolder);
-                if (stagingProbe == null || acProbe == null)
+                long downloads = Math.Max(0, downloadBytes);
+                long rest = Math.Max(0, Math.Max(requiredBytes, downloads) - downloads);
+                FreeSpacePreview p = _preview(stagingDir, downloads, acFolder, rest);
+                if (p.SameVolume)
                 {
-                    return UiText.FreeSpaceUnknown;
+                    long need = p.CombinedNeeded.Value;
+                    string fmt = p.Enough ? UiText.FreeSpaceOkFormat : UiText.FreeSpaceLowFormat;
+                    return string.Format(CultureInfo.InvariantCulture, fmt, ByteFormat.Size(p.FirstFree), ByteFormat.Size(need));
                 }
 
-                long need = Math.Max(requiredBytes, downloadBytes);
-                if (SameVolume(stagingProbe, acProbe))
+                if (p.FirstFree < p.FirstNeeded)
                 {
-                    long free = _disk.GetFreeBytes(acProbe);
-                    string fmt = free >= need ? UiText.FreeSpaceOkFormat : UiText.FreeSpaceLowFormat;
-                    return string.Format(CultureInfo.InvariantCulture, fmt, ByteFormat.Size(free), ByteFormat.Size(need));
+                    return string.Format(CultureInfo.InvariantCulture, UiText.FreeSpaceLowFormat, ByteFormat.Size(p.FirstFree), ByteFormat.Size(p.FirstNeeded));
                 }
 
-                long stagingFree = _disk.GetFreeBytes(stagingProbe);
-                long acFree = _disk.GetFreeBytes(acProbe);
-                long acNeed = Math.Max(0, need - downloadBytes);
-                if (stagingFree < downloadBytes)
+                if (p.SecondFree < p.SecondNeeded)
                 {
-                    return string.Format(CultureInfo.InvariantCulture, UiText.FreeSpaceLowFormat, ByteFormat.Size(stagingFree), ByteFormat.Size(downloadBytes));
+                    return string.Format(CultureInfo.InvariantCulture, UiText.FreeSpaceLowFormat, ByteFormat.Size(p.SecondFree), ByteFormat.Size(p.SecondNeeded));
                 }
 
-                if (acFree < acNeed)
-                {
-                    return string.Format(CultureInfo.InvariantCulture, UiText.FreeSpaceLowFormat, ByteFormat.Size(acFree), ByteFormat.Size(acNeed));
-                }
-
-                return string.Format(CultureInfo.InvariantCulture, UiText.FreeSpaceSplitFormat, ByteFormat.Size(stagingFree), ByteFormat.Size(downloadBytes), ByteFormat.Size(acFree), ByteFormat.Size(acNeed));
+                return string.Format(CultureInfo.InvariantCulture, UiText.FreeSpaceSplitFormat, ByteFormat.Size(p.FirstFree), ByteFormat.Size(p.FirstNeeded), ByteFormat.Size(p.SecondFree), ByteFormat.Size(p.SecondNeeded));
             }
             catch (LauncherException)
             {
                 return UiText.FreeSpaceUnknown;
             }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException || ex is OverflowException)
             {
                 return UiText.FreeSpaceUnknown;
             }
-        }
-
-        private string ExistingAncestor(string path)
-        {
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                return null;
-            }
-
-            string current = Path.GetFullPath(path);
-            while (current != null && !_fs.DirectoryExists(current))
-            {
-                current = Path.GetDirectoryName(current);
-            }
-
-            return current;
-        }
-
-        private static bool SameVolume(string a, string b)
-        {
-            return string.Equals(Path.GetPathRoot(a), Path.GetPathRoot(b), StringComparison.OrdinalIgnoreCase);
         }
     }
 

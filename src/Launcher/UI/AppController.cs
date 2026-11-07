@@ -254,27 +254,31 @@ namespace DreamWeave.Launcher.UI
         }
 
         /// <summary>
-        /// Starts this exe with <c>--uninstall</c> and exits. Telemetry is flushed and stopped FIRST (its
-        /// final queue write goes to the data folder), so nothing from this process writes there once
-        /// the uninstaller can run; then the mutex is released for it.
+        /// Starts this exe with <c>--uninstall --handover</c>, then (only once that start succeeded) flushes
+        /// and stops telemetry, releases the mutex and closes. The new process waits a bounded time for
+        /// the mutex before it touches anything, so its removal of the data folder starts only after this
+        /// process has made its last write there.
         /// </summary>
         private void StartUninstall()
         {
             try
             {
-                _services.Shutdown();
-                _instance?.Release();
-                _services.InstallEnvironment.Processes.Start(new ProcessStartInfo(_services.RunningExePath, SelfInstallLayout.UninstallSwitch)
+                _services.InstallEnvironment.Processes.Start(new ProcessStartInfo(_services.RunningExePath, SelfInstallLayout.UninstallSwitch + " " + StartupArgs.HandoverSwitch)
                 {
                     UseShellExecute = false,
                     WorkingDirectory = Path.GetDirectoryName(_services.RunningExePath),
                 });
-                _window.Close();
             }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is IOException)
             {
+                // Nothing was started: this launcher keeps running with its services intact.
                 _launcherScreen?.ShowStatus(ErrorMessages.For(LauncherError.Unknown));
+                return;
             }
+
+            _services.Shutdown();
+            _instance?.Release();
+            _window.Close();
         }
     }
 }

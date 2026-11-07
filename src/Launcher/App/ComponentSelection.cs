@@ -75,8 +75,11 @@ namespace DreamWeave.Launcher.App
         /// </summary>
         public bool CoveredByOverlay { get; }
 
-        /// <summary>Extra explanatory text for the row (C1, or the manifest description for an optional component), or null.</summary>
-        public string Note => CoveredByOverlay ? UiText.ClientExeMismatch : (!Component.Required ? Component.SourceLabel : null);
+        /// <summary>
+        /// Extra explanatory text for the row (C1), or null. The source label is already shown on its
+        /// own line, and the manifest has no description field, so nothing else goes here.
+        /// </summary>
+        public string Note => CoveredByOverlay ? UiText.ClientExeMismatch : null;
 
         /// <summary>Whether this row has work to do when checked.</summary>
         public bool HasWork => RowStatus != RowStatus.Done && RowStatus != RowStatus.NotApplicable;
@@ -180,6 +183,11 @@ namespace DreamWeave.Launcher.App
                         continue;
                     }
 
+                    if (r.RowStatus == RowStatus.Unknown)
+                    {
+                        return string.Format(CultureInfo.InvariantCulture, UiText.StatusUnknownBlockedFormat, r.Title);
+                    }
+
                     return string.Format(CultureInfo.InvariantCulture, UiText.RequiredNotSelectedFormat, r.Title);
                 }
 
@@ -189,6 +197,12 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>True when Next may be clicked.</summary>
         public bool CanContinue => NextBlockedReason == null;
+
+        /// <summary>
+        /// True when an unchecked required component could not be checked (Unknown): the screen offers
+        /// "Check again", which evaluates the files once more.
+        /// </summary>
+        public bool OffersCheckAgain => Rows.Any(r => r.Component.Required && r.RowStatus == RowStatus.Unknown && !r.Checked);
 
         /// <summary>Sets a row's checkbox (ignored for rows that cannot be toggled).</summary>
         public void SetChecked(string componentId, bool value)

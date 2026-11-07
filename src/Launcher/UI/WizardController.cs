@@ -233,6 +233,7 @@ namespace DreamWeave.Launcher.UI
             blocked.ForeColor = System.Drawing.Color.Firebrick;
             Button back = UiKit.Button(UiText.Back, (s, e) => ShowLocation());
             Button next = UiKit.Button(UiText.Next);
+            Button checkAgain = UiKit.Button(UiText.CheckAgain, (s, e) => ShowComponents(null));
 
             void Refresh()
             {
@@ -245,6 +246,7 @@ namespace DreamWeave.Launcher.UI
                 blocked.Text = reason ?? string.Empty;
                 blocked.Visible = reason != null;
                 next.Enabled = reason == null;
+                checkAgain.Visible = selection.OffersCheckAgain;
             }
 
             foreach (ComponentRow r in selection.Rows)
@@ -273,7 +275,7 @@ namespace DreamWeave.Launcher.UI
             }
 
             UiKit.Add(stack, blocked);
-            UiKit.Add(stack, UiKit.ButtonRow(back, next));
+            UiKit.Add(stack, UiKit.ButtonRow(back, checkAgain, next));
             next.Click += (s, e) =>
             {
                 IReadOnlyList<ComponentRow> chosen = selection.Selected;
@@ -321,7 +323,17 @@ namespace DreamWeave.Launcher.UI
             var aggregate = new AggregateProgress(components);
             int startIndex = 0;
             CancellationTokenSource cts = null;
-            InstallSession session = null;
+            bool closeWhenStopped = false;
+
+            // One session for every Retry of this screen: it remembers which installers it launched.
+            var session = new InstallSession(InstallDependencies.From(_services), Manifest, _acFolder);
+            _window.CloseGuard = () => InstallCloseRules.Decide(session.Phase);
+            _window.StopRequested = () =>
+            {
+                closeWhenStopped = true;
+                cancel.Enabled = false;
+                cts?.Cancel();
+            };
 
             string TitleOf(string id) => components.FirstOrDefault(c => c.Id == id)?.Title ?? id;
 
@@ -385,10 +397,16 @@ namespace DreamWeave.Launcher.UI
                 errors.Clear();
                 cancel.Enabled = true;
                 cts = new CancellationTokenSource();
-                session = new InstallSession(_services, Manifest, _acFolder);
                 var events = new Progress<InstallEvent>(OnEvent);
                 List<ManifestComponent> remaining = components.Skip(startIndex).ToList();
-                InstallRunResult result = await session.RunAsync(remaining, events, cts.Token);
+                InstallRunResult result = await Task.Run(() => session.RunAsync(remaining, events, cts.Token));
+                if (closeWhenStopped)
+                {
+                    _window.CloseGuard = null;
+                    _window.Close();
+                    return;
+                }
+
                 if (stack.IsDisposed)
                 {
                     return;
@@ -399,6 +417,7 @@ namespace DreamWeave.Launcher.UI
                 _acFolder = result.AcFolder;
                 if (result.Error == LauncherError.None)
                 {
+                    _window.CloseGuard = null;
                     ShowDone();
                     return;
                 }
@@ -413,7 +432,7 @@ namespace DreamWeave.Launcher.UI
                 errors.ShowError(result.Error, TelemetryStepFor(result.ComponentId));
             }
 
-            finished.Click += (s, e) => session?.CheckInstallNow();
+            finished.Click += (s, e) => session.CheckInstallNow();
             cancel.Click += (s, e) =>
             {
                 cancel.Enabled = false;

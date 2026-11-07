@@ -104,6 +104,34 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.IsTrue(p.CanPlay, "Play is enabled again after a failed start");
         }
 
+        [TestMethod]
+        public void SavedPassword_IsForgotten_WhenTheAccountNameChanges()
+        {
+            LauncherPresenter p = Presenter(AppFixtures.Sample(), new FakeStarter(), new MemoryCredentials());
+            Assert.IsFalse(p.AccountChanged("alice"), "nothing filled yet: nothing to clear");
+
+            p.MarkFilled("alice");
+            Assert.AreEqual("alice", p.FilledFor);
+            Assert.IsFalse(p.AccountChanged("alice"));
+            Assert.IsFalse(p.AccountChanged("ALICE"), "account names are not case-sensitive");
+            Assert.AreEqual("alice", p.FilledFor);
+
+            Assert.IsTrue(p.AccountChanged("alicex"), "an edit away from the filled name must clear the password");
+            Assert.IsNull(p.FilledFor);
+            Assert.IsFalse(p.AccountChanged("bob"), "already cleared: a second change clears nothing more");
+        }
+
+        [TestMethod]
+        public void SavedPassword_IsForgotten_WhenAnotherAccountIsPicked()
+        {
+            LauncherPresenter p = Presenter(AppFixtures.Sample(), new FakeStarter(), new MemoryCredentials());
+            p.MarkFilled("alice");
+            Assert.IsTrue(p.AccountChanged("carol"), "picking an account with no saved password must not keep alice's");
+            Assert.IsTrue(!p.AccountChanged(null) && p.FilledFor == null);
+            p.MarkFilled("alice");
+            Assert.IsTrue(p.AccountChanged(string.Empty), "clearing the name clears the password too");
+        }
+
         internal sealed class FakeStarter : IGameStarter
         {
             public List<KeyValuePair<string, string>> Starts { get; } = new List<KeyValuePair<string, string>>();

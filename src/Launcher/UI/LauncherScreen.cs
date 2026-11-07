@@ -82,13 +82,18 @@ namespace DreamWeave.Launcher.UI
             _play = UiKit.Button(UiText.Play, OnPlay);
             AddRow(UiKit.ButtonRow(settings, _play));
 
-            _account.TextChanged += (s, e) => Revalidate();
+            _account.TextChanged += (s, e) =>
+            {
+                ForgetFillIfRenamed(_account.Text);
+                Revalidate();
+            };
             _password.TextChanged += (s, e) => Revalidate();
             _account.SelectedIndexChanged += async (s, e) =>
             {
                 string name = _account.SelectedItem as string;
+                ForgetFillIfRenamed(name);
                 string saved = await _presenter.GetSavedPasswordAsync(name);
-                if (IsDisposed || name != _account.SelectedItem as string)
+                if (IsDisposed || name == null || !string.Equals(name, _account.Text, StringComparison.OrdinalIgnoreCase))
                 {
                     return;
                 }
@@ -97,6 +102,7 @@ namespace DreamWeave.Launcher.UI
                 {
                     _password.Text = saved;
                     _remember.Checked = true;
+                    _presenter.MarkFilled(name);
                 }
             };
             LoadAccounts();
@@ -143,6 +149,16 @@ namespace DreamWeave.Launcher.UI
             if (accounts.Count > 0 && string.IsNullOrEmpty(_account.Text))
             {
                 _account.SelectedIndex = 0;
+            }
+        }
+
+        // Another account's saved password must never be sent for, or saved under, this name.
+        private void ForgetFillIfRenamed(string accountText)
+        {
+            if (_presenter.AccountChanged(accountText))
+            {
+                _password.Text = string.Empty;
+                _remember.Checked = false;
             }
         }
 

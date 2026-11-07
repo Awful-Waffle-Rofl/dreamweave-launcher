@@ -16,7 +16,6 @@ namespace DreamWeave.Launcher.App
     {
         private static readonly Dictionary<LauncherError, string> Table = new Dictionary<LauncherError, string>
         {
-            // DRAFT: every message below except SourceQuotaExceeded (E1).
             { LauncherError.None, "Done." },
             { LauncherError.NetworkUnavailable, "The Internet could not be reached. Check your connection and try again." },
             { LauncherError.SourceHttpError, "The download site answered with an error. It may be down for a while; try again later." },
@@ -37,12 +36,12 @@ namespace DreamWeave.Launcher.App
             { LauncherError.PatchInputMismatch, "acclient.exe is not the version this fix was made for, so it was not changed." },
             { LauncherError.InvalidCredentials, "The account name or password cannot be used. Check the rules shown under the fields." },
             { LauncherError.ClientNotFound, "acclient.exe was not found in the game folder. Use Verify files in Settings to repair the install." },
-            { LauncherError.LaunchFailed, "Windows could not start Asheron's Call. Restart your PC and try again." },
+            { LauncherError.LaunchFailed, "Windows could not start Asheron's Call. Use Verify files in Settings, then try again." },
             { LauncherError.ClientRequiresElevation, "acclient.exe is set to run as administrator. Turn off \"Run this program as an administrator\" in its Properties, Compatibility tab, then try again." },
             { LauncherError.CredentialStoreUnavailable, "Windows could not save or read the password. You can still play by typing it each time." },
             { LauncherError.Cancelled, UiText.CancelledResumable },
             { LauncherError.GameRunning, "A game file is in use, probably by a running Asheron's Call. Close the game and click Retry." },
-            { LauncherError.ElevationRequired, "The game folder needs administrator permission to change." },
+            { LauncherError.ElevationRequired, "The game folder needs administrator permission to change. Click Retry and choose Yes when Windows asks." },
             { LauncherError.ReparsePointInPath, "The game folder contains a junction or link where a file should be, so nothing was written. Use a normal folder and try again." },
             { LauncherError.ArchiveInvalid, "The downloaded game data archive is not usable. Click Retry to download it again." },
             { LauncherError.PatchOutputMismatch, "The fix did not produce the expected result, so acclient.exe was left unchanged." },
