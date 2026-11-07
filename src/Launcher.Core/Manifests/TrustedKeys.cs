@@ -22,6 +22,10 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// <summary>The compiled-in production key set.</summary>
         public static IReadOnlyList<TrustedKey> Production { get; } = new TrustedKey[]
         {
+            // Primary signing key (generated 2026-11-07).
+            TrustedKey.Parse("dw-c9584c035493fe04:PZ6uaJ+PIkg7uplzXmlkJ4TlVyQJwd9myw7vqGA3K4Y=:tYoZGodOuuPnkOfISBWY5px9a+cdAc/1ZorvnB6KDyE="),
+            // Backup key for rotation (generated 2026-11-07, held offline).
+            TrustedKey.Parse("dw-182b72cde05173ba:TaGQYX0F8uU21/APBp803/d4bJscByO1mYoxfQfWvz8=:A0zL+q7Md4g13/gWwn4/ZWhEzD1srj2iODrS+hiVFYQ="),
         };
     }
 }
