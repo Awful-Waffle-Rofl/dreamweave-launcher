@@ -112,6 +112,50 @@ namespace DreamWeave.Launcher.Core
             }
         }
 
+        /// <summary>
+        /// Copies exactly <paramref name="length"/> bytes from <paramref name="source"/> (from its
+        /// current position) to <paramref name="destination"/> and returns the SHA-256 of the bytes
+        /// WRITTEN, as uppercase hex. Hashing the copy itself (rather than re-reading the source)
+        /// means a source that changes between a verification pass and the copy cannot slip
+        /// unverified bytes through.
+        /// </summary>
+        /// <exception cref="EndOfStreamException">The source ended before <paramref name="length"/> bytes.</exception>
+        /// <exception cref="OperationCanceledException">Between buffer reads.</exception>
+        public static string CopyWithSha256Hex(Stream source, Stream destination, long length, CancellationToken cancellationToken = default(CancellationToken))
+        {
+            if (source == null)
+            {
+                throw new ArgumentNullException(nameof(source));
+            }
+
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            byte[] buffer = new byte[BufferSize];
+            long remaining = length;
+            using (var sha = SHA256.Create())
+            {
+                while (remaining > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                    if (read <= 0)
+                    {
+                        throw new EndOfStreamException("The source ended " + remaining + " bytes early.");
+                    }
+
+                    sha.TransformBlock(buffer, 0, read, null, 0);
+                    destination.Write(buffer, 0, read);
+                    remaining -= read;
+                }
+
+                sha.TransformFinalBlock(buffer, 0, 0);
+                return ToHex(sha.Hash);
+            }
+        }
+
         /// <summary>SHA-256 of a whole file, as uppercase hex.</summary>
         public static string ComputeFileSha256Hex(string path, IProgress<ProgressReport> progress = null, CancellationToken cancellationToken = default(CancellationToken), string stepId = "hash")
         {

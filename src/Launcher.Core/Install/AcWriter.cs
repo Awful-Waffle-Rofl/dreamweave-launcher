@@ -84,6 +84,62 @@ namespace DreamWeave.Launcher.Core.Install
         internal static bool TryOpenGuard(string full, string relativePath, out FileStream guard)
         {
             guard = null;
+
+            // Preferred guard: READ-WRITE access, share Delete only. Asking for write access also
+            // catches a RUNNING executable: Windows refuses write access to a mapped image with a
+            // sharing violation even though no open handle conflicts (a read-only guard opens fine
+            // on a running acclient.exe, and File.Replace then succeeds over it, leaving the old image
+            // behind as an undeletable ~RF*.TMP). While this guard is held no process can start from
+            // the file either (measured: CreateProcess fails with a sharing violation).
+            try
+            {
+                guard = new FileStream(full, FileMode.Open, FileAccess.ReadWrite, FileShare.Delete, 81920, FileOptions.None);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return true;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Read-only attribute or no write permission: fall through to the read guard.
+            }
+            catch (IOException ex) when (IsInUse(ex))
+            {
+                throw GameRunning(relativePath, ex);
+            }
+            catch (IOException ex)
+            {
+                throw LauncherException.FromIo(ex, "opening " + relativePath);
+            }
+
+            // Fallback: probe for a running image with a write open that shares everything (a
+            // sharing violation here can only be the mapped image or another writer), then take a
+            // read guard. A process started between the probe and the guard is NOT detected; the
+            // window is microseconds, and the caller's leftover ~RF*.TMP cleanup is the backstop.
+            try
+            {
+                using (new FileStream(full, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.None))
+                {
+                }
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Expected for a read-only file; the probe only looks for sharing violations.
+            }
+            catch (IOException ex) when (IsInUse(ex))
+            {
+                throw GameRunning(relativePath, ex);
+            }
+            catch (IOException)
+            {
+                // Anything else surfaces from the guard open below.
+            }
+
             try
             {
                 guard = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Delete, 81920, FileOptions.None);
@@ -113,10 +169,14 @@ namespace DreamWeave.Launcher.Core.Install
 
         /// <summary>
         /// Writes <paramref name="length"/> bytes from <paramref name="source"/> (read from its
-        /// current position) to <c>&lt;target&gt;.dwtmp</c>, flushes, and atomically replaces the
-        /// target. The caller holds the target's guard (when the target exists) across this call.
+        /// current position) to <c>&lt;target&gt;.dwtmp</c>, hashing exactly the bytes written, and
+        /// only when that hash equals <paramref name="expectedSha256"/> flushes and atomically
+        /// replaces the target; otherwise the temp file is deleted and HashMismatch thrown with the
+        /// target untouched. Earlier verification of the source is therefore not load-bearing: a
+        /// source that changes between verification and copy is caught here. The caller holds the
+        /// target's guard (when the target exists) across this call.
         /// </summary>
-        internal static void ReplaceFrom(string acFolder, string relativePath, Stream source, long length, CancellationToken cancellationToken)
+        internal static void ReplaceFrom(string acFolder, string relativePath, Stream source, long length, string expectedSha256, CancellationToken cancellationToken)
         {
             string tmpRel = relativePath + TempSuffix;
             string full = AcPathSafety.ResolveForWrite(acFolder, relativePath);
@@ -137,10 +197,24 @@ namespace DreamWeave.Launcher.Core.Install
             RemoveStaleTemp(tmp, tmpRel);
             try
             {
+                string written;
                 using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.SequentialScan))
                 {
-                    Copy(source, fs, length, cancellationToken);
+                    try
+                    {
+                        written = Hasher.CopyWithSha256Hex(source, fs, length, cancellationToken);
+                    }
+                    catch (EndOfStreamException ex)
+                    {
+                        throw new LauncherException(LauncherError.SizeMismatch, "The staged copy of " + relativePath + " ended early, so it was not installed.", ex);
+                    }
+
                     fs.Flush(true);
+                }
+
+                if (!Hasher.FixedTimeEquals(written, expectedSha256))
+                {
+                    throw new LauncherException(LauncherError.HashMismatch, "The staged copy of " + relativePath + " changed after it was verified, so it was not installed.");
                 }
 
                 Commit(acFolder, relativePath, tmpRel);
@@ -208,7 +282,15 @@ namespace DreamWeave.Launcher.Core.Install
                             File.SetAttributes(full, a & ~FileAttributes.ReadOnly);
                         }
 
-                        File.Replace(tmp, full, null, true);
+                        HashSet<string> before = ReplaceLeftovers(full);
+                        try
+                        {
+                            File.Replace(tmp, full, null, true);
+                        }
+                        finally
+                        {
+                            RemoveNewLeftovers(full, before);
+                        }
                     }
                     else
                     {
@@ -225,10 +307,59 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
+        /// <summary>
+        /// ReplaceFile moves the replaced file aside as <c>&lt;name&gt;~RF&lt;hex&gt;.TMP</c> in the same
+        /// folder and deletes it; when the delete fails (measured: replacing a RUNNING exe) the
+        /// orphan stays. Snapshot of the existing ones, so only files our own replace left are removed.
+        /// </summary>
+        private static HashSet<string> ReplaceLeftovers(string full)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (string f in Directory.GetFiles(Path.GetDirectoryName(full), Path.GetFileName(full) + "~RF*.TMP"))
+                {
+                    set.Add(f);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+            }
+
+            return set;
+        }
+
+        private static void RemoveNewLeftovers(string full, HashSet<string> before)
+        {
+            foreach (string f in ReplaceLeftovers(full))
+            {
+                if (!before.Contains(f))
+                {
+                    TryDelete(f);
+                }
+            }
+        }
+
         internal static bool IsInUse(IOException ex)
         {
             int code = ex.HResult & 0xFFFF;
             return code == ErrorSharingViolation || code == ErrorLockViolation;
+        }
+
+        /// <summary>Headroom required on top of the bytes a step will write (file-system overhead, other writers).</summary>
+        internal const long FreeSpaceMargin = 64L * 1024 * 1024;
+
+        /// <summary>Throws DiskFull unless the volume holding <paramref name="folder"/> has <paramref name="bytes"/> plus <see cref="FreeSpaceMargin"/> available.</summary>
+        internal static void RequireFreeSpace(Downloads.IDiskSpace disk, string folder, long bytes, string where)
+        {
+            long need = bytes + FreeSpaceMargin;
+            long free = disk.GetFreeBytes(NearestExistingFolder(folder));
+            if (free < need)
+            {
+                throw new LauncherException(
+                    LauncherError.DiskFull,
+                    "Not enough free space " + where + ": " + need + " bytes are needed and " + free + " are available. Nothing was changed.");
+            }
         }
 
         internal static LauncherException GameRunning(string relativePath, Exception inner)
@@ -270,24 +401,6 @@ namespace DreamWeave.Launcher.Core.Install
             }
             catch (UnauthorizedAccessException)
             {
-            }
-        }
-
-        private static void Copy(Stream source, Stream destination, long length, CancellationToken cancellationToken)
-        {
-            byte[] buffer = new byte[1024 * 1024];
-            long remaining = length;
-            while (remaining > 0)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                int read = source.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
-                if (read <= 0)
-                {
-                    throw new LauncherException(LauncherError.SizeMismatch, "A staged file ended early.");
-                }
-
-                destination.Write(buffer, 0, read);
-                remaining -= read;
             }
         }
 

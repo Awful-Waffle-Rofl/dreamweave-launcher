@@ -175,6 +175,47 @@ namespace DreamWeave.Launcher.Tests.Install
         }
 
         [TestMethod]
+        public void RunningExecutableTarget_IsGameRunning_NoOrphans()
+        {
+            using (var f = new Fixture(null))
+            {
+                string exe = Path.Combine(f.Ac, "pingcopy.exe");
+                using (var running = new RunningExe(exe))
+                {
+                    byte[] ping = File.ReadAllBytes(exe);
+                    var c = new ManifestComponent
+                    {
+                        Id = "fix",
+                        Kind = ComponentKinds.BytePatch,
+                        Target = "pingcopy.exe",
+                        InputSha256 = InstallData.Hash(ping),
+                        OutputSha256 = new string('C', 64),
+                        Patches = new List<BytePatch> { new BytePatch { Offset = 0, Expect = Hex(ping, 0, 2), Replace = "0000" } },
+                    };
+
+                    var ex = Assert.ThrowsExactly<LauncherException>(() => f.Patcher.Apply(c, f.Ac));
+
+                    Assert.AreEqual(LauncherError.GameRunning, ex.Code, ex.Detail);
+                    CollectionAssert.AreEqual(ping, File.ReadAllBytes(exe));
+                }
+
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac), "no .dwtmp and no ~RF*.TMP may be left behind");
+            }
+        }
+
+        [TestMethod]
+        public void NotEnoughFreeSpace_IsDiskFull_Untouched()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                var ex = Assert.ThrowsExactly<LauncherException>(() => new BytePatcher(f.Paths, new FixedDiskSpace(10)).Apply(Component(), f.Ac));
+                Assert.AreEqual(LauncherError.DiskFull, ex.Code);
+                CollectionAssert.AreEqual(Original(), File.ReadAllBytes(f.Exe));
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac));
+            }
+        }
+
+        [TestMethod]
         public void MissingTarget_IsPatchInputMismatch()
         {
             using (var f = new Fixture(null))
@@ -237,6 +278,8 @@ namespace DreamWeave.Launcher.Tests.Install
                 Assert.AreEqual(ElevatedOperations.PatchApply, r.Task.Items[0].Operation);
                 Assert.IsTrue(File.Exists(r.TaskPath));
                 CollectionAssert.AreEqual(Original(), File.ReadAllBytes(f.Exe));
+                r.CleanUp();
+                Assert.IsFalse(File.Exists(r.TaskPath), "CleanUp removes the task file");
             }
         }
     }

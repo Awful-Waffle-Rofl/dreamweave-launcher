@@ -365,20 +365,49 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// <summary>Reads and verifies the cache pair against <paramref name="floor"/>; null on any problem (noted in <paramref name="attempts"/> when given).</summary>
         private VerifiedManifest TryReadCache(long floor, List<ManifestSourceAttempt> attempts)
         {
+            return TryReadCache(_paths, _verifier, floor, attempts);
+        }
+
+        /// <summary>
+        /// READ-ONLY access to the cached pair for the elevated helper: verifies the cache's
+        /// signature with <paramref name="verifier"/> against a floor of
+        /// max(<see cref="ManifestVerifier.MinimumSerial"/>, the cache's own serial). That is,
+        /// effectively only the compiled-in floor applies: the state file's floor is deliberately
+        /// NOT consulted, because opening a <see cref="StateStore"/> creates, locks and can rename
+        /// files, which an elevated process must never do in a folder a task file named. Touches
+        /// nothing but the one read of <see cref="AppPaths.ManifestCacheFile"/>.
+        /// </summary>
+        /// <param name="paths">Locates the cache file.</param>
+        /// <param name="verifier">Trusted keys and compiled-in floor.</param>
+        /// <param name="error">On failure, the classification of the problem; None on success.</param>
+        /// <param name="detail">On failure, a plain-English reason.</param>
+        /// <returns>The verified manifest, or null.</returns>
+        internal static VerifiedManifest ReadCacheReadOnly(AppPaths paths, ManifestVerifier verifier, out LauncherError error, out string detail)
+        {
+            var attempts = new List<ManifestSourceAttempt>();
+            VerifiedManifest v = TryReadCache(paths, verifier, 0, attempts);
+            ManifestSourceAttempt last = attempts.LastOrDefault();
+            error = v != null ? LauncherError.None : (last == null || last.Error == LauncherError.None ? LauncherError.ManifestUnavailable : last.Error);
+            detail = last?.Detail;
+            return v;
+        }
+
+        private static VerifiedManifest TryReadCache(AppPaths paths, ManifestVerifier verifier, long floor, List<ManifestSourceAttempt> attempts)
+        {
             try
             {
-                if (!File.Exists(_paths.ManifestCacheFile))
+                if (!File.Exists(paths.ManifestCacheFile))
                 {
                     attempts?.Add(new ManifestSourceAttempt("cache", LauncherError.ManifestUnavailable, "No cached download list."));
                     return null;
                 }
 
-                if (new FileInfo(_paths.ManifestCacheFile).Length > MaxCacheFileBytes)
+                if (new FileInfo(paths.ManifestCacheFile).Length > MaxCacheFileBytes)
                 {
                     throw new LauncherException(LauncherError.ManifestInvalid, "The cached download list is too large.");
                 }
 
-                JObject obj = ManifestParser.ReadRoot(File.ReadAllBytes(_paths.ManifestCacheFile));
+                JObject obj = ManifestParser.ReadRoot(File.ReadAllBytes(paths.ManifestCacheFile));
                 if ((string)obj["format"] != CacheFormat)
                 {
                     throw new LauncherException(LauncherError.ManifestInvalid, "The cached download list has an unknown format.");
@@ -386,7 +415,7 @@ namespace DreamWeave.Launcher.Core.Manifests
 
                 byte[] manifest = Convert.FromBase64String((string)obj["manifestB64"] ?? string.Empty);
                 byte[] sig = Convert.FromBase64String((string)obj["sigB64"] ?? string.Empty);
-                VerifiedManifest verified = _verifier.Verify(manifest, sig, floor);
+                VerifiedManifest verified = verifier.Verify(manifest, sig, floor);
                 attempts?.Add(new ManifestSourceAttempt("cache", LauncherError.None, "Using cached serial " + verified.Serial + "."));
                 return verified;
             }

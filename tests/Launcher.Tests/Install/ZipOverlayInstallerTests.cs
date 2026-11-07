@@ -44,9 +44,11 @@ namespace DreamWeave.Launcher.Tests.Install
 
             public string Target(string rel) => Path.Combine(Ac, rel);
 
-            public ZipOverlayResult Run() => new ZipOverlayInstaller(Paths).Install(Manifest, Component, Zip, Ac);
+            public DreamWeave.Launcher.Core.Downloads.IDiskSpace Disk { get; set; } = new FixedDiskSpace(long.MaxValue);
 
-            public bool StagingEmpty() => !Directory.Exists(Paths.StagingDir) || Directory.GetFileSystemEntries(Paths.StagingDir).Length == 0;
+            public ZipOverlayResult Run() => new ZipOverlayInstaller(Paths, Disk).Install(Manifest, Component, Zip, Ac);
+
+            public bool StagingEmpty() => InstallData.NoFilesUnder(Paths.StagingDir);
 
             public void Dispose() => _dir.Dispose();
         }
@@ -206,6 +208,91 @@ namespace DreamWeave.Launcher.Tests.Install
                 CollectionAssert.AreEqual(InstallData.Bytes("old b"), File.ReadAllBytes(f.Target("b.dat")));
                 Assert.IsFalse(InstallData.AnyTempLeft(f.Ac));
                 Assert.IsTrue(f.StagingEmpty());
+            }
+        }
+
+        [TestMethod]
+        public void RunningExecutableTarget_IsGameRunning_NoOrphans()
+        {
+            using (var f = new Fixture())
+            {
+                f.Component = InstallData.Overlay("eor-dats", InstallData.File("a.dat", A), InstallData.File("pingcopy.exe", B));
+                f.Manifest = InstallData.Manifest(f.Component);
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("pingcopy.exe", B));
+                byte[] before;
+                using (var running = new RunningExe(f.Target("pingcopy.exe")))
+                {
+                    before = File.ReadAllBytes(running.Path);
+                    var ex = Assert.ThrowsExactly<LauncherException>(() => f.Run());
+                    Assert.AreEqual(LauncherError.GameRunning, ex.Code, ex.Detail);
+                }
+
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(f.Target("pingcopy.exe")));
+                Assert.IsFalse(File.Exists(f.Target("a.dat")), "nothing may be written when a target is a running program");
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac), "no .dwtmp and no ~RF*.TMP may be left behind");
+            }
+        }
+
+        [TestMethod]
+        public void NotEnoughFreeSpace_IsDiskFull_NothingWritten()
+        {
+            using (var f = new Fixture())
+            {
+                f.Disk = new FixedDiskSpace(1024);
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+
+                var ex = Assert.ThrowsExactly<LauncherException>(() => f.Run());
+
+                Assert.AreEqual(LauncherError.DiskFull, ex.Code);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+                Assert.IsTrue(f.StagingEmpty());
+            }
+        }
+
+        [TestMethod]
+        public void StagedBytesChangingAfterVerification_IsHashMismatch_TargetUntouched()
+        {
+            using (var f = new Fixture())
+            {
+                File.WriteAllBytes(f.Target("a.dat"), OldA);
+                byte[] swapped = (byte[])A.Clone();
+                swapped[2] ^= 0x40;
+                var stream = new SwapAfterFirstPassStream(A, swapped);
+                Assert.AreEqual(InstallData.Hash(A), Hasher.ComputeSha256Hex(stream), "first pass (the verification) sees the good bytes");
+
+                var items = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<ManifestFile, Stream>>
+                {
+                    new System.Collections.Generic.KeyValuePair<ManifestFile, Stream>(f.Component.Files[0], stream),
+                };
+                var written = new System.Collections.Generic.List<string>();
+
+                var ex = Assert.ThrowsExactly<LauncherException>(() => OverlayFiles.TryWriteAll(f.Ac, items, written, System.Threading.CancellationToken.None));
+
+                Assert.AreEqual(LauncherError.HashMismatch, ex.Code);
+                Assert.AreEqual(0, written.Count);
+                CollectionAssert.AreEqual(OldA, File.ReadAllBytes(f.Target("a.dat")));
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac));
+            }
+        }
+
+        [TestMethod]
+        public void StagesInsideTheComponentFolder()
+        {
+            using (var f = new Fixture())
+            {
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+                using (DenyWrite deny = DenyWrite.TryApply(f.Ac, out string reason))
+                {
+                    if (deny == null)
+                    {
+                        Assert.Inconclusive(reason);
+                    }
+
+                    ZipOverlayResult r = f.Run();
+                    string expectedParent = DreamWeave.Launcher.Core.Downloads.DownloadRequest.ComponentFolder(f.Paths.StagingDir, "eor-dats");
+                    Assert.AreEqual(expectedParent, Path.GetDirectoryName(r.StagingFolder));
+                    r.CleanUp();
+                }
             }
         }
 

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using DreamWeave.Launcher.Core;
@@ -220,6 +221,103 @@ namespace DreamWeave.Launcher.Tests.Install
 
                 Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
                 CollectionAssert.AreEqual(ClientPatched, File.ReadAllBytes(f.Target("acclient.exe")));
+            }
+        }
+
+        [TestMethod]
+        public void AppRootThroughJunction_WritesNothing_IsManifestUnavailable()
+        {
+            using (var f = new Fixture())
+            {
+                // Reviewer probe e1: the task's appRoot\DreamWeave is a junction to another app's folder.
+                string attackerRoot = Path.Combine(f.Paths.Root, "..", "attackerroot");
+                string victim = Path.Combine(f.Paths.Root, "..", "protected");
+                Directory.CreateDirectory(attackerRoot);
+                Directory.CreateDirectory(victim);
+                byte[] foreign = InstallData.Bytes("this is another app's state.json (not JSON)");
+                File.WriteAllBytes(Path.Combine(victim, "state.json"), foreign);
+                string reason;
+                if (!InstallData.TryMakeJunction(Path.Combine(Path.GetFullPath(attackerRoot), "DreamWeave"), Path.GetFullPath(victim), out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                var t = new ElevatedTask { AppRoot = Path.GetFullPath(attackerRoot), AcFolder = f.Ac };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "eor-dats", Operation = ElevatedOperations.Overlay, Files = { new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) } } });
+
+                ElevatedTaskResult r = f.Run(t.Save(f.Paths));
+
+                Assert.AreEqual(LauncherError.ManifestUnavailable, r.Code, r.Detail);
+                CollectionAssert.AreEqual(foreign, File.ReadAllBytes(Path.Combine(victim, "state.json")), "the foreign file must be byte-identical");
+                CollectionAssert.AreEqual(new[] { "state.json" }, Directory.GetFileSystemEntries(victim).Select(Path.GetFileName).ToArray(), "no .lock, .corrupt-* or anything else may appear");
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+            }
+        }
+
+        [TestMethod]
+        public void AppRootWithoutCache_WritesNothingThere()
+        {
+            using (var f = new Fixture())
+            {
+                string empty = Path.Combine(f.Paths.Root, "..", "emptyroot");
+                Directory.CreateDirectory(empty);
+                var t = new ElevatedTask { AppRoot = Path.GetFullPath(empty), AcFolder = f.Ac };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "eor-dats", Operation = ElevatedOperations.Overlay, Files = { new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) } } });
+
+                ElevatedTaskResult r = f.Run(t.Save(f.Paths));
+
+                Assert.AreEqual(LauncherError.ManifestUnavailable, r.Code, r.Detail);
+                Assert.AreEqual(0, Directory.GetFileSystemEntries(empty).Length, "no state file, lock file or folder may be created");
+            }
+        }
+
+        [TestMethod]
+        [DataRow(@"\\server\share\0.part")]
+        [DataRow(@"\\?\C:\x\0.part")]
+        [DataRow(@"\\.\C:\x\0.part")]
+        [DataRow(@"relative\0.part")]
+        public void StagedPathNotLocal_IsTaskInvalid(string staged)
+        {
+            using (var f = new Fixture())
+            {
+                string task = f.OverlayTask(new ElevatedTaskFile { Path = "a.dat", Staged = staged });
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(task).Code);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+            }
+        }
+
+        [TestMethod]
+        public void StagedFileBehindJunction_IsRefused()
+        {
+            using (var f = new Fixture())
+            {
+                string real = Path.Combine(f.Paths.Root, "..", "realstage");
+                string link = Path.Combine(f.Paths.StagingDir, "link");
+                string reason;
+                if (!InstallData.TryMakeJunction(link, Path.GetFullPath(real), out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                File.WriteAllBytes(Path.Combine(real, "0.part"), A);
+                string task = f.OverlayTask(new ElevatedTaskFile { Path = "a.dat", Staged = Path.Combine(link, "0.part") });
+
+                Assert.AreEqual(LauncherError.ReparsePointInPath, f.Run(task).Code);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+            }
+        }
+
+        [TestMethod]
+        [DataRow(@"\\server\share\ac")]
+        [DataRow(@"\\?\C:\Turbine\Asheron's Call")]
+        [DataRow(@"\\.\C:\ac")]
+        public void AcFolderNotLocal_IsTaskInvalid(string acFolder)
+        {
+            using (var f = new Fixture())
+            {
+                var t = new ElevatedTask { AppRoot = f.Paths.Root, AcFolder = acFolder };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "eor-dats", Operation = ElevatedOperations.Overlay, Files = { new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) } } });
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(t.Save(f.Paths)).Code);
             }
         }
 

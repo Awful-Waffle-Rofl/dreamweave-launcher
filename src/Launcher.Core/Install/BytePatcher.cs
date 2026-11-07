@@ -24,15 +24,19 @@ namespace DreamWeave.Launcher.Core.Install
         public const long MaxTargetBytes = 256L * 1024 * 1024;
 
         private readonly AppPaths _paths;
+        private readonly Downloads.IDiskSpace _disk;
 
         /// <summary>
         /// Creates a patcher. <paramref name="paths"/> locates the elevated task file when the game
         /// folder is not writable; pass null where no hand-off is possible (the elevated helper
         /// itself), and an unwritable folder is then AccessDenied.
         /// </summary>
-        public BytePatcher(AppPaths paths)
+        /// <param name="paths">Launcher paths, or null for no hand-off.</param>
+        /// <param name="diskSpace">Free-space query; <see cref="Downloads.SystemDiskSpace"/> when null.</param>
+        public BytePatcher(AppPaths paths, Downloads.IDiskSpace diskSpace = null)
         {
             _paths = paths;
+            _disk = diskSpace ?? new Downloads.SystemDiskSpace();
         }
 
         /// <summary>Applies the patch: target must hash to <c>inputSha256</c>; result hashes to <c>outputSha256</c>.</summary>
@@ -152,6 +156,8 @@ namespace DreamWeave.Launcher.Core.Install
                     guard.Dispose();
                     return NeedsElevation(c, acFolder, forward);
                 }
+
+                AcWriter.RequireFreeSpace(_disk, Path.GetDirectoryName(full), data.Length, "in the game folder");
 
                 string tmp = AcWriter.WriteTemp(acFolder, c.Target, data);
                 try

@@ -224,5 +224,14 @@ namespace DreamWeave.Launcher.Core.Install
 
         /// <summary>ElevationRequired only: the saved task file.</summary>
         public string TaskPath { get; }
+
+        /// <summary>After the elevated helper has finished: deletes the task file (a no-op when there is none).</summary>
+        public void CleanUp()
+        {
+            if (TaskPath != null)
+            {
+                AcWriter.TryDelete(TaskPath);
+            }
+        }
     }
 }

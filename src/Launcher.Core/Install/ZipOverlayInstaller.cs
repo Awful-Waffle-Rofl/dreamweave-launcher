@@ -32,11 +32,18 @@ namespace DreamWeave.Launcher.Core.Install
     public sealed class ZipOverlayInstaller
     {
         private readonly AppPaths _paths;
+        private readonly Downloads.IDiskSpace _disk;
 
-        /// <summary>Creates an installer staging under <paramref name="paths"/>'s <see cref="AppPaths.StagingDir"/>.</summary>
-        public ZipOverlayInstaller(AppPaths paths)
+        /// <summary>
+        /// Creates an installer staging under <paramref name="paths"/>'s <see cref="AppPaths.StagingDir"/>,
+        /// in the component's own folder (<see cref="Downloads.DownloadRequest.ComponentFolder"/>).
+        /// </summary>
+        /// <param name="paths">Launcher paths.</param>
+        /// <param name="diskSpace">Free-space query; <see cref="Downloads.SystemDiskSpace"/> when null.</param>
+        public ZipOverlayInstaller(AppPaths paths, Downloads.IDiskSpace diskSpace = null)
         {
             _paths = paths ?? throw new ArgumentNullException(nameof(paths));
+            _disk = diskSpace ?? new Downloads.SystemDiskSpace();
         }
 
         /// <summary>Installs <paramref name="component"/> from <paramref name="zipPath"/> into <paramref name="acFolder"/>.</summary>
@@ -91,8 +98,13 @@ namespace DreamWeave.Launcher.Core.Install
                 needsElevation = probe == null;
             }
 
-            // 3. Stage.
-            string stagingFolder = Path.Combine(_paths.StagingDir, "overlay-" + Guid.NewGuid().ToString("N"));
+            // Free space: every staged copy at once, and the largest .dwtmp beside its target
+            // (files are replaced one at a time, so only one temp exists in the game folder).
+            AcWriter.RequireFreeSpace(_disk, _paths.StagingDir, toWrite.Sum(f => f.Size), "for unpacking the game files");
+            AcWriter.RequireFreeSpace(_disk, acFolder, toWrite.Max(f => f.Size), "in the game folder");
+
+            // 3. Stage, inside this component's own staging folder.
+            string stagingFolder = Path.Combine(Downloads.DownloadRequest.ComponentFolder(_paths.StagingDir, component.Id), "extract-" + Guid.NewGuid().ToString("N"));
             var staged = new List<KeyValuePair<ManifestFile, FileStream>>();
             var unexpected = new List<string>();
             bool handedOff = false;
@@ -443,7 +455,7 @@ namespace DreamWeave.Launcher.Core.Install
                         }
 
                         item.Value.Position = 0;
-                        AcWriter.ReplaceFrom(acFolder, item.Key.Path, item.Value, item.Key.Size, cancellationToken);
+                        AcWriter.ReplaceFrom(acFolder, item.Key.Path, item.Value, item.Key.Size, item.Key.Sha256, cancellationToken);
                         written.Add(item.Key.Path);
                     }
                     catch (LauncherException ex) when (written.Count > 0)

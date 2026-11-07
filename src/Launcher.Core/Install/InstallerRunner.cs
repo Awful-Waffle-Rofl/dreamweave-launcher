@@ -2,7 +2,10 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
+using Microsoft.Win32.SafeHandles;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core.Detection;
 using DreamWeave.Launcher.Core.Manifests;
@@ -20,7 +23,7 @@ namespace DreamWeave.Launcher.Core.Install
     /// </para>
     /// <para>
     /// The installer's own exit is NOT the completion signal: an InstallShield self-extractor can
-    /// exit early and leave a child process doing the work. <see cref="InstallerProcess.WaitForInstallAsync(Func{string}, TimeSpan, CancellationToken)"/>
+    /// exit early and leave a child process doing the work. <see cref="InstallerProcess.WaitForInstallAsync(Func{string}, TimeSpan, CancellationToken, TimeSpan?)"/>
     /// polls detection instead.
     /// </para>
     /// </summary>
@@ -38,16 +41,31 @@ namespace DreamWeave.Launcher.Core.Install
         }
 
         /// <summary>
-        /// Verifies <paramref name="stagedInstallerPath"/> against <paramref name="component"/>'s size
-        /// and SHA-256 under a deny-write handle, then starts it (verb <c>runas</c> when the component
-        /// asks for elevation) with <paramref name="stagingDir"/> as the working directory.
+        /// Verifies <paramref name="stagedInstallerPath"/> (normally the download engine's
+        /// <c>DownloadRequest.DestinationPath</c>, inside <c>StagingDir\&lt;component id&gt;\</c>) against
+        /// <paramref name="component"/>'s size and SHA-256 under a deny-write handle, then starts it
+        /// (verb <c>runas</c> when the component asks for elevation).
+        /// <para>
+        /// The path that is started is NOT the caller's path: it is the file's final path read back
+        /// from the held handle (<c>GetFinalPathNameByHandle</c>), so re-pointing a junction among its
+        /// ancestors after verification cannot redirect the launch to other bytes, and the working
+        /// directory is that resolved file's folder. (Renaming a real folder above the held file is
+        /// refused by Windows; measured.)
+        /// </para>
+        /// <para>
+        /// DLL planting: an elevated exe loads DLLs from its own folder first, and that folder is
+        /// user-writable. Immediately before the start, the resolved folder (the working
+        /// directory) and the caller's folder are scanned and any <c>*.dll</c> refuses the launch.
+        /// A DLL dropped between that scan and the process start is NOT caught; closing that race
+        /// would need a folder the user cannot write.
+        /// </para>
         /// </summary>
         /// <exception cref="LauncherException">
         /// SizeMismatch / HashMismatch (nothing is started); ElevationDeclined (UAC answered No);
-        /// InstallerFailed (Windows could not start it, or it lives next to a DLL); ReparsePointInPath
-        /// (the staged file is a link); ManifestInvalid (not an installer component); Cancelled.
+        /// InstallerFailed (Windows could not start it, it is not on a local drive, or a DLL sits beside
+        /// it); ReparsePointInPath (the staged file is a link); ManifestInvalid (not an installer component); Cancelled.
         /// </exception>
-        public InstallerProcess Start(ManifestComponent component, string stagedInstallerPath, string stagingDir, IProgress<ProgressReport> progress = null, CancellationToken cancellationToken = default(CancellationToken))
+        public InstallerProcess Start(ManifestComponent component, string stagedInstallerPath, IProgress<ProgressReport> progress = null, CancellationToken cancellationToken = default(CancellationToken))
         {
             if (component == null)
             {
@@ -64,15 +82,13 @@ namespace DreamWeave.Launcher.Core.Install
                 throw new LauncherException(LauncherError.ManifestInvalid, "Component '" + component.Id + "' has no valid SHA-256.");
             }
 
-            if (string.IsNullOrWhiteSpace(stagedInstallerPath) || string.IsNullOrWhiteSpace(stagingDir))
+            if (string.IsNullOrWhiteSpace(stagedInstallerPath))
             {
-                throw new ArgumentException("The staged installer and staging folder are required.");
+                throw new ArgumentException("The staged installer is required.", nameof(stagedInstallerPath));
             }
 
             string exe = Path.GetFullPath(stagedInstallerPath);
-            string workDir = Path.GetFullPath(stagingDir);
             RefuseLink(exe);
-            RefuseDllNeighbours(exe);
 
             FileStream held;
             try
@@ -112,7 +128,14 @@ namespace DreamWeave.Launcher.Core.Install
                     throw new LauncherException(LauncherError.Cancelled, "Cancelled.");
                 }
 
-                var psi = new ProcessStartInfo(exe)
+                string resolved = FinalPath(held);
+                string workDir = Path.GetDirectoryName(resolved);
+
+                // Last thing before the start: as late as possible, both folders.
+                RefuseDllNeighbours(workDir);
+                RefuseDllNeighbours(Path.GetDirectoryName(exe));
+
+                var psi = new ProcessStartInfo(resolved)
                 {
                     UseShellExecute = true,
                     WorkingDirectory = workDir,
@@ -165,12 +188,50 @@ namespace DreamWeave.Launcher.Core.Install
         }
 
         /// <summary>
+        /// The final path of the file behind <paramref name="held"/>, as a plain <c>X:\...</c> path:
+        /// junctions and links resolved by Windows from the open handle itself.
+        /// </summary>
+        /// <exception cref="LauncherException">InstallerFailed when it cannot be read or is not on a local fixed drive.</exception>
+        internal static string FinalPath(FileStream held)
+        {
+            var sb = new StringBuilder(1024);
+            uint n = GetFinalPathNameByHandle(held.SafeFileHandle, sb, (uint)sb.Capacity, 0);
+            if (n > sb.Capacity)
+            {
+                sb = new StringBuilder((int)n + 1);
+                n = GetFinalPathNameByHandle(held.SafeFileHandle, sb, (uint)sb.Capacity, 0);
+            }
+
+            if (n == 0 || n > sb.Capacity)
+            {
+                throw new LauncherException(LauncherError.InstallerFailed, "Windows could not report where the downloaded installer is.", new Win32Exception(Marshal.GetLastWin32Error()));
+            }
+
+            string path = sb.ToString();
+            const string Prefix = "\\\\?\\";
+            if (path.StartsWith(Prefix, StringComparison.Ordinal))
+            {
+                path = path.Substring(Prefix.Length);
+            }
+
+            string reason = AcPathSafety.CheckLocalFixedPath(path);
+            if (reason != null)
+            {
+                throw new LauncherException(LauncherError.InstallerFailed, "The downloaded installer is not on a local drive (" + reason + "), so it was not run.");
+            }
+
+            return path;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "GetFinalPathNameByHandleW")]
+        private static extern uint GetFinalPathNameByHandle(SafeFileHandle hFile, StringBuilder lpszFilePath, uint cchFilePath, uint dwFlags);
+
+        /// <summary>
         /// An elevated installer loads DLLs from its own folder first, and the staging folder is
         /// user-writable; refuse to elevate next to any DLL a third party could have planted.
         /// </summary>
-        private static void RefuseDllNeighbours(string exe)
+        private static void RefuseDllNeighbours(string dir)
         {
-            string dir = Path.GetDirectoryName(exe);
             string[] dlls;
             try
             {
@@ -203,9 +264,12 @@ namespace DreamWeave.Launcher.Core.Install
         public ManifestComponent Component { get; }
 
         /// <summary>
-        /// True once the process Windows started has exited. An InstallShield self-extractor may exit
-        /// before the install finishes, so this is a hint for the UI ("the installer window closed"),
-        /// never proof of completion. False when there is no process handle.
+        /// True once the process Windows started has exited. Do NOT use it to decide that an
+        /// elevated install is finished or abandoned: the handle is to the process ShellExecute
+        /// created, and an InstallShield self-extractor exits early and hands the work to a child,
+        /// so for an elevated installer this says nothing about the install itself (and it is
+        /// false whenever ShellExecute returned no handle). The only completion signal is
+        /// <see cref="WaitForInstallAsync(AcInstallLocator, ComponentEvaluator, LauncherManifest, Func{string}, TimeSpan, CancellationToken, TimeSpan?)"/>.
         /// </summary>
         public bool HasExited => _process != null && _process.HasExited;
 
@@ -224,8 +288,9 @@ namespace DreamWeave.Launcher.Core.Install
         /// <param name="savedFolder">Returns the folder saved in state (may return null); read on every poll.</param>
         /// <param name="pollInterval">Delay between polls.</param>
         /// <param name="cancellationToken">Stops waiting (the installer keeps running).</param>
-        /// <exception cref="LauncherException">Cancelled; ManifestInvalid when a manifest path is unsafe.</exception>
-        public Task<string> WaitForInstallAsync(AcInstallLocator locator, ComponentEvaluator evaluator, LauncherManifest manifest, Func<string> savedFolder, TimeSpan pollInterval, CancellationToken cancellationToken)
+        /// <param name="timeout">Give up after this long (null: wait until cancelled).</param>
+        /// <exception cref="LauncherException">Cancelled; InstallerFailed on timeout; ManifestInvalid when a manifest path is unsafe.</exception>
+        public Task<string> WaitForInstallAsync(AcInstallLocator locator, ComponentEvaluator evaluator, LauncherManifest manifest, Func<string> savedFolder, TimeSpan pollInterval, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
             if (locator == null)
             {
@@ -255,15 +320,20 @@ namespace DreamWeave.Launcher.Core.Install
                     return status.State == ComponentState.Satisfied ? where.Folder : null;
                 },
                 pollInterval,
-                cancellationToken);
+                cancellationToken,
+                timeout);
         }
 
         /// <summary>
         /// Polls <paramref name="detect"/> every <paramref name="pollInterval"/> until it returns a
         /// non-null folder, which is returned. I/O failures inside a poll count as "not yet".
         /// </summary>
-        /// <exception cref="LauncherException">Cancelled; anything else <paramref name="detect"/> throws as a LauncherException.</exception>
-        public static async Task<string> WaitForInstallAsync(Func<string> detect, TimeSpan pollInterval, CancellationToken cancellationToken)
+        /// <param name="detect">Returns the installed folder, or null for "not yet".</param>
+        /// <param name="pollInterval">Delay between polls.</param>
+        /// <param name="cancellationToken">Stops waiting (the installer keeps running).</param>
+        /// <param name="timeout">Give up after this long (null: wait until cancelled).</param>
+        /// <exception cref="LauncherException">Cancelled; InstallerFailed on timeout; anything else <paramref name="detect"/> throws as a LauncherException.</exception>
+        public static async Task<string> WaitForInstallAsync(Func<string> detect, TimeSpan pollInterval, CancellationToken cancellationToken, TimeSpan? timeout = null)
         {
             if (detect == null)
             {
@@ -275,11 +345,22 @@ namespace DreamWeave.Launcher.Core.Install
                 throw new ArgumentOutOfRangeException(nameof(pollInterval));
             }
 
+            if (timeout.HasValue && timeout.Value < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeout));
+            }
+
+            Stopwatch clock = Stopwatch.StartNew();
             while (true)
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
                     throw new LauncherException(LauncherError.Cancelled, "Stopped waiting for the installer.");
+                }
+
+                if (timeout.HasValue && clock.Elapsed >= timeout.Value)
+                {
+                    throw new LauncherException(LauncherError.InstallerFailed, "The Asheron's Call install did not finish within " + (int)timeout.Value.TotalMinutes + " minutes.");
                 }
 
                 string folder;

@@ -3,11 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using DreamWeave.Launcher.Core.Detection;
 using DreamWeave.Launcher.Core.Manifests;
-using DreamWeave.Launcher.Core.Net;
-using DreamWeave.Launcher.Core.State;
 
 namespace DreamWeave.Launcher.Core.Install
 {
@@ -40,7 +37,26 @@ namespace DreamWeave.Launcher.Core.Install
     /// written bytes.</item>
     /// <item>The game folder must be an existing install (contains acclient.exe), and every write
     /// goes through the same guarded, reparse-checked path as the unelevated installers.</item>
+    /// <item>Every location from the task (launcher data root, game folder, staged files) must be
+    /// on a local fixed drive (no UNC, device or <c>\\?\</c> form); the data root's manifest
+    /// cache and every staged file must have no junction or link on the way to them.</item>
+    /// <item>Before it has verified anything the helper WRITES NOTHING: it reads the cache file
+    /// directly (<c>ManifestProvider.ReadCacheReadOnly</c>) and never opens the launcher's state
+    /// store, which would create lock files and could rename a "corrupt" file in whatever folder
+    /// the task named. The cost: the elevated rollback floor is only the compiled-in
+    /// <see cref="TrustedKeys.MinimumSerial"/> plus the cache's own serial, not the state file's
+    /// highest serial. That is acceptable because anyone able to roll the cache back can roll the
+    /// (equally user-writable) state file back too.</item>
     /// </list>
+    /// <para>
+    /// Threat model: the elevated process runs the launcher exe from its per-user, USER-WRITABLE
+    /// install folder. It therefore protects against tampered DATA (task file, staged files,
+    /// cached manifest) but not against tampered CODE: malware running as the user could replace
+    /// the exe itself. Elevation is a fallback, not a step to take routinely: when the game folder
+    /// is writable for the user (the default <c>C:\Turbine</c> normally is, because folders created
+    /// under the drive root inherit Authenticated Users: Modify) the executors write directly and
+    /// never ask for it.
+    /// </para>
     /// Never throws: every failure becomes a non-zero <see cref="ElevatedTaskResult.Code"/>.
     /// </summary>
     public sealed class ElevatedTaskRunner
@@ -65,7 +81,13 @@ namespace DreamWeave.Launcher.Core.Install
             try
             {
                 ElevatedTask task = ElevatedTask.Load(taskPath);
-                LauncherManifest manifest = LoadVerifiedManifest(new AppPaths(task.AppRoot), cancellationToken);
+                string acReason = AcPathSafety.CheckLocalFixedPath(task.AcFolder);
+                if (acReason != null)
+                {
+                    throw new LauncherException(LauncherError.ElevatedTaskInvalid, "The elevated task names a game folder that is not allowed: " + acReason + ".");
+                }
+
+                LauncherManifest manifest = LoadVerifiedManifest(task.AppRoot);
                 string acFolder = AcInstallLocator.Normalize(task.AcFolder);
                 if (acFolder == null || !new AcInstallLocator(new NoRegistry(), new RealAcFileSystem()).ValidateFolder(acFolder))
                 {
@@ -113,20 +135,39 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
-        private LauncherManifest LoadVerifiedManifest(AppPaths paths, CancellationToken cancellationToken)
+        /// <summary>
+        /// Reads and verifies the cached manifest under <paramref name="appRoot"/> WITHOUT writing
+        /// anything. Location problems are ManifestUnavailable (the helper has no usable manifest);
+        /// a cache that is present but fails verification keeps its own code (ManifestSignatureInvalid ...).
+        /// </summary>
+        private LauncherManifest LoadVerifiedManifest(string appRoot)
         {
-            // No sources: the provider goes straight to its cache path, which re-verifies the signature
-            // with the trusted keys against max(state floor, cache serial, compiled floor).
-            var provider = new ManifestProvider(new NoNetwork(), _verifier, paths, StateStore.Open(paths), new ManifestSource[0]);
-            ManifestLoadResult r = provider.LoadAsync(cancellationToken).GetAwaiter().GetResult();
-            if (r.Manifest != null)
+            string reason = AcPathSafety.CheckLocalFixedPath(appRoot);
+            if (reason != null)
             {
-                return r.Manifest;
+                throw new LauncherException(LauncherError.ManifestUnavailable, "The elevated task's launcher data folder is not allowed: " + reason + ".");
             }
 
-            ManifestSourceAttempt cache = r.Attempts.LastOrDefault(a => a.SourceName == "cache");
-            LauncherError code = cache != null && cache.Error != LauncherError.None ? cache.Error : LauncherError.ManifestUnavailable;
-            throw new LauncherException(code, "The elevated helper could not verify the cached download list: " + (cache?.Detail ?? "no cache") + ".");
+            var paths = new AppPaths(appRoot);
+            try
+            {
+                // Root included: every segment from appRoot down to the cache file.
+                AcPathSafety.RefuseReparsePointsBelow(Path.GetDirectoryName(paths.Root) ?? paths.Root, paths.ManifestCacheFile, "The cached download list was not read");
+            }
+            catch (LauncherException ex)
+            {
+                throw new LauncherException(LauncherError.ManifestUnavailable, ex.Detail, ex);
+            }
+
+            LauncherError error;
+            string detail;
+            VerifiedManifest v = ManifestProvider.ReadCacheReadOnly(paths, _verifier, out error, out detail);
+            if (v == null)
+            {
+                throw new LauncherException(error, "The elevated helper could not verify the cached download list: " + (detail ?? "no cache") + ".");
+            }
+
+            return v.Manifest;
         }
 
         private static void Overlay(LauncherManifest manifest, ManifestComponent component, ElevatedTaskItem item, string acFolder, CancellationToken cancellationToken)
@@ -185,19 +226,17 @@ namespace DreamWeave.Launcher.Core.Install
         /// <summary>Opens a staged file with write/delete sharing denied and verifies size and SHA-256 THROUGH that handle.</summary>
         private static Stream OpenVerifiedStaged(string staged, ManifestFile f, CancellationToken cancellationToken)
         {
-            if (string.IsNullOrWhiteSpace(staged) || !Path.IsPathRooted(staged))
+            string reason = AcPathSafety.CheckLocalFixedPath(staged);
+            if (reason != null)
             {
-                throw new LauncherException(LauncherError.ElevatedTaskInvalid, "The elevated task has a staged file without a full path.");
+                throw new LauncherException(LauncherError.ElevatedTaskInvalid, "The elevated task names a staged file that is not allowed (" + reason + ").");
             }
 
             FileStream fs;
             try
             {
-                if ((File.GetAttributes(staged) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new LauncherException(LauncherError.ReparsePointInPath, "A staged copy of " + f.Path + " is a link, so it was not used.");
-                }
-
+                // Every folder on the way and the file itself: no junctions or links.
+                AcPathSafety.RefuseReparsePointsInPath(staged, "The staged copy of " + f.Path + " was not used");
                 fs = new FileStream(staged, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.SequentialScan);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
@@ -230,14 +269,6 @@ namespace DreamWeave.Launcher.Core.Install
             {
                 fs.Dispose();
                 throw;
-            }
-        }
-
-        private sealed class NoNetwork : IHttpFetcher
-        {
-            public Task<byte[]> GetBytesAsync(Uri uri, long maxBytes, CancellationToken cancellationToken)
-            {
-                throw new LauncherException(LauncherError.NetworkUnavailable, "The elevated helper never uses the network.");
             }
         }
 

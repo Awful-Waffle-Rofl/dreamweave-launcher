@@ -111,8 +111,133 @@ namespace DreamWeave.Launcher.Tests.Install
 
         public static bool AnyTempLeft(string folder)
         {
-            return Directory.Exists(folder) && Directory.GetFiles(folder, "*" + ".dwtmp", SearchOption.AllDirectories).Length > 0;
+            return Directory.Exists(folder)
+                && (Directory.GetFiles(folder, "*" + ".dwtmp", SearchOption.AllDirectories).Length > 0
+                    || Directory.GetFiles(folder, "*~RF*.TMP", SearchOption.AllDirectories).Length > 0);
         }
+
+        /// <summary>True when no FILE remains anywhere under <paramref name="folder"/> (empty component folders are fine).</summary>
+        public static bool NoFilesUnder(string folder)
+        {
+            return !Directory.Exists(folder) || Directory.GetFiles(folder, "*", SearchOption.AllDirectories).Length == 0;
+        }
+    }
+
+    /// <summary>
+    /// A COPY of %WINDIR%\System32\ping.exe running <c>-t 127.0.0.1</c> from a temp folder: a real
+    /// running executable whose image is mapped. Dispose kills only that process.
+    /// </summary>
+    internal sealed class RunningExe : IDisposable
+    {
+        private readonly Process _process;
+
+        public RunningExe(string path)
+        {
+            Path = path;
+            System.IO.File.Copy(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "PING.EXE"), path, true);
+            _process = Process.Start(new ProcessStartInfo(path, "-t 127.0.0.1") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+            _process.BeginOutputReadLine();
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                if (!_process.HasExited)
+                {
+                    _process.Kill();
+                }
+
+                _process.WaitForExit(10000);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            finally
+            {
+                _process.Dispose();
+            }
+        }
+    }
+
+    /// <summary>A disk-space query reporting a fixed number of free bytes.</summary>
+    internal sealed class FixedDiskSpace : DreamWeave.Launcher.Core.Downloads.IDiskSpace
+    {
+        private readonly long _free;
+
+        public FixedDiskSpace(long free)
+        {
+            _free = free;
+        }
+
+        public long GetFreeBytes(string directory) => _free;
+    }
+
+    /// <summary>
+    /// A seekable stream that serves <see cref="First"/> on its first pass and <see cref="Later"/>
+    /// on every pass after a rewind to 0: a staged file swapped between verification and copy.
+    /// </summary>
+    internal sealed class SwapAfterFirstPassStream : Stream
+    {
+        private int _pass;
+        private long _position;
+
+        public SwapAfterFirstPassStream(byte[] first, byte[] later)
+        {
+            First = first;
+            Later = later;
+        }
+
+        public byte[] First { get; }
+
+        public byte[] Later { get; }
+
+        public override bool CanRead => true;
+
+        public override bool CanSeek => true;
+
+        public override bool CanWrite => false;
+
+        public override long Length => First.Length;
+
+        public override long Position
+        {
+            get => _position;
+            set
+            {
+                if (value == 0 && _position != 0)
+                {
+                    _pass++;
+                }
+
+                _position = value;
+            }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            byte[] src = _pass == 0 ? First : Later;
+            int n = (int)Math.Max(0, Math.Min(count, src.Length - _position));
+            Buffer.BlockCopy(src, (int)_position, buffer, offset, n);
+            _position += n;
+            return n;
+        }
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            Position = origin == SeekOrigin.Begin ? offset : origin == SeekOrigin.Current ? _position + offset : Length + offset;
+            return _position;
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     /// <summary>Denies the current user write/delete on a folder (inherited) until disposed.</summary>
