@@ -100,8 +100,8 @@ namespace DreamWeave.Launcher.Core.Install
 
             // Free space: every staged copy at once, and the largest .dwtmp beside its target
             // (files are replaced one at a time, so only one temp exists in the game folder).
-            AcWriter.RequireFreeSpace(_disk, _paths.StagingDir, toWrite.Sum(f => f.Size), "for unpacking the game files");
-            AcWriter.RequireFreeSpace(_disk, acFolder, toWrite.Max(f => f.Size), "in the game folder");
+            // On one volume both exist together, so the volume must hold the sum.
+            AcWriter.RequireFreeSpaceCombined(_disk, _paths.StagingDir, toWrite.Sum(f => f.Size), "the unpacked game files", acFolder, toWrite.Max(f => f.Size), "the game folder");
 
             // 3. Stage, inside this component's own staging folder.
             string stagingFolder = Path.Combine(Downloads.DownloadRequest.ComponentFolder(_paths.StagingDir, component.Id), "extract-" + Guid.NewGuid().ToString("N"));

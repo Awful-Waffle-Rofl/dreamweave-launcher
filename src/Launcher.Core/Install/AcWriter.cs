@@ -120,7 +120,26 @@ namespace DreamWeave.Launcher.Core.Install
             // Fallback: probe for a running image with a write open that shares everything (a
             // sharing violation here can only be the mapped image or another writer), then take a
             // read guard. A process started between the probe and the guard is NOT detected; the
-            // window is microseconds, and the caller's leftover ~RF*.TMP cleanup is the backstop.
+            // window is very short, not measured here, and the caller's leftover ~RF*.TMP cleanup is the backstop.
+            // A READ-ONLY file cannot be opened for write at all: Windows answers access denied
+            // before it looks at sharing, so a running read-only exe would pass this probe and be
+            // replaced under the client (measured: the replace succeeded). Clear the attribute for
+            // the probe only and put it back; Commit clears it anyway when it replaces the file.
+            FileAttributes? restore = null;
+            try
+            {
+                FileAttributes attributes = File.GetAttributes(full);
+                if ((attributes & FileAttributes.ReadOnly) != 0)
+                {
+                    File.SetAttributes(full, attributes & ~FileAttributes.ReadOnly);
+                    restore = attributes;
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // Cannot lift the attribute: the probe below falls back to its old behaviour.
+            }
+
             try
             {
                 using (new FileStream(full, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.None))
@@ -129,7 +148,7 @@ namespace DreamWeave.Launcher.Core.Install
             }
             catch (UnauthorizedAccessException)
             {
-                // Expected for a read-only file; the probe only looks for sharing violations.
+                // Still denied (no write permission): the probe only looks for sharing violations.
             }
             catch (IOException ex) when (IsInUse(ex))
             {
@@ -138,6 +157,19 @@ namespace DreamWeave.Launcher.Core.Install
             catch (IOException)
             {
                 // Anything else surfaces from the guard open below.
+            }
+            finally
+            {
+                if (restore.HasValue)
+                {
+                    try
+                    {
+                        File.SetAttributes(full, restore.Value);
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                    {
+                    }
+                }
             }
 
             try
@@ -359,6 +391,38 @@ namespace DreamWeave.Launcher.Core.Install
                 throw new LauncherException(
                     LauncherError.DiskFull,
                     "Not enough free space " + where + ": " + need + " bytes are needed and " + free + " are available. Nothing was changed.");
+            }
+        }
+
+        /// <summary>
+        /// As <see cref="RequireFreeSpace"/> for two writes that run one after the other: when both
+        /// folders are on the same volume (same <see cref="Path.GetPathRoot(string)"/> after full-path
+        /// resolution) the volume must hold the COMBINED bytes plus one margin, since both exist at once;
+        /// otherwise each folder is checked on its own volume.
+        /// </summary>
+        internal static void RequireFreeSpaceCombined(Downloads.IDiskSpace disk, string firstFolder, long firstBytes, string firstWhere, string secondFolder, long secondBytes, string secondWhere)
+        {
+            string firstRoot = VolumeRoot(firstFolder);
+            string secondRoot = VolumeRoot(secondFolder);
+            if (firstRoot != null && string.Equals(firstRoot, secondRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                RequireFreeSpace(disk, firstFolder, checked(firstBytes + secondBytes), "on the drive holding both " + firstWhere + " and " + secondWhere);
+                return;
+            }
+
+            RequireFreeSpace(disk, firstFolder, firstBytes, firstWhere);
+            RequireFreeSpace(disk, secondFolder, secondBytes, secondWhere);
+        }
+
+        private static string VolumeRoot(string folder)
+        {
+            try
+            {
+                return Path.GetPathRoot(Path.GetFullPath(folder));
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
+            {
+                return null;
             }
         }
 
