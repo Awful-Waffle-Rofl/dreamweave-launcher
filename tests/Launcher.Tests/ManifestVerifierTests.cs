@@ -98,13 +98,15 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
-        public void ProductionSet_IsEmptyAndFailsClosed()
+        public void ProductionSet_TrustsExactlyThePinnedKeys_AndRejectsOthers()
         {
             byte[] manifest = TestManifests.Build(5);
             byte[] sig = _key.Sign(manifest).ToFileBytes();
             ManifestVerifier production = ManifestVerifier.CreateProduction();
 
-            Assert.AreEqual(0, production.TrustedKeyCount);
+            Assert.AreEqual(2, production.TrustedKeyCount);
+            Assert.AreEqual("dw-c9584c035493fe04", TrustedKeys.Production[0].KeyId);
+            Assert.AreEqual("dw-182b72cde05173ba", TrustedKeys.Production[1].KeyId);
             Assert.AreEqual(LauncherError.ManifestSignatureInvalid, CodeOf(() => production.Verify(manifest, sig, 0)));
         }
 
