@@ -42,7 +42,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         [TestMethod]
         public void Saved_Folder_Wins_When_Valid()
         {
-            var loc = new AcInstallLocator(Registry(ByGuid, ByName), FsWithClients(Saved, ByGuid, ByName, Default), Default).Locate(Saved);
+            var loc = new AcInstallLocator(Registry(ByGuid, ByName), FsWithClients(Saved, ByGuid, ByName, Default), Default).LocateFrom(Saved);
             Assert.IsTrue(loc.Found);
             Assert.AreEqual(Saved, loc.Folder);
             Assert.AreEqual(AcInstallSource.SavedFolder, loc.Source);
@@ -51,7 +51,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         [TestMethod]
         public void Invalid_Saved_Folder_Falls_Through_To_Guid_Key()
         {
-            var loc = new AcInstallLocator(Registry(ByGuid, ByName), FsWithClients(ByGuid, ByName, Default), Default).Locate(Saved);
+            var loc = new AcInstallLocator(Registry(ByGuid, ByName), FsWithClients(ByGuid, ByName, Default), Default).LocateFrom(Saved);
             Assert.AreEqual(ByGuid, loc.Folder);
             Assert.AreEqual(AcInstallSource.UninstallKeyGuid, loc.Source);
             StringAssert.Contains(string.Join("|", loc.Notes), "saved folder");
@@ -60,7 +60,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         [TestMethod]
         public void Guid_Key_Pointing_At_Missing_Folder_Falls_Through_To_DisplayName_Match()
         {
-            var loc = new AcInstallLocator(Registry(ByGuid, ByName), FsWithClients(ByName, Default), Default).Locate((string)null);
+            var loc = new AcInstallLocator(Registry(ByGuid, ByName), FsWithClients(ByName, Default), Default).LocateFrom(null);
             Assert.AreEqual(ByName, loc.Folder);
             Assert.AreEqual(AcInstallSource.UninstallKeyDisplayName, loc.Source);
         }
@@ -70,7 +70,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         {
             var reg = new FakeRegistry();
             reg.AddUninstall("{X}", "ASHERON" + (char)0x2019 + "S CALL", ByName);
-            var loc = new AcInstallLocator(reg, FsWithClients(ByName), Default).Locate((string)null);
+            var loc = new AcInstallLocator(reg, FsWithClients(ByName), Default).LocateFrom(null);
             Assert.AreEqual(AcInstallSource.UninstallKeyDisplayName, loc.Source);
         }
 
@@ -79,7 +79,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         {
             var reg = new FakeRegistry();
             reg.AddUninstall("{X}", "Some Other Game", ByName);
-            var loc = new AcInstallLocator(reg, FsWithClients(ByName), Default).Locate((string)null);
+            var loc = new AcInstallLocator(reg, FsWithClients(ByName), Default).LocateFrom(null);
             Assert.IsFalse(loc.Found);
             Assert.AreEqual(AcInstallSource.NotFound, loc.Source);
         }
@@ -87,7 +87,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         [TestMethod]
         public void Default_Folder_Is_Last_Resort()
         {
-            var loc = new AcInstallLocator(Registry(null, null), FsWithClients(Default), Default).Locate((string)null);
+            var loc = new AcInstallLocator(Registry(null, null), FsWithClients(Default), Default).LocateFrom(null);
             Assert.AreEqual(Default, loc.Folder);
             Assert.AreEqual(AcInstallSource.DefaultFolder, loc.Source);
         }
@@ -95,7 +95,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         [TestMethod]
         public void Nothing_Valid_Returns_NotFound_With_Notes()
         {
-            var loc = new AcInstallLocator(Registry(ByGuid, null), new FakeFs(), Default).Locate(Saved);
+            var loc = new AcInstallLocator(Registry(ByGuid, null), new FakeFs(), Default).LocateFrom(Saved);
             Assert.IsFalse(loc.Found);
             Assert.IsNull(loc.Folder);
             Assert.IsTrue(loc.Notes.Count >= 3);
@@ -105,15 +105,27 @@ namespace DreamWeave.Launcher.Tests.Detection
         public void Quoted_And_Trailing_Slash_InstallLocation_Is_Normalized()
         {
             var reg = Registry("\"" + ByGuid + "\\\"", null);
-            var loc = new AcInstallLocator(reg, FsWithClients(ByGuid), Default).Locate((string)null);
+            var loc = new AcInstallLocator(reg, FsWithClients(ByGuid), Default).LocateFrom(null);
             Assert.AreEqual(ByGuid, loc.Folder);
+        }
+
+        [TestMethod]
+        public void Lower_Case_Drive_InstallLocation_Is_Found_And_Usable()
+        {
+            // The real registry value is "c:\Turbine\..." (lower-case drive).
+            var reg = Registry(@"c:\Turbine\Asheron's Call", null);
+            var loc = new AcInstallLocator(reg, FsWithClients(@"C:\Turbine\Asheron's Call"), Default).LocateFrom(null);
+            Assert.IsTrue(loc.Found);
+            Assert.AreEqual(AcInstallSource.UninstallKeyGuid, loc.Source);
+            string exe = AcPathSafety.Resolve(loc.Folder, "acclient.exe");
+            Assert.IsTrue(exe.EndsWith(@"\acclient.exe", System.StringComparison.OrdinalIgnoreCase));
         }
 
         [TestMethod]
         public void Relative_InstallLocation_Is_Rejected()
         {
             var reg = Registry(@"Turbine\AC", null);
-            var loc = new AcInstallLocator(reg, FsWithClients(@"Turbine\AC"), Default).Locate((string)null);
+            var loc = new AcInstallLocator(reg, FsWithClients(@"Turbine\AC"), Default).LocateFrom(null);
             Assert.IsFalse(loc.Found);
         }
 

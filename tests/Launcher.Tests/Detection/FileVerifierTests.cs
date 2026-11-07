@@ -193,6 +193,50 @@ namespace DreamWeave.Launcher.Tests.Detection
         }
 
         [TestMethod]
+        public void File_Changed_During_The_Read_Is_Not_Cached()
+        {
+            using (var dir = new TempDir())
+            {
+                var fs = new FakeFs();
+                byte[] data = DetectionData.Bytes("being written");
+                fs.SetFile(P, data, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+                bool first = true;
+                fs.OnOpen = path =>
+                {
+                    if (first)
+                    {
+                        first = false;
+                        fs.SetFile(P, data, new DateTime(2026, 1, 1, 0, 0, 9, DateTimeKind.Utc));
+                    }
+                };
+                var v = new FileVerifier(fs, DetectionData.NewState(dir));
+
+                Assert.AreEqual(FileCheckStatus.Hashed, v.Verify(P).Status);
+                FileCheckResult second = v.Verify(P);
+                Assert.IsFalse(second.FromCache, "the first hash was taken while the file changed, so it must not have been cached");
+                Assert.AreEqual(2, fs.OpenCount);
+                Assert.IsTrue(v.Verify(P).FromCache, "a stable file is cached");
+            }
+        }
+
+        [TestMethod]
+        public void Cancellation_Propagates_And_Caches_Nothing()
+        {
+            using (var dir = new TempDir())
+            {
+                var fs = new FakeFs();
+                fs.SetFile(P, new byte[3 * 1024 * 1024]);
+                var v = new FileVerifier(fs, DetectionData.NewState(dir));
+                using (var cts = new System.Threading.CancellationTokenSource())
+                {
+                    cts.Cancel();
+                    Assert.ThrowsExactly<OperationCanceledException>(() => v.Verify(P, null, null, cts.Token));
+                }
+
+                Assert.IsFalse(v.Verify(P).FromCache);
+            }
+        }
+        [TestMethod]
         public void Real_Disk_Locked_File_Reports_Locked()
         {
             using (var dir = new TempDir())

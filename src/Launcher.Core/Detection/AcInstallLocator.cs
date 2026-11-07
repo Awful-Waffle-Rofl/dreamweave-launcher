@@ -25,7 +25,7 @@ namespace DreamWeave.Launcher.Core.Detection
         DefaultFolder = 4,
     }
 
-    /// <summary>Outcome of <see cref="AcInstallLocator.Locate(string)"/>.</summary>
+    /// <summary>Outcome of <see cref="AcInstallLocator.LocateFrom(string)"/>.</summary>
     public sealed class AcInstallLocation
     {
         /// <summary>Creates a result.</summary>
@@ -92,11 +92,11 @@ namespace DreamWeave.Launcher.Core.Detection
                 throw new ArgumentNullException(nameof(state));
             }
 
-            return Locate(state.Read(s => s.AcFolder));
+            return LocateFrom(state.Read(s => s.AcFolder));
         }
 
         /// <summary>Locates the folder; <paramref name="savedFolder"/> (may be null) is the first candidate.</summary>
-        public AcInstallLocation Locate(string savedFolder)
+        public AcInstallLocation LocateFrom(string savedFolder)
         {
             var notes = new List<string>();
 

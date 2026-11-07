@@ -78,6 +78,9 @@ namespace DreamWeave.Launcher.Tests.Detection
 
         public int OpenCount { get; private set; }
 
+        /// <summary>Runs when a file is opened for reading (to simulate a change during the read).</summary>
+        public Action<string> OnOpen { get; set; }
+
         public void AddDir(string path)
         {
             _dirs.Add(path);
@@ -119,6 +122,7 @@ namespace DreamWeave.Launcher.Tests.Detection
         public Stream OpenRead(string path)
         {
             OpenCount++;
+            OnOpen?.Invoke(path);
             Exception ex;
             if (OpenFailures.TryGetValue(path, out ex))
             {
@@ -163,6 +167,16 @@ namespace DreamWeave.Launcher.Tests.Detection
                 Size = 1000,
                 SatisfiedWhen = new List<SatisfiedWhenRule> { new SatisfiedWhenRule { Path = path, Sha256 = new List<string>(hashes) } },
             };
+        }
+
+        public static SatisfiedWhenRule Rule(string path, params string[] hashes)
+        {
+            return new SatisfiedWhenRule { Path = path, Sha256 = new List<string>(hashes) };
+        }
+
+        public static ManifestComponent InstallerRules(string id, params SatisfiedWhenRule[] rules)
+        {
+            return new ManifestComponent { Id = id, Kind = ComponentKinds.Installer, Size = 1000, SatisfiedWhen = new List<SatisfiedWhenRule>(rules) };
         }
 
         public static ManifestComponent Overlay(string id, long size, params ManifestFile[] files)

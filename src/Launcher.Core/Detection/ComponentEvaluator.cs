@@ -212,26 +212,27 @@ namespace DreamWeave.Launcher.Core.Detection
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
                 {
                     FileCheckResult r = Check(rule.Path, null);
-                    var accepted = (rule.Sha256 ?? new List<string>()).Select(h => (h ?? string.Empty).ToUpperInvariant()).ToList();
-                    details.Add(Detail(rule.Path, r, null, h => accepted.Contains(h), null));
+                    List<string> accepted = rule.Sha256 ?? new List<string>();
+                    details.Add(Detail(rule.Path, r, null, h => accepted.Any(a => Hasher.FixedTimeEquals(h, a)), null));
                 }
 
+                // satisfiedWhen: the component counts as installed when ANY rule matches.
                 ComponentState state;
-                if (details.Any(d => d.State == FileState.Missing))
+                if (details.Count == 0 || details.Any(d => d.State == FileState.Ok))
                 {
-                    state = ComponentState.Missing;
-                }
-                else if (details.Any(d => d.State == FileState.Mismatch))
-                {
-                    state = ComponentState.NeedsRepair;
+                    state = ComponentState.Satisfied;
                 }
                 else if (details.Any(IsUnreadable))
                 {
                     state = ComponentState.Unknown;
                 }
+                else if (details.All(d => d.State == FileState.Missing))
+                {
+                    state = ComponentState.Missing;
+                }
                 else
                 {
-                    state = ComponentState.Satisfied;
+                    state = ComponentState.NeedsRepair;
                 }
 
                 return Finish(c, state, details, c.Size, "client files");
@@ -244,25 +245,30 @@ namespace DreamWeave.Launcher.Core.Detection
                     return new ComponentStatus(c.Id, c.Kind, ComponentState.Missing, null, c.Size, "No Asheron's Call install was found.");
                 }
 
+                if (c.Files.Count == 0)
+                {
+                    return new ComponentStatus(c.Id, c.Kind, ComponentState.Unknown, null, 0, "This component lists no files, so there is nothing to check.");
+                }
+
                 var details = new List<FileDetail>();
                 foreach (ManifestFile f in c.Files)
                 {
-                    string expected = (f.Sha256 ?? string.Empty).ToUpperInvariant();
+                    string expected = f.Sha256;
                     ManifestComponent patch = PatchTargeting(f.Path);
 
                     // A patch target may legitimately carry the patch's output hash, so it must be hashed
                     // even when its own size is odd; any other file with the wrong size is not read at all.
                     FileCheckResult r = Check(f.Path, patch == null ? (long?)f.Size : null);
-                    string output = patch == null ? null : (patch.OutputSha256 ?? string.Empty).ToUpperInvariant();
+                    string output = patch == null ? null : patch.OutputSha256;
                     string note = null;
                     FileDetail d = Detail(f.Path, r, f.Size, h =>
                     {
-                        if (h == expected)
+                        if (Hasher.FixedTimeEquals(h, expected))
                         {
                             return true;
                         }
 
-                        if (output != null && h == output)
+                        if (output != null && Hasher.FixedTimeEquals(h, output))
                         {
                             note = "Patched by " + patch.Id + ".";
                             return true;
@@ -299,8 +305,8 @@ namespace DreamWeave.Launcher.Core.Detection
                 }
 
                 FileCheckResult r = Check(c.Target, null);
-                string input = (c.InputSha256 ?? string.Empty).ToUpperInvariant();
-                string output = (c.OutputSha256 ?? string.Empty).ToUpperInvariant();
+                string input = c.InputSha256;
+                string output = c.OutputSha256;
                 FileDetail detail;
                 ComponentState state;
                 string message;
@@ -308,13 +314,13 @@ namespace DreamWeave.Launcher.Core.Detection
                 switch (r.Status)
                 {
                     case FileCheckStatus.Hashed:
-                        if (r.Sha256 == output)
+                        if (Hasher.FixedTimeEquals(r.Sha256, output))
                         {
                             state = ComponentState.Satisfied;
                             message = "Applied.";
                             detail = new FileDetail(c.Target, FileState.Ok, null, r.Size, r.Sha256, "Already patched.");
                         }
-                        else if (r.Sha256 == input)
+                        else if (Hasher.FixedTimeEquals(r.Sha256, input))
                         {
                             state = ComponentState.Missing;
                             message = "Not applied.";

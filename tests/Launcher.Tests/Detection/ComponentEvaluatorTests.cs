@@ -203,6 +203,85 @@ namespace DreamWeave.Launcher.Tests.Detection
             Assert.AreEqual(ComponentState.NotApplicable, Find(Run(fs, SampleLike(), null), "palette-leak-fix").State);
         }
 
+        private static ComponentState InstallerState(FakeFs fs, params SatisfiedWhenRule[] rules)
+        {
+            return Run(fs, DetectionData.Manifest(DetectionData.InstallerRules("ac-client", rules)))[0].State;
+        }
+
+        [TestMethod]
+        public void Installer_AnyRule_Matching_Is_Satisfied_Even_When_Another_Rule_Is_Absent()
+        {
+            var fs = Healthy(ExeOriginal);
+            string h = DetectionData.Hash(ExeOriginal);
+            Assert.AreEqual(ComponentState.Satisfied, InstallerState(fs, DetectionData.Rule("acclient.exe", h), DetectionData.Rule("never-there.exe", h)));
+            Assert.AreEqual(ComponentState.Satisfied, InstallerState(fs, DetectionData.Rule("never-there.exe", h), DetectionData.Rule("acclient.exe", h)));
+        }
+
+        [TestMethod]
+        public void Installer_Mismatching_Rule_Plus_Matching_Rule_Is_Satisfied()
+        {
+            var fs = Healthy(ExeOriginal);
+            Assert.AreEqual(ComponentState.Satisfied, InstallerState(fs,
+                DetectionData.Rule("a.dat", new string('0', 64)),
+                DetectionData.Rule("acclient.exe", DetectionData.Hash(ExeOriginal))));
+        }
+
+        [TestMethod]
+        public void Installer_All_Rules_Missing_Is_Missing()
+        {
+            var fs = Healthy(ExeOriginal);
+            string h = DetectionData.Hash(ExeOriginal);
+            Assert.AreEqual(ComponentState.Missing, InstallerState(fs, DetectionData.Rule("x1.exe", h), DetectionData.Rule("x2.exe", h)));
+        }
+
+        [TestMethod]
+        public void Installer_All_Rules_Mismatching_Is_NeedsRepair()
+        {
+            var fs = Healthy(ExeOriginal);
+            string bad = new string('0', 64);
+            Assert.AreEqual(ComponentState.NeedsRepair, InstallerState(fs, DetectionData.Rule("acclient.exe", bad), DetectionData.Rule("a.dat", bad)));
+        }
+
+        [TestMethod]
+        public void Installer_Mismatch_Plus_Absent_Is_NeedsRepair()
+        {
+            var fs = Healthy(ExeOriginal);
+            string bad = new string('0', 64);
+            Assert.AreEqual(ComponentState.NeedsRepair, InstallerState(fs, DetectionData.Rule("acclient.exe", bad), DetectionData.Rule("never-there.exe", bad)));
+        }
+
+        [TestMethod]
+        public void Installer_Zero_Rules_Is_Satisfied_Only_If_Client_Exe_Exists()
+        {
+            Assert.AreEqual(ComponentState.Satisfied, InstallerState(Healthy(ExeOriginal)));
+            var noExe = new FakeFs();
+            noExe.AddDir(DetectionData.Folder);
+            Assert.AreEqual(ComponentState.Missing, InstallerState(noExe));
+        }
+
+        [TestMethod]
+        public void Installer_Unreadable_Rule_With_No_Match_Is_Unknown_But_A_Match_Still_Wins()
+        {
+            var fs = Healthy(ExeOriginal);
+            fs.OpenFailures[F("a.dat")] = new IOException("in use", unchecked((int)0x80070020));
+            string h = DetectionData.Hash(ExeOriginal);
+            Assert.AreEqual(ComponentState.Unknown, InstallerState(fs, DetectionData.Rule("a.dat", h), DetectionData.Rule("never-there.exe", h)));
+            Assert.AreEqual(ComponentState.Satisfied, InstallerState(fs, DetectionData.Rule("a.dat", h), DetectionData.Rule("acclient.exe", h)));
+        }
+
+        [TestMethod]
+        public void Lower_Case_Manifest_Hashes_Still_Match()
+        {
+            var fs = Healthy(ExeOriginal);
+            Assert.AreEqual(ComponentState.Satisfied, InstallerState(fs, DetectionData.Rule("acclient.exe", DetectionData.Hash(ExeOriginal).ToLowerInvariant())));
+        }
+
+        [TestMethod]
+        public void Overlay_With_Zero_Files_Is_Unknown()
+        {
+            var m = DetectionData.Manifest(DetectionData.Overlay("empty", 100));
+            Assert.AreEqual(ComponentState.Unknown, Run(Healthy(ExeOriginal), m)[0].State);
+        }
         [TestMethod]
         public void Unknown_Kind_Is_Unknown()
         {
