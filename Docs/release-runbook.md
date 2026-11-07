@@ -8,19 +8,18 @@ Commands below use `dotnet run --project tools/ManifestTool -c Release --` as `M
 
 1. **Bump the version.** Edit `<Version>` in `Directory.Build.props` (for example `1.0.1`), open a PR, merge it.
 2. **Tag and push.** On the merge commit: `git tag v1.0.1` then `git push origin v1.0.1`. The tag must be exactly `v` + `<Version>`; the workflow `.github/workflows/release.yml` fails otherwise. It builds, runs the tests, checks the size and layout of the exe, and creates a DRAFT release with `DreamWeaveLauncher.exe` and `SHA256SUMS`. To rehearse without a release, dispatch the workflow by hand with a tag input.
-3. **Download and verify.** From the draft release download both files. In PowerShell: `Get-FileHash .\DreamWeaveLauncher.exe -Algorithm SHA256` must equal the (case-insensitive) hash in `SHA256SUMS`.
-4. **Print the launcher block.** `./tools/release/print-manifest-launcher-block.ps1 -ExePath .\DreamWeaveLauncher.exe -Version 1.0.1`. It prints `version`, `url` (the draft release's download URL for the tag), `sha256` (uppercase) and `size`.
-5. **Edit `manifest.json`.** In a worktree of the `manifest` branch (see "Creating the manifest branch"), paste the block over the `launcher` object, keeping `minVersion` and `authenticodeSubject`. Increment `serial` by at least 1 and update `issued`. Edit with an editor that keeps the file's bytes sane (no BOM, no reformat on save).
-6. **Sign, offline.** On the maintainer's PC only: `ManifestTool sign --key <path to private key> --manifest <path to manifest.json>`. This writes `manifest.json.sig` next to it.
-7. **Verify.** `ManifestTool verify --pub <keyId:X:Y or public key file> --manifest <path to manifest.json>` must print `OK` with the serial you expect.
-8. **Commit to the `manifest` branch.** Commit `manifest.json` and `manifest.json.sig` together and push the `manifest` branch. Confirm both raw URLs serve the new bytes (CDN caching can lag a few minutes; the launcher retries once with a cache-bust).
-9. **Publish the draft release.** In GitHub, open the draft and publish it. Publish only AFTER step 8 is verified, because the manifest points at the release asset.
-
+3. **Download and verify.** From the DRAFT release download both files. In PowerShell: `Get-FileHash .\DreamWeaveLauncher.exe -Algorithm SHA256` must equal the (case-insensitive) hash in `SHA256SUMS`.
+4. **Publish the release.** In GitHub, open the draft and publish it. A draft's asset URLs return 404 to everyone, so the release must be public before any manifest points at it. Confirm the download URL `https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/releases/download/v1.0.1/DreamWeaveLauncher.exe` now downloads.
+5. **Print the launcher block.** `./tools/release/print-manifest-launcher-block.ps1 -ExePath .\DreamWeaveLauncher.exe -Version 1.0.1`. It prints `version`, `url` (the published release's download URL for the tag), `sha256` (uppercase) and `size`.
+6. **Edit `manifest.json`.** In a worktree of the `manifest` branch (see "Creating the manifest branch"), replace only the `version`, `url`, `sha256` and `size` lines of the `launcher` object; keep `minVersion` and `authenticodeSubject`. Increment `serial` by at least 1 and update `issued`. Edit with an editor that keeps the file's bytes sane (no BOM, no reformat on save).
+7. **Sign, offline.** On the maintainer's PC only: `ManifestTool sign --key <path to private key> --manifest <path to manifest.json>`. This writes `manifest.json.sig` next to it.
+8. **Verify.** `ManifestTool verify --pub <keyId:X:Y or public key file> --manifest <path to manifest.json>` must print `OK` with the serial you expect.
+9. **Push the manifest.** Commit `manifest.json` and `manifest.json.sig` together to the `manifest` branch and push it. Confirm both raw URLs serve the new bytes (CDN caching can lag a few minutes; the launcher retries once with a cache-bust).
 v1 ships unsigned (no Authenticode); see `Docs/code-signing-policy.md`.
 
 ## Creating the manifest branch (once)
 
-The `manifest` branch is an orphan branch holding only `manifest.json` and `manifest.json.sig`. Its starting files live in `manifest/branch-template/` on `main`.
+The `manifest` branch is an orphan branch holding two signed files (`manifest.json` and `manifest.json.sig`) plus `.gitattributes` and `README.md`. Its starting files live in `manifest/branch-template/` on `main`.
 
 ```
 git worktree add --detach ../dreamweave-launcher-manifest origin/main
@@ -35,13 +34,13 @@ git commit -m "Initialize manifest branch"
 git push -u origin manifest
 ```
 
-Then copy `manifest/manifest.sample.json` from `main` to `manifest.json`, fill in the `launcher` block and `serial` as in the normal release, and sign and verify (steps 4 to 8). Check that `git ls-files` shows only `.gitattributes`, `README.md`, `manifest.json` and `manifest.json.sig`.
+Then copy `manifest/manifest.sample.json` from `main` to `manifest.json`, fill in the `launcher` block and `serial` as in the normal release, and sign and verify (steps 5 to 9, after the release is published). Check that `git ls-files` shows exactly the two signed files plus `.gitattributes` and `README.md`.
 
 ## First-time key setup
 
 Do this before the first real release. Until a key is in `TrustedKeys.Production` every manifest is rejected (fail closed).
 
-1. On the maintainer's PC: `ManifestTool keygen --out <path>\dw-manifest-key.json`. It prints the `keyId` and a `TrustedKey.Parse("keyId:X:Y")` line. It refuses to overwrite an existing file.
+1. On the maintainer's PC: `ManifestTool keygen --out D:\keys\dw-manifest-key.json`. `--out` must be an absolute path OUTSIDE any git checkout (the example is on a separate drive); `.gitignore` also blocks `*manifest-key*.json`, `*.pem` and `*.key` as a backstop only. It prints the `keyId` and a `TrustedKey.Parse("keyId:X:Y")` line. It refuses to overwrite an existing file.
 2. Store the private key file OFFLINE (encrypted USB stick or similar), plus a second backup copy in a different physical place. Never put it in the repository, in CI secrets, in cloud sync folders or in chat.
 3. Add the printed `TrustedKey.Parse(...)` line to `TrustedKeys.Production` in `src/Launcher.Core/Manifests/TrustedKeys.cs` through a normal PR, and release a launcher containing it (normal release above). Players on older launchers cannot verify manifests until they have a build with the key.
 
@@ -62,4 +61,4 @@ If the signing key is lost with no backup, no manifest can be accepted by existi
 - Never sign in CI, and never store the private key or its contents as a CI secret.
 - Never lower `serial`. Launchers reject any manifest with a serial below the highest they have seen, and below `MinimumSerial`.
 - Never edit `manifest.json` or `manifest.json.sig` in GitHub's web editor, or edit `manifest.json` without re-signing.
-- Never publish the draft release before the new manifest is live and verified.
+- Never push a manifest whose launcher url is not yet downloadable.

@@ -483,3 +483,8 @@ $RECYCLE.BIN/
 
 # Release scripts live in tools/release (the pattern above is for build output).
 !/tools/release/
+
+# Private signing keys must never be committed.
+*manifest-key*.json
+*.pem
+*.key

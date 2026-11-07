@@ -36,7 +36,11 @@ $text = @(
 
 Write-Host $text
 if ($OutFile) {
-    $full = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $OutFile))
+    if ([System.IO.Path]::IsPathRooted($OutFile)) {
+        $full = [System.IO.Path]::GetFullPath($OutFile)
+    } else {
+        $full = [System.IO.Path]::GetFullPath((Join-Path (Get-Location).Path $OutFile))
+    }
     [System.IO.File]::WriteAllText($full, $text + "`n", (New-Object System.Text.UTF8Encoding($false)))
     Write-Host "Wrote $full"
 }
