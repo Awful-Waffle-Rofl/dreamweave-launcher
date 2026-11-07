@@ -35,6 +35,42 @@ namespace DreamWeave.Launcher.UI
             return c;
         }
 
+        /// <summary>Height of a progress bar at 96 DPI.</summary>
+        public const int BarHeight = 20;
+
+        /// <summary>
+        /// A full-width progress bar of normal fixed height (<see cref="BarHeight"/> scaled to the screen DPI).
+        /// Never Dock.Fill: in an auto-sizing stack that renders as a block as tall as the window.
+        /// </summary>
+        public static ProgressBar Bar(ProgressBarStyle style = ProgressBarStyle.Blocks, int maximum = 100)
+        {
+            return new ProgressBar
+            {
+                Style = style,
+                Minimum = 0,
+                Maximum = maximum,
+                Dock = DockStyle.None,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                Height = ScaleY(BarHeight),
+                Margin = new Padding(0, 4, 0, 4),
+            };
+        }
+
+        private static int ScaleY(int pixelsAt96Dpi)
+        {
+            try
+            {
+                using (Graphics g = Graphics.FromHwnd(IntPtr.Zero))
+                {
+                    return (int)Math.Round(pixelsAt96Dpi * g.DpiY / 96.0);
+                }
+            }
+            catch (Exception)
+            {
+                return pixelsAt96Dpi;
+            }
+        }
+
         /// <summary>A wrapping label.</summary>
         public static Label Text(string text, bool bold = false, float sizeDelta = 0)
         {

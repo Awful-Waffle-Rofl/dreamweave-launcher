@@ -347,6 +347,23 @@ namespace DreamWeave.Launcher.Tests.Install
         }
 
         [TestMethod]
+        public void PatchWithMismatchedInputHash_DoesNotSkipTheTarget()
+        {
+            using (var f = new Fixture())
+            {
+                byte[] patched = InstallData.Bytes("contents of the first data file, patched");
+                f.Manifest = InstallData.Manifest(f.Component, new ManifestComponent { Id = "fix", Kind = ComponentKinds.BytePatch, Target = "a.dat", InputSha256 = InstallData.Hash(InstallData.Bytes("some other build")), OutputSha256 = InstallData.Hash(patched) });
+                File.WriteAllBytes(f.Target("a.dat"), patched);
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+
+                ZipOverlayResult r = f.Run();
+
+                CollectionAssert.DoesNotContain(r.Skipped.ToArray(), "a.dat", "a patch made for a different input grants nothing");
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(f.Target("a.dat")));
+            }
+        }
+
+        [TestMethod]
         public void ReparsePointInPath_IsRefused()
         {
             using (var f = new Fixture())

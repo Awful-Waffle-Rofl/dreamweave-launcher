@@ -121,7 +121,7 @@ namespace DreamWeave.Launcher.UI
             TableLayoutPanel stack = UiKit.Stack();
             UiKit.Add(stack, UiKit.Heading(LauncherInfo.ProductName));
             UiKit.Add(stack, UiKit.Text(UiText.Loading));
-            UiKit.Add(stack, new ProgressBar { Style = ProgressBarStyle.Marquee, Dock = DockStyle.Fill });
+            UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Marquee));
             _window.ShowScreen(stack);
         }
 
