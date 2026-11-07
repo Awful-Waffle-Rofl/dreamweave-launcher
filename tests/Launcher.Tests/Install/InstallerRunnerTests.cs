@@ -310,5 +310,21 @@ namespace DreamWeave.Launcher.Tests.Install
                 Assert.AreEqual(LauncherError.Cancelled, ((LauncherException)agg.InnerException).Code);
             }
         }
+
+        [TestMethod]
+        public void FinalPath_IsAPlainDrivePath_WithoutTheExtendedPrefix()
+        {
+            using (var dir = new TempDir())
+            {
+                string file = Path.Combine(dir.Path, "x.exe");
+                File.WriteAllBytes(file, new byte[] { 1 });
+
+                string real = Real(file);
+
+                Assert.IsFalse(real.StartsWith(new string((char)92, 2) + "?", System.StringComparison.Ordinal), real);
+                Assert.IsTrue(char.IsLetter(real[0]) && real[1] == ':', real);
+                Assert.AreEqual(Path.GetFileName(file), Path.GetFileName(real));
+            }
+        }
     }
 }

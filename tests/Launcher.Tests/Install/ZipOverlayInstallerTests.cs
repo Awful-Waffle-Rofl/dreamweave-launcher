@@ -423,5 +423,76 @@ namespace DreamWeave.Launcher.Tests.Install
                 Assert.IsFalse(Directory.Exists(r.StagingFolder));
             }
         }
+
+        [TestMethod]
+        public void ReadOnlyExistingTarget_IsReplaced_LeavesNoOrphans()
+        {
+            using (var f = new Fixture())
+            {
+                File.WriteAllBytes(f.Target("a.dat"), OldA);
+                File.SetAttributes(f.Target("a.dat"), FileAttributes.ReadOnly);
+                File.WriteAllBytes(f.Target("a.dat~RF1234.TMP"), new byte[] { 1 });
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+
+                ZipOverlayResult r = f.Run();
+
+                Assert.AreEqual(InstallOutcome.Completed, r.Outcome);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(f.Target("a.dat")));
+                string[] orphans = Directory.GetFiles(f.Ac, "*~RF*.TMP", SearchOption.AllDirectories);
+                CollectionAssert.AreEqual(new[] { f.Target("a.dat~RF1234.TMP") }, orphans, "only the foreign file may remain; the replace's own leftover must be gone");
+                Assert.AreEqual(0, Directory.GetFiles(f.Ac, "*.dwtmp", SearchOption.AllDirectories).Length);
+            }
+        }
+
+        [TestMethod]
+        public void StagingAndGameFolderOnOneVolume_NeedTheCombinedBytes()
+        {
+            using (var f = new Fixture())
+            {
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+                long staged = A.Length + B.Length;
+                long largest = B.Length;
+
+                // Each check alone would pass (staged + margin, largest + margin); together they do not.
+                f.Disk = new FixedDiskSpace(AcWriter.FreeSpaceMargin + staged + largest - 1);
+                var ex = Assert.ThrowsExactly<LauncherException>(() => f.Run());
+                Assert.AreEqual(LauncherError.DiskFull, ex.Code);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+
+                f.Disk = new FixedDiskSpace(AcWriter.FreeSpaceMargin + staged + largest);
+                Assert.AreEqual(InstallOutcome.Completed, f.Run().Outcome);
+            }
+        }
+
+        [TestMethod]
+        public void ReadOnlyRunningExecutableTarget_IsGameRunning_NoOrphans()
+        {
+            using (var f = new Fixture())
+            {
+                f.Component = InstallData.Overlay("eor-dats", InstallData.File("a.dat", A), InstallData.File("pingcopy.exe", B));
+                f.Manifest = InstallData.Manifest(f.Component);
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("pingcopy.exe", B));
+                byte[] before;
+                using (var running = new RunningExe(f.Target("pingcopy.exe")))
+                {
+                    File.SetAttributes(running.Path, FileAttributes.ReadOnly);
+                    try
+                    {
+                        before = File.ReadAllBytes(running.Path);
+                        var ex = Assert.ThrowsExactly<LauncherException>(() => f.Run());
+                        Assert.AreEqual(LauncherError.GameRunning, ex.Code, ex.Detail);
+                        Assert.AreNotEqual(0, (int)(File.GetAttributes(running.Path) & FileAttributes.ReadOnly), "the probe must put the read-only attribute back");
+                    }
+                    finally
+                    {
+                        File.SetAttributes(running.Path, FileAttributes.Normal);
+                    }
+                }
+
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(f.Target("pingcopy.exe")));
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac), "no .dwtmp and no ~RF*.TMP may be left behind");
+            }
+        }
     }
 }

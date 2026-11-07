@@ -13,6 +13,9 @@ namespace DreamWeave.Launcher.Core.Detection
     /// </summary>
     public static class AcPathSafety
     {
+        private const string ExtendedPrefix = "\\\\?\\";
+        private const string ExtendedUncPrefix = "\\\\?\\UNC\\";
+
         private static readonly string[] ReservedBaseNames =
         {
             "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$",
@@ -107,7 +110,7 @@ namespace DreamWeave.Launcher.Core.Detection
                 {
                     throw new LauncherException(
                         LauncherError.ReparsePointInPath,
-                        what + " because '" + current + "' is a junction or link. Remove the link or use a normal folder.");
+                        what + " because '" + ToDisplayPath(current) + "' is a junction or link. Remove the link or use a normal folder.");
                 }
             }
         }
@@ -136,9 +139,14 @@ namespace DreamWeave.Launcher.Core.Detection
                 return "it is empty";
             }
 
+            if (IsNetworkPath(path))
+            {
+                return "it is a network path";
+            }
+
             if (path.StartsWith("\\", StringComparison.Ordinal) || path.StartsWith("/", StringComparison.Ordinal))
             {
-                return "it is a network, device or extended-length path";
+                return "it is a device or extended-length path";
             }
 
             bool driveForm = path.Length >= 3
@@ -152,7 +160,13 @@ namespace DreamWeave.Launcher.Core.Detection
 
             try
             {
-                if (new DriveInfo(path.Substring(0, 1)).DriveType != DriveType.Fixed)
+                DriveType driveType = new DriveInfo(path.Substring(0, 1)).DriveType;
+                if (driveType == DriveType.Network)
+                {
+                    return "it is a network path (a mapped network drive)";
+                }
+
+                if (driveType != DriveType.Fixed)
                 {
                     return "it is not on a local fixed drive";
                 }
@@ -163,6 +177,67 @@ namespace DreamWeave.Launcher.Core.Detection
             }
 
             return null;
+        }
+
+        /// <summary>
+        /// True for a UNC path (<c>\\server\share</c>, or the extended-length form <c>\\?\UNC\server\share</c>).
+        /// Device paths (<c>\\.\</c>) and <c>\\?\X:\</c> paths are not network paths.
+        /// </summary>
+        public static bool IsNetworkPath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
+
+            // Windows accepts either separator, so //server/share and \/server are UNC too.
+            string p = path.Replace('/', '\\');
+            if (!p.StartsWith("\\\\", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (p.StartsWith(ExtendedUncPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return !p.StartsWith(ExtendedPrefix, StringComparison.Ordinal)
+                && !p.StartsWith("\\\\.\\", StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// A path as the player should read it: <c>\\?\UNC\server\share</c> becomes <c>\\server\share</c> and a
+        /// bare <c>\\?\</c> prefix is dropped. Any other path is returned unchanged.
+        /// </summary>
+        public static string ToDisplayPath(string path)
+        {
+            return StripExtendedPrefix(path);
+        }
+
+        /// <summary>
+        /// Drops the extended-length prefix so the path can be checked as an ordinary one:
+        /// <c>\\?\UNC\server\share</c> becomes <c>\\server\share</c> and a bare <c>\\?\</c> is removed.
+        /// Any other path is returned unchanged.
+        /// </summary>
+        public static string StripExtendedPrefix(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return path;
+            }
+
+            if (path.StartsWith(ExtendedUncPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return "\\\\" + path.Substring(ExtendedUncPrefix.Length);
+            }
+
+            if (path.StartsWith(ExtendedPrefix, StringComparison.Ordinal))
+            {
+                return path.Substring(ExtendedPrefix.Length);
+            }
+
+            return path;
         }
 
         /// <summary>True when <paramref name="relativePath"/> passes every lexical rule (see <see cref="Resolve"/>).</summary>

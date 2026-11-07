@@ -330,5 +330,62 @@ namespace DreamWeave.Launcher.Tests.Install
                 Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(p).Code);
             }
         }
+
+        [TestMethod]
+        public void AppRootThroughJunction_ErrorNamesTheJunctionFolder()
+        {
+            using (var f = new Fixture())
+            {
+                string attackerRoot = Path.GetFullPath(Path.Combine(f.Paths.Root, "..", "attackerroot2"));
+                string victim = Path.GetFullPath(Path.Combine(f.Paths.Root, "..", "protected2"));
+                Directory.CreateDirectory(attackerRoot);
+                Directory.CreateDirectory(victim);
+                string link = Path.Combine(attackerRoot, "DreamWeave");
+                string reason;
+                if (!InstallData.TryMakeJunction(link, victim, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                var t = new ElevatedTask { AppRoot = attackerRoot, AcFolder = f.Ac };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "eor-dats", Operation = ElevatedOperations.Overlay, Files = { new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) } } });
+
+                ElevatedTaskResult r = f.Run(t.Save(f.Paths));
+
+                Assert.AreEqual(LauncherError.ManifestUnavailable, r.Code, r.Detail);
+                StringAssert.Contains(r.Detail, "'" + link + "'", "the detail must name the junction folder itself");
+                StringAssert.Contains(r.Detail, "junction");
+            }
+        }
+
+        [TestMethod]
+        public void OverlayOntoReadOnlyRunningExe_IsGameRunning_AttributeKept_NoOrphans()
+        {
+            using (var f = new Fixture())
+            {
+                // A real running image living at the manifest path a.dat.
+                using (var running = new RunningExe(f.Target("a.dat")))
+                {
+                    byte[] before = File.ReadAllBytes(running.Path);
+                    File.SetAttributes(running.Path, File.GetAttributes(running.Path) | FileAttributes.ReadOnly);
+                    try
+                    {
+                        string task = f.OverlayTask(new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) });
+
+                        ElevatedTaskResult r = f.Run(task);
+
+                        Assert.AreEqual(LauncherError.GameRunning, r.Code, r.Detail);
+                        CollectionAssert.AreEqual(before, File.ReadAllBytes(running.Path));
+                        Assert.AreNotEqual(0, (int)(File.GetAttributes(running.Path) & FileAttributes.ReadOnly), "the read-only attribute must still be set");
+                    }
+                    finally
+                    {
+                        File.SetAttributes(running.Path, File.GetAttributes(running.Path) & ~FileAttributes.ReadOnly);
+                    }
+                }
+
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac), "no .dwtmp and no ~RF*.TMP may be left behind");
+            }
+        }
     }
 }

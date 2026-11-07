@@ -119,8 +119,30 @@ namespace DreamWeave.Launcher.Core.Install
 
             // Fallback: probe for a running image with a write open that shares everything (a
             // sharing violation here can only be the mapped image or another writer), then take a
-            // read guard. A process started between the probe and the guard is NOT detected; the
-            // window is microseconds, and the caller's leftover ~RF*.TMP cleanup is the backstop.
+            // read guard. A process started between the probe and the guard is NOT detected (the
+            // window is very short, not measured here). If the exe starts inside that window the
+            // replace still succeeds and leaves the old image behind as an undeletable ~RF*.TMP;
+            // Commit's cleanup cannot remove it, and a later run snapshots it as a pre-existing
+            // (foreign) file, so nothing ever cleans it up.
+            // A READ-ONLY file cannot be opened for write at all: Windows answers access denied
+            // before it looks at sharing, so a running read-only exe would pass this probe and be
+            // replaced under the client (measured: the replace succeeded). Clear the attribute for
+            // the probe only and put it back; Commit clears it anyway when it replaces the file.
+            bool restoreReadOnly = false;
+            try
+            {
+                FileAttributes attributes = File.GetAttributes(full);
+                if ((attributes & FileAttributes.ReadOnly) != 0)
+                {
+                    File.SetAttributes(full, attributes & ~FileAttributes.ReadOnly);
+                    restoreReadOnly = true;
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // Cannot lift the attribute: the probe below falls back to its old behaviour.
+            }
+
             try
             {
                 using (new FileStream(full, FileMode.Open, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1, FileOptions.None))
@@ -129,7 +151,7 @@ namespace DreamWeave.Launcher.Core.Install
             }
             catch (UnauthorizedAccessException)
             {
-                // Expected for a read-only file; the probe only looks for sharing violations.
+                // Still denied (no write permission): the probe only looks for sharing violations.
             }
             catch (IOException ex) when (IsInUse(ex))
             {
@@ -138,6 +160,20 @@ namespace DreamWeave.Launcher.Core.Install
             catch (IOException)
             {
                 // Anything else surfaces from the guard open below.
+            }
+            finally
+            {
+                if (restoreReadOnly)
+                {
+                    try
+                    {
+                        // Only the ReadOnly bit goes back; other attributes are whatever they are now.
+                        File.SetAttributes(full, File.GetAttributes(full) | FileAttributes.ReadOnly);
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                    {
+                    }
+                }
             }
 
             try
@@ -352,7 +388,7 @@ namespace DreamWeave.Launcher.Core.Install
         /// <summary>Throws DiskFull unless the volume holding <paramref name="folder"/> has <paramref name="bytes"/> plus <see cref="FreeSpaceMargin"/> available.</summary>
         internal static void RequireFreeSpace(Downloads.IDiskSpace disk, string folder, long bytes, string where)
         {
-            long need = bytes + FreeSpaceMargin;
+            long need = checked(bytes + FreeSpaceMargin);
             long free = disk.GetFreeBytes(NearestExistingFolder(folder));
             if (free < need)
             {
@@ -361,6 +397,69 @@ namespace DreamWeave.Launcher.Core.Install
                     "Not enough free space " + where + ": " + need + " bytes are needed and " + free + " are available. Nothing was changed.");
             }
         }
+
+        /// <summary>
+        /// As <see cref="RequireFreeSpace"/> for two writes that run one after the other. Both
+        /// single-folder checks ALWAYS run (each folder's own volume must hold its bytes plus a
+        /// margin, so a mount point onto another volume is never skipped). When both folders are on
+        /// the SAME volume, the volume must also hold the COMBINED bytes plus one margin, since both
+        /// exist at once. Volume identity is the volume GUID (see <see cref="VolumeIdentity"/>); a
+        /// folder whose identity does not resolve is treated as being on a different volume.
+        /// </summary>
+        /// <param name="volumeId">Test seam: maps a folder to a volume identity (null = unresolved). Defaults to <see cref="VolumeIdentity"/>.</param>
+        internal static void RequireFreeSpaceCombined(Downloads.IDiskSpace disk, string firstFolder, long firstBytes, string firstWhere, string secondFolder, long secondBytes, string secondWhere, Func<string, string> volumeId = null)
+        {
+            RequireFreeSpace(disk, firstFolder, firstBytes, firstWhere);
+            RequireFreeSpace(disk, secondFolder, secondBytes, secondWhere);
+
+            Func<string, string> identify = volumeId ?? VolumeIdentity;
+            string firstVolume = identify(firstFolder);
+            string secondVolume = identify(secondFolder);
+            if (firstVolume != null && string.Equals(firstVolume, secondVolume, StringComparison.OrdinalIgnoreCase))
+            {
+                RequireFreeSpace(disk, firstFolder, checked(firstBytes + secondBytes), "on the drive holding both " + firstWhere + " and " + secondWhere);
+            }
+        }
+
+        /// <summary>
+        /// The volume GUID name (<c>\\?\Volume{...}\</c>) of the volume holding the nearest existing
+        /// folder at or above <paramref name="folder"/>, or null when it cannot be resolved.
+        /// <c>GetVolumePathName</c> finds the volume's mount point (a drive root or a mounted folder);
+        /// <c>GetVolumeNameForVolumeMountPoint</c> turns that into the GUID, so two paths on one
+        /// volume compare equal and a mount point onto another volume does not.
+        /// </summary>
+        internal static string VolumeIdentity(string folder)
+        {
+            try
+            {
+                string existing = Path.GetFullPath(NearestExistingFolder(Path.GetFullPath(folder)));
+                var mountPoint = new System.Text.StringBuilder(1024);
+                if (!GetVolumePathName(existing, mountPoint, (uint)mountPoint.Capacity))
+                {
+                    return null;
+                }
+
+                var volume = new System.Text.StringBuilder(64);
+                if (!GetVolumeNameForVolumeMountPoint(mountPoint.ToString(), volume, (uint)volume.Capacity))
+                {
+                    return null;
+                }
+
+                return volume.ToString();
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return null;
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetVolumePathName(string lpszFileName, System.Text.StringBuilder lpszVolumePathName, uint cchBufferLength);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool GetVolumeNameForVolumeMountPoint(string lpszVolumeMountPoint, System.Text.StringBuilder lpszVolumeName, uint cchBufferLength);
 
         internal static LauncherException GameRunning(string relativePath, Exception inner)
         {
