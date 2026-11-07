@@ -147,37 +147,14 @@ namespace DreamWeave.Launcher.Core.Net
             for (int hops = 0; ; hops++)
             {
                 HttpResponseMessage response = await _client.GetAsync(current, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-                int status = (int)response.StatusCode;
-                bool redirect = status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
-                if (!redirect)
+                if (!RedirectPolicy.IsRedirect((int)response.StatusCode))
                 {
                     return response;
                 }
 
                 Uri location = response.Headers.Location;
                 response.Dispose();
-                if (location == null)
-                {
-                    throw new LauncherException(LauncherError.SourceHttpError, current.Host + " sent a redirect without a location.");
-                }
-
-                if (hops >= MaxRedirects)
-                {
-                    throw new LauncherException(LauncherError.SourceHttpError, uri.Host + " redirected more than " + MaxRedirects + " times.");
-                }
-
-                Uri next = location.IsAbsoluteUri ? location : new Uri(current, location);
-                if (current.Scheme == Uri.UriSchemeHttps && next.Scheme != Uri.UriSchemeHttps)
-                {
-                    throw new LauncherException(LauncherError.SourceHttpError, current.Host + " tried to redirect a secure download to an insecure address; refused.");
-                }
-
-                if (next.Scheme != Uri.UriSchemeHttps && next.Scheme != Uri.UriSchemeHttp)
-                {
-                    throw new LauncherException(LauncherError.SourceHttpError, current.Host + " redirected to an unsupported address.");
-                }
-
-                current = next;
+                current = RedirectPolicy.NextHop(uri, current, location, hops);
             }
         }
 

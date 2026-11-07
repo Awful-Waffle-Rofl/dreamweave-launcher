@@ -7,6 +7,7 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageReference Include="MSTest.TestAdapter" Version="4.5.2" />
     <PackageReference Include="MSTest.TestFramework" Version="4.5.2" />
+    <PackageReference Include="MegaApiClient" Version="1.10.5" Aliases="MegaApi" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="System.Net.Http" />
