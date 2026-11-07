@@ -15,6 +15,7 @@ Commands below use `dotnet run --project tools/ManifestTool -c Release --` as `M
 7. **Sign, offline.** On the maintainer's PC only: `ManifestTool sign --key <path to private key> --manifest <path to manifest.json>`. This writes `manifest.json.sig` next to it.
 8. **Verify.** `ManifestTool verify --pub <keyId:X:Y or public key file> --manifest <path to manifest.json>` must print `OK` with the serial you expect.
 9. **Push the manifest.** Commit `manifest.json` and `manifest.json.sig` together to the `manifest` branch and push it. Confirm both raw URLs serve the new bytes (CDN caching can lag a few minutes; the launcher retries once with a cache-bust).
+
 v1 ships unsigned (no Authenticode); see `Docs/code-signing-policy.md`.
 
 ## Creating the manifest branch (once)
