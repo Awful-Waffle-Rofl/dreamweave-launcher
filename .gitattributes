@@ -1,1 +1,5 @@
 * text=auto
+
+# Signed manifest files are verified byte-for-byte: never let git rewrite their line endings.
+manifest/*.json -text
+*.json.sig -text

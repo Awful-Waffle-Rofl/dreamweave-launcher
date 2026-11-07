@@ -9,6 +9,12 @@
     <PackageReference Include="MSTest.TestFramework" Version="4.5.2" />
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\Launcher.Core\Launcher.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\manifest\manifest.sample.json" Link="manifest.sample.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

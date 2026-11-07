@@ -2,5 +2,15 @@
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <RootNamespace>DreamWeave.Launcher.Core</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Launcher.Tests" />
+  </ItemGroup>
 </Project>
