@@ -58,11 +58,13 @@ namespace DreamWeave.Launcher.Core.Downloads
         public async Task DownloadToPartAsync(DownloadRequest request, TransferProgress progress, CancellationToken cancellationToken)
         {
             int retriesUsed = 0;
+            bool previousAbandoned = false;
             while (true)
             {
+                var attempt = new Attempt(previousAbandoned);
                 try
                 {
-                    await AttemptAsync(request, progress, cancellationToken).ConfigureAwait(false);
+                    await AttemptAsync(request, progress, attempt, cancellationToken).ConfigureAwait(false);
                     return;
                 }
                 catch (Exception ex)
@@ -83,12 +85,32 @@ namespace DreamWeave.Launcher.Core.Downloads
                     await _options.Retry.WaitAsync(retriesUsed, null, cancellationToken).ConfigureAwait(false);
                     retriesUsed++;
                 }
+                finally
+                {
+                    attempt.Detach();
+                }
+
+                // Sticky until an attempt gets past the part deletion: a library read abandoned two
+                // attempts ago can still be holding the file.
+                previousAbandoned = attempt.Abandoned || (previousAbandoned && !attempt.ClearedPart);
             }
         }
 
-        private async Task AttemptAsync(DownloadRequest request, TransferProgress progress, CancellationToken cancellationToken)
+        private async Task AttemptAsync(DownloadRequest request, TransferProgress progress, Attempt attempt, CancellationToken cancellationToken)
         {
-            PartFiles.Delete(request.PartPath, "clearing an old partial download");
+            if (!PartFiles.TryDelete(request.PartPath))
+            {
+                if (attempt.PreviousAbandoned)
+                {
+                    // The abandoned MegaApiClient read still holds the part (CreateNew, share Read).
+                    // Transient, so the back-off gives that read time to unwind.
+                    throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz is still finishing the previous attempt.");
+                }
+
+                PartFiles.Delete(request.PartPath, "clearing an old partial download");
+            }
+
+            attempt.ClearedPart = true;
             using (IMegaClient client = _clientFactory())
             {
                 await WithCancellation(client.LoginAnonymousAsync(), cancellationToken).ConfigureAwait(false);
@@ -100,7 +122,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                         "The file on mega.nz is " + (file == null ? 0 : file.Size) + " bytes, but " + request.ExpectedSize + " bytes were expected.");
                 }
 
-                progress.Report(0);
+                attempt.Report(progress, 0);
                 var clock = Stopwatch.StartNew();
                 long lastActivityTicks = clock.ElapsedTicks;
                 long lastBytes = 0;
@@ -113,7 +135,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                         Interlocked.Exchange(ref lastActivityTicks, clock.ElapsedTicks);
                     }
 
-                    progress.Report(bytes);
+                    attempt.Report(progress, bytes);
                 });
 
                 using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -131,8 +153,12 @@ namespace DreamWeave.Launcher.Core.Downloads
                         bool stalled = TimeSpan.FromSeconds((clock.ElapsedTicks - Interlocked.Read(ref lastActivityTicks)) / (double)Stopwatch.Frequency) > _options.InactivityTimeout;
                         if (cancellationToken.IsCancellationRequested || stalled)
                         {
+                            // Detach first: from here on the library's callbacks must not touch the
+                            // shared tracker, which the next attempt will be driving.
+                            attempt.Detach();
                             linked.Cancel();
                             await Task.WhenAny(download, Task.Delay(_options.AbandonGrace)).ConfigureAwait(false);
+                            attempt.Abandoned = !download.IsCompleted;
                             Observe(download);
                             cancellationToken.ThrowIfCancellationRequested();
                             throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.");
@@ -144,6 +170,46 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
         }
 
+        /// <summary>
+        /// Per-attempt state. Once detached, progress callbacks from that attempt's (possibly still
+        /// running) library task are dropped; the check and the report happen under one lock, so no
+        /// report from a detached attempt can land after <see cref="Detach"/> returns.
+        /// </summary>
+        private sealed class Attempt
+        {
+            private readonly object _gate = new object();
+            private bool _detached;
+
+            public Attempt(bool previousAbandoned)
+            {
+                PreviousAbandoned = previousAbandoned;
+            }
+
+            public bool PreviousAbandoned { get; }
+
+            public bool Abandoned { get; set; }
+
+            public bool ClearedPart { get; set; }
+
+            public void Report(TransferProgress progress, long bytes)
+            {
+                lock (_gate)
+                {
+                    if (!_detached)
+                    {
+                        progress.Report(bytes);
+                    }
+                }
+            }
+
+            public void Detach()
+            {
+                lock (_gate)
+                {
+                    _detached = true;
+                }
+            }
+        }
         private static async Task<T> WithCancellation<T>(Task<T> task, CancellationToken cancellationToken)
         {
             await WithCancellation((Task)task, cancellationToken).ConfigureAwait(false);

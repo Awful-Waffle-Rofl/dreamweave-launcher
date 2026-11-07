@@ -45,12 +45,56 @@ namespace DreamWeave.Launcher.Tests.Downloads
         [TestMethod]
         public void NetworkFailures_AreTransientNetworkUnavailable()
         {
-            foreach (Exception ex in new Exception[] { new IOException("reset"), new WebException("dns"), new AggregateException(new HttpRequestException("An error occurred while sending the request.", new WebException("dns"))) })
+            foreach (Exception ex in new Exception[] { new IOException("reset", new System.Net.Sockets.SocketException(10054)), new WebException("dns"), new AggregateException(new HttpRequestException("An error occurred while sending the request.", new WebException("dns"))) })
             {
                 bool transient;
                 Assert.AreEqual(LauncherError.NetworkUnavailable, Map(ex, out transient), ex.GetType().Name);
                 Assert.IsTrue(transient);
             }
+        }
+
+        [TestMethod]
+        public void PlainIOException_FailsFast()
+        {
+            bool transient;
+            Assert.AreEqual(LauncherError.Unknown, Map(new IOException("The device is not ready."), out transient));
+            Assert.IsFalse(transient, "a non-network, non-sharing IOException is not retried");
+        }
+
+        [TestMethod]
+        public void SharingViolation_IsTransient()
+        {
+            bool transient;
+            Map(new IOException("The process cannot access the file because it is being used by another process.", unchecked((int)0x80070020)), out transient);
+            Assert.IsTrue(transient);
+        }
+
+        [TestMethod]
+        public void DiskFullIOException_IsDiskFull_NotTransient()
+        {
+            bool transient;
+            Assert.AreEqual(LauncherError.DiskFull, Map(new IOException("full", unchecked((int)0x80070070)), out transient));
+            Assert.IsFalse(transient);
+        }
+
+        [TestMethod]
+        public void Localized509Message_WithoutEnglishMarker_IsStillQuota()
+        {
+            // A French-style framework message: no "success:" marker, other digits present.
+            var ex = new AggregateException(new HttpRequestException("Le code d'etat de la reponse (1.1) n'indique pas une reussite : 509 (Bandwidth Limit Exceeded)."));
+            bool transient;
+            Assert.AreEqual(LauncherError.SourceQuotaExceeded, Map(ex, out transient));
+            Assert.IsFalse(transient);
+        }
+
+        [TestMethod]
+        public void StatusScan_PrefersQuotaThenServerErrors()
+        {
+            Assert.AreEqual(509, MegaErrorMapper.StatusOf(new HttpRequestException("Fehler 404 ... 509")));
+            Assert.AreEqual(429, MegaErrorMapper.StatusOf(new HttpRequestException("Fehler 503 ... 429")));
+            Assert.AreEqual(503, MegaErrorMapper.StatusOf(new HttpRequestException("Fehler 404 ... 503")));
+            Assert.AreEqual(404, MegaErrorMapper.StatusOf(new HttpRequestException("Fehler 404")));
+            Assert.IsNull(MegaErrorMapper.StatusOf(new HttpRequestException("An error occurred while sending the request.")));
         }
 
         [TestMethod]

@@ -6,8 +6,8 @@ namespace DreamWeave.Launcher.Core.Net
     /// The launcher's manual redirect rules, shared by every transport under <c>Net/</c>:
     /// at most <see cref="HttpFetcher.MaxRedirects"/> hops, never from https to a non-https URL,
     /// and only http(s) targets. Violations fail as <see cref="LauncherError.SourceHttpError"/>
-    /// before the offending location is requested. Mirrors the rules (and wording) of
-    /// <see cref="HttpFetcher"/>.
+    /// before the offending location is requested. The single implementation used by both
+    /// <see cref="HttpFetcher"/> and <see cref="HttpStreamClient"/>.
     /// </summary>
     internal static class RedirectPolicy
     {

@@ -198,61 +198,66 @@ namespace DreamWeave.Launcher.Core.Downloads
                     throw new LauncherException(LauncherError.SourceHttpError, request.Url.Host + " answered HTTP " + response.StatusCode + ".");
                 }
 
-                var newSidecar = new PartSidecar
-                {
-                    Url = request.Url.AbsoluteUri,
-                    ExpectedSha256 = request.ExpectedSha256,
-                    ExpectedSize = request.ExpectedSize,
-                    ETag = response.ETag ?? (writeFrom > 0 ? sidecar?.ETag : null),
-                    LastModified = response.LastModified ?? (writeFrom > 0 ? sidecar?.LastModified : null),
-                };
-                newSidecar.Write(request.SidecarPath);
-
-                Stream body;
-                try
-                {
-                    body = await response.OpenBodyAsync().ConfigureAwait(false);
-                }
-                catch (Exception ex) when (IsNetworkFailure(ex, cancellationToken))
-                {
-                    throw Transient(LauncherError.NetworkUnavailable, "The connection to " + request.Url.Host + " was interrupted.", ex);
-                }
-
-                using (body)
+                // Truncate the part to the resume point BEFORE writing the new sidecar, so a crash
+                // in between can never leave new validators describing old bytes.
                 using (FileStream file = OpenPart(request.PartPath, writeFrom))
                 {
-                    long done = writeFrom;
-                    progress.Report(done);
-                    byte[] buffer = new byte[_options.BufferSize];
-                    while (true)
+                    var newSidecar = new PartSidecar
                     {
-                        int read = await ReadWithInactivityTimeoutAsync(request, response, body, buffer, cancellationToken).ConfigureAwait(false);
-                        if (read <= 0)
-                        {
-                            break;
-                        }
+                        Url = request.Url.AbsoluteUri,
+                        ExpectedSha256 = request.ExpectedSha256,
+                        ExpectedSize = request.ExpectedSize,
+                        ETag = response.ETag ?? (writeFrom > 0 ? sidecar?.ETag : null),
+                        LastModified = response.LastModified ?? (writeFrom > 0 ? sidecar?.LastModified : null),
+                    };
+                    file.Flush(true);
+                    newSidecar.Write(request.SidecarPath);
 
-                        if (done + read > request.ExpectedSize)
-                        {
-                            throw new LauncherException(LauncherError.SizeMismatch, request.Url.Host + " sent more data than the expected " + request.ExpectedSize + " bytes; the download was abandoned.");
-                        }
-
-                        try
-                        {
-                            await file.WriteAsync(buffer, 0, read, cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-                        {
-                            throw LauncherException.FromIo(ex, "saving the download");
-                        }
-
-                        done += read;
-                        progress.Report(done);
+                    Stream body;
+                    try
+                    {
+                        body = await response.OpenBodyAsync().ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (IsNetworkFailure(ex, cancellationToken))
+                    {
+                        throw Transient(LauncherError.NetworkUnavailable, "The connection to " + request.Url.Host + " was interrupted.", ex);
                     }
 
-                    if (done < request.ExpectedSize)
+                    using (body)
                     {
-                        throw Transient(LauncherError.NetworkUnavailable, request.Url.Host + " closed the connection before the download finished.");
+                        long done = writeFrom;
+                        progress.Report(done);
+                        byte[] buffer = new byte[_options.BufferSize];
+                        while (true)
+                        {
+                            int read = await ReadWithInactivityTimeoutAsync(request, response, body, buffer, cancellationToken).ConfigureAwait(false);
+                            if (read <= 0)
+                            {
+                                break;
+                            }
+
+                            if (done + read > request.ExpectedSize)
+                            {
+                                throw new LauncherException(LauncherError.SizeMismatch, request.Url.Host + " sent more data than the expected " + request.ExpectedSize + " bytes; the download was abandoned.");
+                            }
+
+                            try
+                            {
+                                await file.WriteAsync(buffer, 0, read, cancellationToken).ConfigureAwait(false);
+                            }
+                            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                            {
+                                throw LauncherException.FromIo(ex, "saving the download");
+                            }
+
+                            done += read;
+                            progress.Report(done);
+                        }
+
+                        if (done < request.ExpectedSize)
+                        {
+                            throw Transient(LauncherError.NetworkUnavailable, request.Url.Host + " closed the connection before the download finished.");
+                        }
                     }
                 }
             }

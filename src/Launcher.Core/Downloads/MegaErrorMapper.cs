@@ -86,14 +86,18 @@ namespace DreamWeave.Launcher.Core.Downloads
 
             if (e is IOException io)
             {
-                int hr = io.HResult & 0xFFFF;
-                if (hr == 0x70 || hr == 0x27)
+                // Only two IOException kinds are worth a retry: a network interruption (the
+                // connection stream wraps a SocketException/WebException) and a sharing violation
+                // (ERROR_SHARING_VIOLATION, 0x20: antivirus or a still-unwinding read holding the part).
+                // Everything else (disk full, bad path, device errors) fails fast.
+                if (IsNetworkInterruption(io))
                 {
-                    return LauncherException.FromIo(e, "saving the download");
+                    transient = true;
+                    return new LauncherException(LauncherError.NetworkUnavailable, "The connection to mega.nz was interrupted.", e);
                 }
 
-                transient = true;
-                return new LauncherException(LauncherError.NetworkUnavailable, "The connection to mega.nz was interrupted.", e);
+                transient = (io.HResult & 0xFFFF) == 0x20;
+                return LauncherException.FromIo(e, "saving the download");
             }
 
             if (e is WebException || e is SocketException || e is TimeoutException)
@@ -143,19 +147,54 @@ namespace DreamWeave.Launcher.Core.Downloads
             return new LauncherException(LauncherError.SourceQuotaExceeded, "mega.nz's free download limit has been reached for your connection. Try again in a few hours.", inner);
         }
 
-        private static int? StatusOf(HttpRequestException http)
+        /// <summary>
+        /// The HTTP status inside an <see cref="HttpRequestException"/> message, or null. .NET
+        /// Framework has no StatusCode property; its English EnsureSuccessStatusCode message is
+        /// "Response status code does not indicate success: 509 (Bandwidth Limit Exceeded)." When
+        /// that marker is present the number after it wins. Otherwise (a localized framework) the
+        /// whole message is scanned for 4xx/5xx tokens, preferring 509, then 429, then 408, then any
+        /// 5xx, then any other 4xx.
+        /// </summary>
+        internal static int? StatusOf(HttpRequestException http)
         {
-            // .NET Framework's EnsureSuccessStatusCode message: "Response status code does not
-            // indicate success: 509 (Bandwidth Limit Exceeded)." There is no StatusCode property on net48.
             string message = http.Message ?? string.Empty;
-            int colon = message.IndexOf("success:", StringComparison.OrdinalIgnoreCase);
-            if (colon < 0)
+            int marker = message.IndexOf("success:", StringComparison.OrdinalIgnoreCase);
+            if (marker >= 0)
             {
-                return null;
+                Match m = StatusInMessage.Match(message, marker);
+                if (m.Success)
+                {
+                    return int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                }
             }
 
-            Match m = StatusInMessage.Match(message, colon);
-            return m.Success ? int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) : (int?)null;
+            int? best = null;
+            int bestRank = int.MaxValue;
+            foreach (Match m in StatusInMessage.Matches(message))
+            {
+                int code = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                int rank = code == 509 ? 0 : code == 429 ? 1 : code == 408 ? 2 : code >= 500 ? 3 : code >= 400 ? 4 : int.MaxValue;
+                if (rank < bestRank)
+                {
+                    best = code;
+                    bestRank = rank;
+                }
+            }
+
+            return best;
+        }
+
+        private static bool IsNetworkInterruption(IOException io)
+        {
+            for (Exception inner = io.InnerException; inner != null; inner = inner.InnerException)
+            {
+                if (inner is SocketException || inner is WebException || inner is HttpRequestException)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static Exception Unwrap(Exception ex)

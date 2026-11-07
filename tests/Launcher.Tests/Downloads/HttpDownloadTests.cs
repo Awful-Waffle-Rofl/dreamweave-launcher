@@ -63,11 +63,16 @@ namespace DreamWeave.Launcher.Tests.Downloads
 
             public void SeedPart(byte[] bytes, string etag)
             {
+                SeedPart(bytes, etag, Request.Url.AbsoluteUri, Request.ExpectedSha256, Request.ExpectedSize);
+            }
+
+            public void SeedPart(byte[] bytes, string etag, string url, string sha, long size)
+            {
                 Directory.CreateDirectory(Staging);
                 File.WriteAllBytes(Request.PartPath, bytes);
                 File.WriteAllText(
                     Request.SidecarPath,
-                    "{ \"url\": \"" + Request.Url.AbsoluteUri + "\", \"expectedSha256\": \"" + Request.ExpectedSha256 + "\", \"expectedSize\": " + Request.ExpectedSize + ", \"etag\": " + (etag == null ? "null" : "\"" + etag.Replace("\"", "\\\"") + "\"") + ", \"lastModified\": null }");
+                    "{ \"url\": \"" + url + "\", \"expectedSha256\": \"" + sha + "\", \"expectedSize\": " + size + ", \"etag\": " + (etag == null ? "null" : "\"" + etag.Replace("\"", "\\\"") + "\"") + ", \"lastModified\": null }");
             }
 
             public void AssertFinalFileCorrect()
@@ -195,6 +200,49 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 Assert.AreEqual(3, seen.Length);
                 Assert.IsNotNull(seen[2].Range);
                 Assert.IsNull(seen[2].IfRange);
+            }
+        }
+
+        [TestMethod]
+        public void PartWithMismatchedSidecar_IsNotResumed()
+        {
+            byte[] content = DownloadFixtures.Content(Size);
+            string[] cases = { "sha", "url", "size" };
+            foreach (string field in cases)
+            {
+                using (var rig = new Rig((ctx, i) => Serve.FileAsync(ctx, content), content))
+                {
+                    string url = field == "url" ? new Uri(rig.Server.BaseUri, "other.bin").AbsoluteUri : rig.Request.Url.AbsoluteUri;
+                    string sha = field == "sha" ? new string('B', 64) : rig.Request.ExpectedSha256;
+                    long size = field == "size" ? Size + 1 : Size;
+                    rig.SeedPart(content.Take(Size / 2).ToArray(), "\"v1\"", url, sha, size);
+                    Assert.AreEqual(LauncherError.None, rig.Run(), field);
+                    rig.AssertFinalFileCorrect();
+                    Assert.IsNull(rig.Server.Requests[1].Range, "a sidecar with a different " + field + " must not be resumed");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void NoValidator_ResumeOverChangedUpstream_FailsHashMismatch_AndDeletesPartAndSidecar()
+        {
+            // The accepted bare-Range trade-off: the server changed the file (same size) and sent no
+            // validator, so the stitched file is wrong. The pinned hash must catch it and clean up,
+            // and the next run must succeed from zero.
+            byte[] oldContent = DownloadFixtures.Content(Size, seed: 1);
+            byte[] newContent = DownloadFixtures.Content(Size, seed: 2);
+            using (var rig = new Rig((ctx, i) => Serve.FileAsync(ctx, newContent, etag: null), newContent))
+            {
+                rig.SeedPart(oldContent.Take(Size / 2).ToArray(), null);
+                Assert.AreEqual(LauncherError.HashMismatch, rig.Run());
+                Assert.AreEqual("bytes=" + (Size / 2) + "-", rig.Server.Requests[1].Range, "it really did resume");
+                Assert.IsFalse(File.Exists(rig.Request.PartPath), "part deleted");
+                Assert.IsFalse(File.Exists(rig.Request.SidecarPath), "sidecar deleted");
+                Assert.IsFalse(File.Exists(rig.Request.DestinationPath), "no final file");
+
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                rig.AssertFinalFileCorrect();
+                Assert.IsNull(rig.Server.Requests.Last().Range, "the follow-up run starts from zero");
             }
         }
 

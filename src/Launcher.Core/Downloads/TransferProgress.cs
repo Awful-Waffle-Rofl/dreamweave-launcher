@@ -8,7 +8,8 @@ namespace DreamWeave.Launcher.Core.Downloads
     /// download. Throughput is an exponential moving average over samples taken at least
     /// <see cref="SampleInterval"/> apart; ETA is the remaining bytes over that average. Reports are
     /// emitted at most once per <see cref="ReportInterval"/>, plus an unconditional one from
-    /// <see cref="Complete"/>. Not thread-safe: one transport drives it at a time.
+    /// <see cref="Complete"/>. <see cref="Report"/> and <see cref="Complete"/> are serialised by a
+    /// lock, so a late callback from another thread cannot interleave with them.
     /// </summary>
     public sealed class TransferProgress
     {
@@ -28,6 +29,7 @@ namespace DreamWeave.Launcher.Core.Downloads
         private readonly long _total;
         private readonly IProgress<ProgressReport> _sink;
         private readonly Func<TimeSpan> _clock;
+        private readonly object _gate = new object();
 
         private bool _started;
         private TimeSpan _sampleTime;
@@ -64,6 +66,14 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// </summary>
         public void Report(long bytesDone)
         {
+            lock (_gate)
+            {
+                ReportCore(bytesDone);
+            }
+        }
+
+        private void ReportCore(long bytesDone)
+        {
             TimeSpan now = _clock();
             if (!_started || bytesDone < _sampleBytes)
             {
@@ -90,7 +100,10 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <summary>Emits a final report with the current byte count, regardless of throttling.</summary>
         public void Complete()
         {
-            Emit(_clock());
+            lock (_gate)
+            {
+                Emit(_clock());
+            }
         }
 
         private void Emit(TimeSpan now)
