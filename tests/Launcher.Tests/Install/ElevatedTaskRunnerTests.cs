@@ -1,0 +1,236 @@
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Threading;
+using DreamWeave.Launcher.Core;
+using DreamWeave.Launcher.Core.Install;
+using DreamWeave.Launcher.Core.Manifests;
+using DreamWeave.Launcher.Core.State;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace DreamWeave.Launcher.Tests.Install
+{
+    [TestClass]
+    public class ElevatedTaskRunnerTests
+    {
+        private const string Url = "https://primary.example.test/manifest.json";
+        private static readonly byte[] A = InstallData.Bytes("elevated first file");
+        private static readonly byte[] B = InstallData.Bytes("elevated second file, longer");
+        private static readonly byte[] Client = InstallData.Bytes("client bytes: 0123456789");
+        private static readonly byte[] ClientPatched = InstallData.Bytes("client bytes: 01234XX789");
+
+        private static SigningKey _key;
+        private static SigningKey _otherKey;
+
+        [ClassInitialize]
+        public static void Init(TestContext context)
+        {
+            _key = SigningKey.Generate();
+            _otherKey = SigningKey.Generate();
+        }
+
+        private static string FileJson(string path, byte[] content)
+        {
+            return "{ \"path\": \"" + path + "\", \"size\": " + content.Length + ", \"sha256\": \"" + InstallData.Hash(content) + "\" }";
+        }
+
+        private static byte[] ManifestBytes()
+        {
+            string json =
+                "{\n" +
+                "  \"schema\": 1,\n  \"serial\": 5,\n  \"issued\": \"2026-11-07T00:00:00Z\",\n" +
+                "  \"server\": { \"name\": \"DreamWeave\", \"host\": \"play.example.test\", \"port\": 9000 },\n" +
+                "  \"components\": [\n" +
+                "    { \"id\": \"eor-dats\", \"kind\": \"zip-overlay\", \"required\": true, \"url\": \"https://example.test/x.zip\", \"size\": 10, \"sha256\": \"" + new string('A', 64) + "\",\n" +
+                "      \"files\": [ " + FileJson("a.dat", A) + ", " + FileJson("b.dat", B) + " ] },\n" +
+                "    { \"id\": \"fix\", \"kind\": \"byte-patch\", \"target\": \"acclient.exe\", \"inputSha256\": \"" + InstallData.Hash(Client) + "\", \"outputSha256\": \"" + InstallData.Hash(ClientPatched) + "\",\n" +
+                "      \"patches\": [ { \"offset\": 19, \"expect\": \"" + Hasher.ToHex(Encoding.ASCII.GetBytes("56")) + "\", \"replace\": \"5858\" } ] }\n" +
+                "  ]\n}\n";
+            return new UTF8Encoding(false).GetBytes(json);
+        }
+
+        private sealed class Fixture : System.IDisposable
+        {
+            private readonly TempDir _dir = new TempDir();
+
+            public Fixture()
+            {
+                Paths = new AppPaths(Path.Combine(_dir.Path, "app"));
+                Ac = Path.Combine(_dir.Path, "ac");
+                Directory.CreateDirectory(Ac);
+                File.WriteAllBytes(Path.Combine(Ac, "acclient.exe"), Client);
+                Directory.CreateDirectory(Paths.StagingDir);
+
+                // Populate the signed cache exactly as the unelevated launcher would.
+                byte[] manifest = ManifestBytes();
+                var fetcher = new FakeHttpFetcher();
+                fetcher.Serve(Url, manifest);
+                fetcher.Serve(Url + ".sig", _key.Sign(manifest).ToFileBytes());
+                ManifestLoadResult r = new ManifestProvider(fetcher, new ManifestVerifier(new[] { _key.PublicKey }), Paths, StateStore.Open(Paths), new[] { ManifestSource.FromManifestUrl("primary", Url) })
+                    .LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(LauncherError.None, r.Status, "fixture: cache population failed");
+            }
+
+            public AppPaths Paths { get; }
+
+            public string Ac { get; }
+
+            public string Target(string rel) => Path.Combine(Ac, rel);
+
+            public string StageFile(string name, byte[] content)
+            {
+                string p = Path.Combine(Paths.StagingDir, name);
+                File.WriteAllBytes(p, content);
+                return p;
+            }
+
+            public string OverlayTask(params ElevatedTaskFile[] files)
+            {
+                var task = new ElevatedTask { AppRoot = Paths.Root, AcFolder = Ac };
+                task.Items.Add(new ElevatedTaskItem { ComponentId = "eor-dats", Operation = ElevatedOperations.Overlay, Files = new List<ElevatedTaskFile>(files) });
+                return task.Save(Paths);
+            }
+
+            public ElevatedTaskResult Run(string taskPath, SigningKey trusted = null)
+            {
+                return new ElevatedTaskRunner(new ManifestVerifier(new[] { (trusted ?? _key).PublicKey })).Execute(taskPath);
+            }
+
+            public void Dispose() => _dir.Dispose();
+        }
+
+        [TestMethod]
+        public void VerifiedStagedFiles_AreWritten()
+        {
+            using (var f = new Fixture())
+            {
+                string task = f.OverlayTask(
+                    new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) },
+                    new ElevatedTaskFile { Path = "b.dat", Staged = f.StageFile("1.part", B) });
+
+                ElevatedTaskResult r = f.Run(task);
+
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(f.Target("a.dat")));
+                CollectionAssert.AreEqual(B, File.ReadAllBytes(f.Target("b.dat")));
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac));
+            }
+        }
+
+        [TestMethod]
+        public void TamperedStagedFile_IsRejected_NothingWritten()
+        {
+            using (var f = new Fixture())
+            {
+                byte[] badB = (byte[])B.Clone();
+                badB[0] ^= 0x20;
+                string task = f.OverlayTask(
+                    new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) },
+                    new ElevatedTaskFile { Path = "b.dat", Staged = f.StageFile("1.part", badB) });
+
+                ElevatedTaskResult r = f.Run(task);
+
+                Assert.AreEqual(LauncherError.HashMismatch, r.Code, r.Detail);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")), "no file may be written when any staged file fails");
+                Assert.IsFalse(File.Exists(f.Target("b.dat")));
+            }
+        }
+
+        [TestMethod]
+        public void InvalidManifestSignature_IsRejected_NothingWritten()
+        {
+            using (var f = new Fixture())
+            {
+                string task = f.OverlayTask(new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) });
+
+                ElevatedTaskResult r = f.Run(task, trusted: _otherKey);
+
+                Assert.AreEqual(LauncherError.ManifestSignatureInvalid, r.Code, r.Detail);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+            }
+        }
+
+        [TestMethod]
+        public void TamperedCache_IsRejected()
+        {
+            using (var f = new Fixture())
+            {
+                string cache = f.Paths.ManifestCacheFile;
+                string text = File.ReadAllText(cache);
+                int at = text.IndexOf("\"manifestB64\":\"", System.StringComparison.Ordinal) + 20;
+                char c = text[at];
+                File.WriteAllText(cache, text.Substring(0, at) + (c == 'A' ? 'B' : 'A') + text.Substring(at + 1));
+                string task = f.OverlayTask(new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) });
+
+                ElevatedTaskResult r = f.Run(task);
+
+                Assert.AreEqual(LauncherError.ManifestSignatureInvalid, r.Code, r.Detail);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")));
+            }
+        }
+
+        [TestMethod]
+        public void FileNotInComponent_IsTaskInvalid()
+        {
+            using (var f = new Fixture())
+            {
+                string task = f.OverlayTask(new ElevatedTaskFile { Path = "evil.dll", Staged = f.StageFile("0.part", A) });
+
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(task).Code);
+                Assert.IsFalse(File.Exists(f.Target("evil.dll")));
+            }
+        }
+
+        [TestMethod]
+        public void UnknownComponent_IsTaskInvalid()
+        {
+            using (var f = new Fixture())
+            {
+                var t = new ElevatedTask { AppRoot = f.Paths.Root, AcFolder = f.Ac };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "nope", Operation = ElevatedOperations.Overlay });
+
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(t.Save(f.Paths)).Code);
+            }
+        }
+
+        [TestMethod]
+        public void FolderWithoutClient_IsTaskInvalid()
+        {
+            using (var f = new Fixture())
+            {
+                string elsewhere = Path.Combine(f.Paths.Root, "not-ac");
+                Directory.CreateDirectory(elsewhere);
+                var t = new ElevatedTask { AppRoot = f.Paths.Root, AcFolder = elsewhere };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "eor-dats", Operation = ElevatedOperations.Overlay, Files = { new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) } } });
+
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(t.Save(f.Paths)).Code);
+                Assert.IsFalse(File.Exists(Path.Combine(elsewhere, "a.dat")));
+            }
+        }
+
+        [TestMethod]
+        public void PatchApply_Task_PatchesTheClient()
+        {
+            using (var f = new Fixture())
+            {
+                var t = new ElevatedTask { AppRoot = f.Paths.Root, AcFolder = f.Ac };
+                t.Items.Add(new ElevatedTaskItem { ComponentId = "fix", Operation = ElevatedOperations.PatchApply });
+
+                ElevatedTaskResult r = f.Run(t.Save(f.Paths));
+
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(ClientPatched, File.ReadAllBytes(f.Target("acclient.exe")));
+            }
+        }
+
+        [TestMethod]
+        public void GarbageTaskFile_IsTaskInvalid()
+        {
+            using (var f = new Fixture())
+            {
+                string p = f.StageFile("task.json", InstallData.Bytes("{ not json"));
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, f.Run(p).Code);
+            }
+        }
+    }
+}

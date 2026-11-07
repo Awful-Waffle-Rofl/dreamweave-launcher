@@ -69,6 +69,26 @@ namespace DreamWeave.Launcher.Core
         /// <summary>The operation was cancelled by the player.</summary>
         Cancelled = 90,
 
+        // 8x: install executors (installer runner, zip overlay, byte patcher, elevated copy).
+
+        /// <summary>A file in the game folder is in use (normally a running game client), so nothing was changed.</summary>
+        GameRunning = 80,
+
+        /// <summary>The game folder is not writable for the current user; the work must be handed to an elevated helper.</summary>
+        ElevationRequired = 81,
+
+        /// <summary>A path under the game folder passes through a junction or symbolic link, so it was not written.</summary>
+        ReparsePointInPath = 82,
+
+        /// <summary>A downloaded archive is unusable: an unsafe or duplicate entry name, or a required file is absent.</summary>
+        ArchiveInvalid = 83,
+
+        /// <summary>A byte patch produced bytes whose SHA-256 differs from the manifest's output hash; the target was not changed.</summary>
+        PatchOutputMismatch = 84,
+
+        /// <summary>An elevated-copy task file is unreadable or names something the verified manifest does not allow.</summary>
+        ElevatedTaskInvalid = 85,
+
         /// <summary>An unclassified failure.</summary>
         Unknown = 99,
     }

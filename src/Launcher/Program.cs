@@ -22,6 +22,10 @@ namespace DreamWeave.Launcher
                 case "--updated":
                 case "--elevated-copy":
                     // --elevated-copy takes a <task> argument (args[1]) once implemented.
+                    // TODO(install-ui): for --elevated-copy, return
+                    // DreamWeave.Launcher.Core.Install.ElevatedTaskRunner.Run(args[1]) (no UI, no MessageBox;
+                    // the exit code is the LauncherError value). The UI step starts this exe with verb
+                    // "runas", waits for exit, then calls ZipOverlayResult.CleanUp() / deletes the task file.
                     MessageBox.Show("Not implemented yet", LauncherInfo.ProductName);
                     return 0;
                 default:

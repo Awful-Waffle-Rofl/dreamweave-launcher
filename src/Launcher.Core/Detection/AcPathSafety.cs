@@ -7,8 +7,9 @@ namespace DreamWeave.Launcher.Core.Detection
     /// Resolves manifest-relative paths under the Asheron's Call folder, refusing anything that
     /// could escape it or name a Windows device. The same lexical rules run twice: at manifest
     /// load (ManifestParser.Validate calls <see cref="CheckRelativePath"/>, so a bad manifest is
-    /// rejected whole) and again here at use time as defense in depth. Does not follow or detect
-    /// junctions/symlinks.
+    /// rejected whole) and again here at use time as defense in depth. <see cref="Resolve"/> does
+    /// not follow or detect junctions/symlinks (reading is safe either way); every WRITE goes
+    /// through <see cref="ResolveForWrite"/>, which refuses them.
     /// </summary>
     public static class AcPathSafety
     {
@@ -43,6 +44,52 @@ namespace DreamWeave.Launcher.Core.Detection
             if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
             {
                 throw Reject(relativePath, "it resolves outside the game folder");
+            }
+
+            return full;
+        }
+
+        /// <summary>
+        /// As <see cref="Resolve"/>, for a path about to be WRITTEN: additionally walks every segment
+        /// below <paramref name="acFolder"/> that currently exists (each folder on the way, and the
+        /// file itself) and refuses the path if any of them is a reparse point (junction, symbolic
+        /// link, mount point). The game folder itself may be a link (a moved install), so it is not
+        /// checked. The check is a snapshot: writers call this again immediately before each open
+        /// for write and before each replace.
+        /// </summary>
+        /// <exception cref="LauncherException">
+        /// ManifestInvalid when the path is lexically unsafe; ReparsePointInPath when a segment is a
+        /// reparse point; AccessDenied or Unknown when a segment's attributes cannot be read (fail closed).
+        /// </exception>
+        public static string ResolveForWrite(string acFolder, string relativePath)
+        {
+            string full = Resolve(acFolder, relativePath);
+            string root = EnsureTrailingSeparator(Path.GetFullPath(acFolder));
+            string current = root.Substring(0, root.Length - 1);
+            foreach (string segment in full.Substring(root.Length).Split('\\'))
+            {
+                current = current + "\\" + segment;
+                FileAttributes attributes;
+                try
+                {
+                    attributes = File.GetAttributes(current);
+                }
+                catch (Exception ex) when (ex is FileNotFoundException || ex is DirectoryNotFoundException)
+                {
+                    // Nothing exists here, so nothing deeper can exist either.
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    throw LauncherException.FromIo(ex, "checking '" + relativePath + "' in the game folder");
+                }
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new LauncherException(
+                        LauncherError.ReparsePointInPath,
+                        "'" + relativePath + "' was not written because '" + current + "' is a junction or link. Remove the link or reinstall the game into a normal folder.");
+                }
             }
 
             return full;
