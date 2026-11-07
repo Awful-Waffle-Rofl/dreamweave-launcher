@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "serial": 1,
+  "issued": "2026-11-07T22:17:20Z",
+  "server": {
+    "name": "DreamWeave",
+    "host": "play.acdreamweave.com",
+    "port": 9000
+  },
+  "launch": {
+    "argTemplate": "-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat on",
+    "extraArgs": ""
+  },
+  "launcher": {
+    "version": "1.0.0",
+    "minVersion": "1.0.0",
+    "url": "https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/releases/download/v1.0.0/DreamWeaveLauncher.exe",
+    "sha256": "291EED279100EDFEA15EA75F4A73E01967CD15F76B13F1D394796500B66735A4",
+    "size": 626176,
+    "authenticodeSubject": null
+  },
+  "requiredFreeBytes": 4500000000,
+  "components": [
+    {
+      "id": "ac-client",
+      "kind": "installer",
+      "required": true,
+      "defaultSelected": true,
+      "title": "Asheron's Call client",
+      "sourceLabel": "Original Turbine installer, from the Internet Archive (web.archive.org)",
+      "transport": "http",
+      "url": "https://web.archive.org/web/20200102182454id_/http://content.turbine.com/sites/clientdl/ac1/ac1install.exe",
+      "size": 598884909,
+      "sha256": "251DE0067F9599A2A566CF7B218B2CB9163292B571BD48050CC6B754F61EEFC7",
+      "elevate": true,
+      "args": null,
+      "satisfiedWhen": [
+        {
+          "path": "acclient.exe",
+          "sha256": [
+            "BCA95BBEBED4B9ED1FF09D0DA83144E2FC4208F63AD7ADA5CB47C3CA207CCBA9",
+            "69AC75174A0EA0F5A1FCD1C17BAD2A562FAD6439E984F05FF103A44E02BF4FC1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "eor-dats",
+      "kind": "zip-overlay",
+      "required": true,
+      "defaultSelected": true,
+      "title": "End-of-Retail game data",
+      "sourceLabel": "Community archive of the final retail data files (mega.nz)",
+      "transport": "mega",
+      "url": "https://mega.nz/file/Q98n0BiR#p5IugPS8ZkQ7uX2A_LdN3Un2_wMX4gZBHowgs1Qomng",
+      "size": 507898112,
+      "sha256": "66E90236326C8713BE014B4CD5B0BF7AC7331970D0D3E9A2552C2E78F92ED3D6",
+      "files": [
+        { "path": "client_cell_1.dat", "size": 348127232, "sha256": "6DB0ABF00FBCEED62C3F1EE842EE7C1F423D732BED77A5B7C102EE89A52AB99E" },
+        { "path": "client_local_English.dat", "size": 1048576, "sha256": "E85C820280C88FAC7DF6C8043F5E24596E9C8774193AF4123D756546F78FB2BB" },
+        { "path": "client_portal.dat", "size": 926941184, "sha256": "DC6E500BA22E6B186DB7171E3F3345238B6444C85D798ADC85E550973B8D12E4" },
+        { "path": "acclient.exe", "size": 4841472, "sha256": "BCA95BBEBED4B9ED1FF09D0DA83144E2FC4208F63AD7ADA5CB47C3CA207CCBA9" }
+      ]
+    },
+    {
+      "id": "palette-leak-fix",
+      "kind": "byte-patch",
+      "required": false,
+      "defaultSelected": false,
+      "title": "Palette memory leak fix (optional)",
+      "sourceLabel": "Two 3-byte changes from github.com/eriknihlen/ac-eor-palette-leak-fix",
+      "target": "acclient.exe",
+      "inputSha256": "BCA95BBEBED4B9ED1FF09D0DA83144E2FC4208F63AD7ADA5CB47C3CA207CCBA9",
+      "outputSha256": "69AC75174A0EA0F5A1FCD1C17BAD2A562FAD6439E984F05FF103A44E02BF4FC1",
+      "patches": [
+        { "offset": 1306622, "expect": "FF4024", "replace": "909090" },
+        { "offset": 1307036, "expect": "FF4624", "replace": "909090" }
+      ]
+    }
+  ],
+  "telemetry": {
+    "endpoint": null
+  },
+  "links": {
+    "privacy": "https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/blob/main/Docs/privacy.md",
+    "help": "https://wiki.acdreamweave.com",
+    "discord": "https://discord.gg/p2h3yca4BD"
+  },
+  "notice": null
+}
