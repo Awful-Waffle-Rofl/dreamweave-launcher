@@ -5,7 +5,7 @@ namespace DreamWeave.Launcher.Core
     /// member is also the telemetry error code, so values are explicit and STABLE: never
     /// renumber or reuse a value; add new members with new numbers. Values are grouped by
     /// decade (1x network, 2x integrity, 3x manifest, 4x local disk, 5x install, 6x patch,
-    /// 9x control flow).
+    /// 7x launch, 9x control flow).
     /// </summary>
     public enum LauncherError
     {
@@ -63,6 +63,20 @@ namespace DreamWeave.Launcher.Core
         /// <summary>A byte-patch target did not have the expected input hash or bytes.</summary>
         PatchInputMismatch = 60,
 
+        /// <summary>A user name, password, host, port, or launch template was rejected before it could reach the game client's command line.</summary>
+        InvalidCredentials = 70,
+
+        /// <summary>acclient.exe was not found in the game folder (or could not be started because it vanished).</summary>
+        ClientNotFound = 71,
+
+        /// <summary>Windows refused to start acclient.exe for a reason other than access or elevation.</summary>
+        LaunchFailed = 72,
+
+        /// <summary>acclient.exe is marked to require administrator rights and the launcher does not run elevated.</summary>
+        ClientRequiresElevation = 73,
+
+        /// <summary>The Windows Credential Manager could not be used (API failure or unavailable).</summary>
+        CredentialStoreUnavailable = 74,
         /// <summary>The operation was cancelled by the player.</summary>
         Cancelled = 90,
 
