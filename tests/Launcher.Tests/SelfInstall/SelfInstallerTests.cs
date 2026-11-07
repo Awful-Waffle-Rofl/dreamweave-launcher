@@ -127,6 +127,23 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         }
 
         [TestMethod]
+        public void Install_NoTarget_RemovesStaleOldAndNew()
+        {
+            string target = fx.Environment.InstalledExePath;
+            Directory.CreateDirectory(fx.Paths.InstallDir);
+            File.WriteAllText(target + ".old", "stale old");
+            File.WriteAllText(target + ".new", "stale new");
+            Assert.IsFalse(File.Exists(target));
+
+            SelfInstallResult r = Installer().Install(fx.WriteDownloadedExe(V1));
+
+            Assert.IsFalse(r.ReplacedExisting);
+            CollectionAssert.AreEqual(V1, File.ReadAllBytes(target));
+            Assert.IsFalse(File.Exists(target + ".old"), "stale .old cleaned up");
+            Assert.IsFalse(File.Exists(target + ".new"), "stale .new cleaned up");
+        }
+
+        [TestMethod]
         public void Install_RegistryFailure_IsClassified()
         {
             fx.Registry.FailWrites = true;

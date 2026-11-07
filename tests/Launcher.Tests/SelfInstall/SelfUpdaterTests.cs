@@ -90,7 +90,8 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             Assert.AreEqual(1, downloader.Requests.Count);
             Assert.AreEqual("launcher-update", downloader.Requests[0].StepId);
             Assert.AreEqual(Path.Combine(paths.StagingDir, "launcher-update", "DreamWeaveLauncher.exe"), downloader.Requests[0].DestinationPath);
-            Assert.AreEqual(NewBytes.Length, downloader.Requests[0].ExpectedSize);
+            long requestedSize = downloader.Requests[0].ExpectedSize;
+            Assert.AreEqual((long)NewBytes.Length, requestedSize);
             Assert.IsFalse(File.Exists(downloader.Requests[0].DestinationPath));
 
             // Null authenticodeSubject: hash-only, the signature check is never called.
@@ -152,6 +153,16 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             Assert.AreEqual(LauncherError.UpdateSignatureInvalid, ex.Code);
             CollectionAssert.AreEqual(new[] { "CN=Example" }, authenticode.Calls);
             AssertOriginalIntact();
+        }
+
+        [TestMethod]
+        public async Task Apply_EmptyAuthenticodeSubject_IsHashOnly()
+        {
+            authenticode.Fail = true;
+            await Updater(NewBytes).ApplyAsync(Manifest("2.0.0", NewBytes, subject: string.Empty), null, CancellationToken.None);
+
+            Assert.AreEqual(0, authenticode.Calls.Count, "an empty subject must not invoke the signature check");
+            CollectionAssert.AreEqual(NewBytes, File.ReadAllBytes(exe));
         }
 
         [TestMethod]

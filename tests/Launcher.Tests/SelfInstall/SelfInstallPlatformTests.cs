@@ -53,6 +53,8 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
 
         [TestMethod]
         [DataRow(@"C:\Users\100%\x.exe")]
+        [DataRow(@"C:\Users\c!HOME!d\x.exe")]
+        [DataRow(@"C:\Users\q !x! r\x.exe")]
         [DataRow("C:\\a\"b\\x.exe")]
         [DataRow("C:\\a\nb\\x.exe")]
         public void UnsafePaths_AreRefused_WithoutStartingAnything(string exe)
@@ -99,6 +101,40 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
 
             Assert.IsTrue(WaitUntil(() => !Directory.Exists(install), TimeSpan.FromSeconds(20)), "exe and folder removed after release");
             Assert.IsTrue(WaitUntil(() => Directory.GetFiles(scripts).Length == 0, TimeSpan.FromSeconds(10)), "the script deleted itself");
+        }
+
+        [TestMethod]
+        public void Script_UnderDelayedExpansion_StillDeletesBangPaths()
+        {
+            // Schedule refuses '!' paths, but the script must not depend on that alone: run the
+            // script text directly under cmd /v:on (delayed expansion forced on) against folders
+            // whose names would be mangled by !NAME! expansion.
+            foreach (string name in new[] { "c!HOME!d", "q !x! r" })
+            {
+                string install = Path.Combine(temp.Path, name);
+                Directory.CreateDirectory(install);
+                string exe = Path.Combine(install, "DreamWeaveLauncher.exe");
+                File.WriteAllText(exe, "pretend exe");
+                string script = Path.Combine(temp.Path, "bang-" + Guid.NewGuid().ToString("N") + ".cmd");
+                File.WriteAllText(script, SelfDeleteScheduler.ScriptText, new ASCIIEncoding());
+
+                ProcessStartInfo psi = SelfDeleteScheduler.BuildStartInfo(script, exe, install);
+                psi.Arguments = "/v:on " + psi.Arguments;
+                using (Process p = Process.Start(psi))
+                {
+                    Assert.IsTrue(p.WaitForExit(30000), "script finished");
+                }
+
+                Assert.IsFalse(Directory.Exists(install), name + ": exe and folder removed");
+                Assert.IsTrue(WaitUntil(() => !File.Exists(script), TimeSpan.FromSeconds(10)), name + ": script deleted itself");
+            }
+        }
+
+        [TestMethod]
+        public void Script_UsesFullPathPing_AndDisablesDelayedExpansion()
+        {
+            StringAssert.Contains(SelfDeleteScheduler.ScriptText, "setlocal DisableDelayedExpansion\r\n");
+            StringAssert.Contains(SelfDeleteScheduler.ScriptText, "\"%SystemRoot%\\System32\\ping.exe\" -n 2 127.0.0.1");
         }
 
         [TestMethod]

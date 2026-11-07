@@ -32,7 +32,9 @@ namespace DreamWeave.Launcher.Core.SelfInstall
     /// silently leaves the exe behind. The paths travel as command-line ARGUMENTS (%~1, %~2), never as
     /// script text, so they stay UTF-16 end to end (a script file is read in the OEM code page, which
     /// would corrupt a non-ASCII user name) and the script itself is pure ASCII. A path containing
-    /// '%' or '"' is refused, because cmd expands %NAME% on its own command line.
+    /// '%', '!' or '"' is refused, because cmd expands %NAME% on its own command line and, when
+    /// delayed expansion is on for the cmd.exe that runs it, !NAME! as well; the script also turns
+    /// delayed expansion off itself.
     /// </remarks>
     public sealed class SelfDeleteScheduler : ISelfDeleteScheduler
     {
@@ -62,14 +64,16 @@ namespace DreamWeave.Launcher.Core.SelfInstall
             {
                 var sb = new StringBuilder();
                 sb.Append("@echo off\r\n");
-                sb.Append("setlocal\r\n");
+                // Explicit: a machine or caller with delayed expansion on (cmd /v:on, or the
+                // DelayedExpansion registry default) would otherwise expand !NAME! inside the paths.
+                sb.Append("setlocal DisableDelayedExpansion\r\n");
                 sb.Append("set n=0\r\n");
                 sb.Append(":retry\r\n");
                 sb.Append("del /f /q \"%~1\" >nul 2>&1\r\n");
                 sb.Append("if not exist \"%~1\" goto removed\r\n");
                 sb.Append("set /a n+=1\r\n");
                 sb.Append("if %n% geq " + MaxAttempts + " goto finish\r\n");
-                sb.Append("ping -n 2 127.0.0.1 >nul\r\n");
+                sb.Append("\"%SystemRoot%\\System32\\ping.exe\" -n 2 127.0.0.1 >nul\r\n");
                 sb.Append("goto retry\r\n");
                 sb.Append(":removed\r\n");
                 sb.Append("rmdir \"%~2\" >nul 2>&1\r\n");
@@ -84,6 +88,7 @@ namespace DreamWeave.Launcher.Core.SelfInstall
         {
             return !string.IsNullOrEmpty(path)
                 && path.IndexOf('%') < 0
+                && path.IndexOf('!') < 0
                 && path.IndexOf('"') < 0
                 && path.IndexOf('\r') < 0
                 && path.IndexOf('\n') < 0;

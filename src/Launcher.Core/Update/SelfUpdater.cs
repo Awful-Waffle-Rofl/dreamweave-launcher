@@ -123,7 +123,8 @@ namespace DreamWeave.Launcher.Core.Update
                     throw new LauncherException(LauncherError.SizeMismatch, "The downloaded launcher is " + heldStaged.Length + " bytes, but " + info.Size + " bytes were expected.");
                 }
 
-                if (info.AuthenticodeSubject != null)
+                // Null or empty both mean "not code-signed": hash-only, as for an unsigned v1 release.
+                if (!string.IsNullOrEmpty(info.AuthenticodeSubject))
                 {
                     _authenticode.Verify(downloaded.Path, heldStaged, info.AuthenticodeSubject);
                     heldStaged.Position = 0;

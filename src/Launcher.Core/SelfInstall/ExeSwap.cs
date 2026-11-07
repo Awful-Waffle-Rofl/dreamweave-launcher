@@ -72,7 +72,18 @@ namespace DreamWeave.Launcher.Core.SelfInstall
             string newPath = targetPath + SelfInstallLayout.NewSuffix;
             string oldPath = targetPath + SelfInstallLayout.OldSuffix;
             bool hadOriginal = fs.FileExists(targetPath);
-            if (hadOriginal)
+            if (!hadOriginal)
+            {
+                // No target to move aside, so a stale .old is just litter: remove it if we can.
+                try
+                {
+                    fs.DeleteFile(oldPath);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                }
+            }
+            else
             {
                 try
                 {
