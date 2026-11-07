@@ -1,0 +1,39 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Restore
+        run: dotnet restore DreamWeaveLauncher.sln
+
+      - name: Build
+        run: dotnet build DreamWeaveLauncher.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test DreamWeaveLauncher.sln -c Release --no-build
+
+      - name: Check exe size
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path src/Launcher/bin/Release -Recurse -Filter DreamWeaveLauncher.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error 'DreamWeaveLauncher.exe not found'; exit 1 }
+          Write-Host "$($exe.FullName) = $($exe.Length) bytes"
+          if ($exe.Length -gt 3145728) { Write-Error "Exe exceeds 3 MB limit (3145728 bytes)"; exit 1 }
+          "EXE_PATH=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DreamWeaveLauncher
+          path: ${{ env.EXE_PATH }}
