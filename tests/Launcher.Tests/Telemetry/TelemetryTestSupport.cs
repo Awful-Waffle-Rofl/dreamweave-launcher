@@ -127,12 +127,18 @@ namespace DreamWeave.Launcher.Tests.Telemetry
 
         public string QueueFile => Path.Combine(Paths.DataDir, TelemetryClient.QueueFileName);
 
+        /// <summary>Component ids the test manifest declares (RecordComponent accepts only these).</summary>
+        public static readonly string[] ComponentIds =
+            new[] { "step", "ab", "a" + new string('b', 31), "old-one", "old-two", "fresh", "mega-extras" }
+                .Concat(Enumerable.Range(0, 10).Select(i => "step-" + i)).ToArray();
+
         public static LauncherManifest Manifest(string endpoint = Endpoint, string serverHost = "play.example.test")
         {
             return new LauncherManifest
             {
                 Server = new ServerInfo { Name = "t", Host = serverHost, Port = 9000 },
                 Telemetry = endpoint == null ? null : new TelemetryInfo { Endpoint = endpoint },
+                Components = ComponentIds.Select(id => new ManifestComponent { Id = id }).ToList(),
             };
         }
 

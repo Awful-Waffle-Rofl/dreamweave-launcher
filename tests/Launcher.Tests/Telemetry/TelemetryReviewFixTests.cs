@@ -335,6 +335,23 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                     c.Record("manifest", TelemetryOutcome.Started);
                     Assert.AreEqual(0, c.QueuedCount);
                     Assert.IsTrue(new StateStore(h.Paths.StateFile).Read(s => s.TelemetryOptIn), "the saved flag is unchanged: the caller must retry");
+
+                    // The opt-out must survive a re-configure in this process ...
+                    c.ConfigureAsync(TelemetryHarness.Manifest()).GetAwaiter().GetResult();
+                    Assert.IsFalse(c.IsEnabled, "ConfigureAsync after a failed opt-out write must not turn telemetry back on");
+                    c.Record("manifest", TelemetryOutcome.Started);
+                    Assert.AreEqual(0, c.QueuedCount);
+                }
+
+                // ... and across a restart: a fresh client over the same data folder stays off.
+                using (TelemetryClient fresh = h.NewClient())
+                {
+                    Assert.IsTrue(File.Exists(Path.Combine(h.Paths.DataDir, TelemetryClient.OptOutMarkerFileName)));
+                    fresh.ConfigureAsync(TelemetryHarness.Manifest()).GetAwaiter().GetResult();
+                    Assert.IsFalse(fresh.IsEnabled, "a restart after a failed opt-out write stays off");
+                    fresh.Record("manifest", TelemetryOutcome.Started);
+                    Assert.AreEqual(0, fresh.QueuedCount);
+                    Assert.IsFalse(File.Exists(h.QueueFile));
                 }
             }
         }
@@ -363,6 +380,130 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                     Assert.AreEqual(2, ((JArray)h.Poster.Bodies[1]["events"]).Count, "the kept event was resent with the new one");
                     WaitFor(() => c.QueuedCount == 0, "the queue to drain");
                 }
+            }
+        }
+        [TestMethod]
+        public void SuccessfulOptIn_ClearsTheLatchAndTheMarker()
+        {
+            using (var h = new TelemetryHarness())
+            using (TelemetryClient c = h.EnabledClient())
+            {
+                c.SetOptIn(false);
+                string marker = Path.Combine(h.Paths.DataDir, TelemetryClient.OptOutMarkerFileName);
+                Assert.IsTrue(File.Exists(marker));
+                c.Configure(true, TelemetryHarness.Manifest());
+                Assert.IsFalse(c.IsEnabled, "marker/latch override an opt-in Configure");
+
+                c.SetOptIn(true);
+                Assert.IsFalse(File.Exists(marker));
+                c.Configure(true, TelemetryHarness.Manifest());
+                Assert.IsTrue(c.IsEnabled);
+            }
+        }
+
+        [TestMethod]
+        public void FlushNow_ReturnsImmediately_AfterServerDisabled_AndAfterNetworkFailure()
+        {
+            using (var h = new TelemetryHarness())
+            {
+                h.Poster.Then(503, null, "disabled");
+                using (TelemetryClient c = h.EnabledClient())
+                {
+                    c.Record("manifest", TelemetryOutcome.Succeeded);
+                    Flush(c);
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    Flush(c);
+                    Assert.IsTrue(sw.ElapsedMilliseconds < 100, "took " + sw.ElapsedMilliseconds + " ms");
+                    Assert.AreEqual(1, h.Poster.Bodies.Count);
+                }
+            }
+
+            using (var h = new TelemetryHarness())
+            {
+                h.Poster.ThenNetworkError().Then(202);
+                using (TelemetryClient c = h.EnabledClient())
+                {
+                    c.Record("manifest", TelemetryOutcome.Succeeded);
+                    Flush(c);
+                    Flush(c);
+                    Assert.AreEqual(1, h.Poster.Bodies.Count, "no second attempt inside the failure cooldown");
+                    Assert.AreEqual(1, c.QueuedCount);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void RecordComponent_AcceptsOnlyIdsFromTheConfiguredManifest()
+        {
+            using (var h = new TelemetryHarness())
+            using (TelemetryClient c = h.EnabledClient())
+            {
+                c.RecordComponent("mega-extras", TelemetryOutcome.Started);
+                Assert.AreEqual(1, c.QueuedCount);
+                c.RecordComponent("valid-but-unlisted", TelemetryOutcome.Started);
+                c.RecordComponent(null, TelemetryOutcome.Started);
+                Assert.AreEqual(1, c.QueuedCount);
+
+                var m = TelemetryHarness.Manifest();
+                m.Components.Clear();
+                m.Components.Add(new DreamWeave.Launcher.Core.Manifests.ManifestComponent { Id = "only-this" });
+                c.Configure(true, m);
+                c.RecordComponent("mega-extras", TelemetryOutcome.Started);
+                c.RecordComponent("only-this", TelemetryOutcome.Started);
+                Assert.AreEqual(2, c.QueuedCount);
+            }
+        }
+
+        [TestMethod]
+        public void TelemetrySteps_IsPublic()
+        {
+            Assert.IsTrue(typeof(TelemetrySteps).IsPublic);
+            Assert.AreEqual("palette-leak-fix", TelemetrySteps.PaletteLeakFix);
+        }
+
+        [TestMethod]
+        public void JsonPoster_StalledErrorBody_ReturnsWithinTheTimeout_AndHasNoCode()
+        {
+            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var release = new ManualResetEventSlim(false);
+            Task server = Task.Run(() =>
+            {
+                using (System.Net.Sockets.TcpClient client = listener.AcceptTcpClient())
+                using (System.Net.Sockets.NetworkStream ns = client.GetStream())
+                {
+                    var buf = new byte[4096];
+                    int got = 0;
+                    string seen = string.Empty;
+                    while (!seen.Contains("\r\n\r\n") && (got = ns.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        seen += Encoding.ASCII.GetString(buf, 0, got);
+                    }
+
+                    byte[] head = Encoding.ASCII.GetBytes("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"code\":\"dis");
+                    ns.Write(head, 0, head.Length);
+                    ns.Flush();
+                    release.Wait(TimeSpan.FromSeconds(30));
+                }
+            });
+            try
+            {
+                TimeSpan timeout = TimeSpan.FromSeconds(1);
+                using (var poster = new JsonPoster(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }, true, timeout))
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    HttpPostResult r = poster.PostJsonAsync(new Uri("http://127.0.0.1:" + port + "/e"), new byte[] { 123, 125 }, CancellationToken.None).GetAwaiter().GetResult();
+                    sw.Stop();
+                    Assert.AreEqual(503, r.Status);
+                    Assert.IsNull(r.Code);
+                    Assert.IsTrue(sw.Elapsed < timeout + TimeSpan.FromSeconds(4), "returned after " + sw.ElapsedMilliseconds + " ms");
+                }
+            }
+            finally
+            {
+                release.Set();
+                listener.Stop();
             }
         }
     }

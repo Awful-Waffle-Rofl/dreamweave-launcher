@@ -71,6 +71,8 @@ Turning telemetry off (the settings toggle calls `TelemetryClient.SetOptIn(false
 4. replaces the install id with a new random one, so nothing the server already holds can be tied to anything sent
    later (if the player turns telemetry back on, it starts as a new anonymous install).
 
+The opt-out is also recorded in a small marker file, %LOCALAPPDATA%\DreamWeave\telemetry-optout, written before the settings file is touched. If the settings file is locked or unwritable, telemetry still stays off in this run and after a restart; turning telemetry on again removes the marker.
+
 A request already on its way when the player turns telemetry off cannot be recalled. Data the server has already
 received is anonymous (it is keyed only by the old install id) and cannot be looked up by the player; it expires
 after 90 days.

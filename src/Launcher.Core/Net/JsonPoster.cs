@@ -101,13 +101,14 @@ namespace DreamWeave.Launcher.Core.Net
                                 retryAfter = TimeSpan.Zero;
                             }
 
+                            int status = (int)response.StatusCode;
                             string code = null;
-                            if ((int)response.StatusCode == 503)
+                            if (status == 503)
                             {
                                 code = await ReadCodeAsync(response, cts.Token).ConfigureAwait(false);
                             }
 
-                            return new HttpPostResult((int)response.StatusCode, retryAfter, code);
+                            return new HttpPostResult(status, retryAfter, code);
                         }
                     }
                 }
@@ -131,11 +132,17 @@ namespace DreamWeave.Launcher.Core.Net
             }
         }
 
-        /// <summary>Reads at most <see cref="MaxErrorBodyBytes"/> bytes and returns the JSON <c>code</c> if it is a short lower-case token.</summary>
+        /// <summary>
+        /// Reads at most <see cref="MaxErrorBodyBytes"/> bytes and returns the JSON <c>code</c> if it is a
+        /// short lower-case token, else null. Bounded by <paramref name="token"/> (the poster timeout and the
+        /// caller's token): on net48 the response stream ignores the token passed to <c>ReadAsync</c>, so the
+        /// response itself is disposed when the token fires, which aborts the read. Expiry yields null.
+        /// </summary>
         private static async Task<string> ReadCodeAsync(HttpResponseMessage response, CancellationToken token)
         {
             try
             {
+                using (token.Register(() => response.Dispose()))
                 using (Stream s = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                 {
                     var buffer = new byte[MaxErrorBodyBytes];
@@ -153,19 +160,15 @@ namespace DreamWeave.Launcher.Core.Net
 
                     JObject o = JObject.Parse(Encoding.UTF8.GetString(buffer, 0, total));
                     string code = o["code"] != null && o["code"].Type == JTokenType.String ? (string)o["code"] : null;
-                    return code != null && System.Text.RegularExpressions.Regex.IsMatch(code, "^[a-z_]{1,32}$") ? code : null;
+                    return code != null && System.Text.RegularExpressions.Regex.IsMatch(code, "^[a-z_]{1,32}\\z") ? code : null;
                 }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
             }
             catch (Exception)
             {
+                // Includes cancellation, a disposed response and unparseable bodies: no code.
                 return null;
             }
         }
-
         /// <summary>Disposes the underlying client.</summary>
         public void Dispose()
         {

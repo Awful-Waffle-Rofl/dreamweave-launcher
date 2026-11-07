@@ -63,9 +63,18 @@ namespace DreamWeave.Launcher.Core.Telemetry
         /// <summary>File name of the queue inside <see cref="AppPaths.DataDir"/>.</summary>
         public const string QueueFileName = "telemetry-queue.json";
 
+        /// <summary>
+        /// File name (inside <see cref="AppPaths.DataDir"/>) of the opt-out marker. It is written with
+        /// <see cref="AtomicFile"/>, never through the state lock, so an opt-out survives a locked or
+        /// unwritable <c>state.json</c> and a restart: <see cref="Configure"/> treats a present marker as
+        /// opted out whatever the state file says. A successful opt-in deletes it.
+        /// </summary>
+        public const string OptOutMarkerFileName = "telemetry-optout";
+
         private static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(false);
 
         private readonly string _queuePath;
+        private readonly string _optOutMarkerPath;
         private readonly StateStore _store;
         private readonly IJsonPoster _poster;
         private readonly ITelemetryClock _clock;
@@ -96,6 +105,11 @@ namespace DreamWeave.Launcher.Core.Telemetry
         // taken under; it is posted only while both are still current. _installId is the id sent on the
         // wire: loaded from the store on Configure / opt-in and replaced by the opt-out itself.
         private int _optOutGeneration;
+
+        // Set by SetOptIn(false) BEFORE it touches the state store; cleared only by a successful
+        // SetOptIn(true). While set, Configure(optIn: true, ...) is treated as opted out.
+        private volatile bool _optedOutByUser;
+        private volatile HashSet<string> _componentIds = new HashSet<string>(StringComparer.Ordinal);
         private Guid _installId;
 
         /// <summary>Creates a client for production use. It is OFF until <see cref="ConfigureAsync"/> is called.</summary>
@@ -118,6 +132,7 @@ namespace DreamWeave.Launcher.Core.Telemetry
             _options = options ?? throw new ArgumentNullException(nameof(options));
             _allowedHosts = allowedHosts;
             _queuePath = Path.Combine(paths.DataDir, QueueFileName);
+            _optOutMarkerPath = Path.Combine(paths.DataDir, OptOutMarkerFileName);
             _poster = options.Poster ?? new JsonPoster();
             _clock = options.Clock ?? new SystemTelemetryClock();
             string version = options.LauncherVersion ?? ReadLauncherVersion();
@@ -175,11 +190,17 @@ namespace DreamWeave.Launcher.Core.Telemetry
 
         /// <summary>
         /// As <see cref="Record"/> for a manifest component id (for example <c>ac-client</c>), which is
-        /// manifest-defined and so not in <see cref="TelemetrySteps"/>. The id must still match
-        /// <c>^[a-z][a-z0-9-]{1,31}$</c> or the event is dropped.
+        /// manifest-defined and so not in <see cref="TelemetrySteps"/>. The id must be one of the
+        /// component ids of the manifest last given to <see cref="Configure"/> AND match
+        /// <c>^[a-z][a-z0-9-]{1,31}$</c>, or the event is dropped.
         /// </summary>
         public void RecordComponent(string componentId, TelemetryOutcome outcome, LauncherError error = LauncherError.None, TimeSpan? duration = null)
         {
+            if (componentId == null || !_componentIds.Contains(componentId))
+            {
+                return;
+            }
+
             RecordCore(componentId, outcome, error, duration);
         }
 
@@ -249,11 +270,36 @@ namespace DreamWeave.Launcher.Core.Telemetry
             string endpoint = manifest?.Telemetry?.Endpoint;
             string serverHost = manifest?.Server?.Host;
             Uri validated = TelemetryEndpoint.Validate(endpoint, serverHost, _allowedHosts, _options.AllowLoopbackHttp);
+            var componentIds = new HashSet<string>(StringComparer.Ordinal);
+            if (manifest?.Components != null)
+            {
+                foreach (ManifestComponent comp in manifest.Components)
+                {
+                    if (comp?.Id != null && TelemetryEvent.IsStepValid(comp.Id))
+                    {
+                        componentIds.Add(comp.Id);
+                    }
+                }
+            }
+
+            // The marker beats the caller: an opt-out that could not reach state.json still holds.
+            if (optIn && File.Exists(_optOutMarkerPath))
+            {
+                optIn = false;
+            }
+
             Guid id = optIn ? _store.InstallId : Guid.Empty;
             lock (_ioGate)
             {
                 lock (_gate)
                 {
+                    // Re-checked under the gate: a SetOptIn(false) that landed after the read above wins.
+                    if (_optedOutByUser)
+                    {
+                        optIn = false;
+                    }
+
+                    _componentIds = componentIds;
                     _optIn = optIn;
                     _endpoint = validated;
                     if (optIn)
@@ -306,6 +352,16 @@ namespace DreamWeave.Launcher.Core.Telemetry
             if (!optIn)
             {
                 Guid newId = Guid.NewGuid();
+                _optedOutByUser = true;
+                try
+                {
+                    AtomicFile.WriteAllBytes(_optOutMarkerPath, Utf8NoBom.GetBytes("opted out\n"));
+                }
+                catch (LauncherException)
+                {
+                    // The in-process latch still holds; the state write below is the durable record.
+                }
+
                 lock (_ioGate)
                 {
                     lock (_gate)
@@ -334,6 +390,19 @@ namespace DreamWeave.Launcher.Core.Telemetry
                 wasOptedIn = s.TelemetryOptIn;
                 s.TelemetryOptIn = true;
             });
+            _optedOutByUser = false;
+            try
+            {
+                if (File.Exists(_optOutMarkerPath))
+                {
+                    File.Delete(_optOutMarkerPath);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                // A marker we cannot delete keeps telemetry off; the player can retry.
+            }
+
             Guid currentId = _store.InstallId;
             lock (_ioGate)
             {
@@ -375,6 +444,13 @@ namespace DreamWeave.Launcher.Core.Telemetry
         /// </summary>
         public async Task FlushNowAsync(CancellationToken cancellationToken)
         {
+            DateTime now = _clock.UtcNow;
+            if (now < _serverDisabledUntilUtc || now < _notBeforeUtc)
+            {
+                // The server said to stay away (or the network just failed): never wait here, the events stay queued.
+                return;
+            }
+
             await RunCycleAsync(false, cancellationToken).ConfigureAwait(false);
         }
 
@@ -458,18 +534,19 @@ namespace DreamWeave.Launcher.Core.Telemetry
 
         private async Task RunCycleAsync(bool respectCooldown, CancellationToken token)
         {
+            if (respectCooldown)
+            {
+                // Waited out BEFORE taking the send gate so a flush at exit is never queued behind it.
+                TimeSpan wait = _notBeforeUtc - _clock.UtcNow;
+                if (wait > TimeSpan.Zero)
+                {
+                    await _clock.DelayAsync(wait, token).ConfigureAwait(false);
+                }
+            }
+
             await _sendGate.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                if (respectCooldown)
-                {
-                    TimeSpan wait = _notBeforeUtc - _clock.UtcNow;
-                    if (wait > TimeSpan.Zero)
-                    {
-                        await _clock.DelayAsync(wait, token).ConfigureAwait(false);
-                    }
-                }
-
                 bool first = true;
                 while (true)
                 {
