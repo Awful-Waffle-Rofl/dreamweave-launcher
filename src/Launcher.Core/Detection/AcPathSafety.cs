@@ -7,8 +7,9 @@ namespace DreamWeave.Launcher.Core.Detection
     /// Resolves manifest-relative paths under the Asheron's Call folder, refusing anything that
     /// could escape it or name a Windows device. The same lexical rules run twice: at manifest
     /// load (ManifestParser.Validate calls <see cref="CheckRelativePath"/>, so a bad manifest is
-    /// rejected whole) and again here at use time as defense in depth. Does not follow or detect
-    /// junctions/symlinks.
+    /// rejected whole) and again here at use time as defense in depth. <see cref="Resolve"/> does
+    /// not follow or detect junctions/symlinks (reading is safe either way); every WRITE goes
+    /// through <see cref="ResolveForWrite"/>, which refuses them.
     /// </summary>
     public static class AcPathSafety
     {
@@ -46,6 +47,122 @@ namespace DreamWeave.Launcher.Core.Detection
             }
 
             return full;
+        }
+
+        /// <summary>
+        /// As <see cref="Resolve"/>, for a path about to be WRITTEN: additionally walks every segment
+        /// below <paramref name="acFolder"/> that currently exists (each folder on the way, and the
+        /// file itself) and refuses the path if any of them is a reparse point (junction, symbolic
+        /// link, mount point). The game folder itself may be a link (a moved install), so it is not
+        /// checked. The check is a snapshot: writers call this again immediately before each open
+        /// for write and before each replace.
+        /// </summary>
+        /// <exception cref="LauncherException">
+        /// ManifestInvalid when the path is lexically unsafe; ReparsePointInPath when a segment is a
+        /// reparse point; AccessDenied or Unknown when a segment's attributes cannot be read (fail closed).
+        /// </exception>
+        public static string ResolveForWrite(string acFolder, string relativePath)
+        {
+            string full = Resolve(acFolder, relativePath);
+            RefuseReparsePointsBelow(Path.GetFullPath(acFolder), full, "'" + relativePath + "' was not written");
+            return full;
+        }
+
+        /// <summary>
+        /// Walks every segment of <paramref name="fullPath"/> BELOW <paramref name="rootFolder"/>
+        /// (not the root itself) that currently exists and throws when one is a reparse point.
+        /// Segments that do not exist end the walk (nothing deeper can exist).
+        /// </summary>
+        /// <param name="rootFolder">Absolute folder the walk starts under; <paramref name="fullPath"/> must lie inside it.</param>
+        /// <param name="fullPath">Absolute path to check.</param>
+        /// <param name="what">Start of the error sentence, for example <c>'x.dat' was not written</c>.</param>
+        /// <exception cref="LauncherException">ReparsePointInPath; AccessDenied or Unknown when attributes cannot be read (fail closed).</exception>
+        internal static void RefuseReparsePointsBelow(string rootFolder, string fullPath, string what)
+        {
+            string root = EnsureTrailingSeparator(rootFolder);
+            if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("The path is not under the folder.", nameof(fullPath));
+            }
+
+            string current = root.Substring(0, root.Length - 1);
+            foreach (string segment in fullPath.Substring(root.Length).Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = current + "\\" + segment;
+                FileAttributes attributes;
+                try
+                {
+                    attributes = File.GetAttributes(current);
+                }
+                catch (Exception ex) when (ex is FileNotFoundException || ex is DirectoryNotFoundException)
+                {
+                    break;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    throw LauncherException.FromIo(ex, "checking " + current);
+                }
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new LauncherException(
+                        LauncherError.ReparsePointInPath,
+                        what + " because '" + current + "' is a junction or link. Remove the link or use a normal folder.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Walks every segment of <paramref name="fullPath"/> from its drive root (the file or
+        /// folder itself included) and throws when one is a reparse point.
+        /// </summary>
+        /// <exception cref="LauncherException">As <see cref="RefuseReparsePointsBelow"/>.</exception>
+        internal static void RefuseReparsePointsInPath(string fullPath, string what)
+        {
+            string full = Path.GetFullPath(fullPath);
+            RefuseReparsePointsBelow(Path.GetPathRoot(full), full, what);
+        }
+
+        /// <summary>
+        /// Why <paramref name="path"/> is not an absolute path on a local fixed drive (<c>X:\...</c>),
+        /// or null when it is. Refuses UNC (<c>\\server\share</c>), device and extended-length forms
+        /// (<c>\\.\</c>, <c>\\?\</c>), relative and drive-relative paths, and removable, network,
+        /// optical and RAM drives. Used for every location an ELEVATED process accepts from a task file.
+        /// </summary>
+        public static string CheckLocalFixedPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return "it is empty";
+            }
+
+            if (path.StartsWith("\\", StringComparison.Ordinal) || path.StartsWith("/", StringComparison.Ordinal))
+            {
+                return "it is a network, device or extended-length path";
+            }
+
+            bool driveForm = path.Length >= 3
+                && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'))
+                && path[1] == ':'
+                && (path[2] == '\\' || path[2] == '/');
+            if (!driveForm)
+            {
+                return "it is not an absolute path on a drive";
+            }
+
+            try
+            {
+                if (new DriveInfo(path.Substring(0, 1)).DriveType != DriveType.Fixed)
+                {
+                    return "it is not on a local fixed drive";
+                }
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException || ex is UnauthorizedAccessException)
+            {
+                return "its drive could not be checked";
+            }
+
+            return null;
         }
 
         /// <summary>True when <paramref name="relativePath"/> passes every lexical rule (see <see cref="Resolve"/>).</summary>

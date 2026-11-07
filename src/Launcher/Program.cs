@@ -18,10 +18,15 @@ namespace DreamWeave.Launcher
             string mode = args.Length > 0 ? args[0] : string.Empty;
             switch (mode)
             {
+                case "--elevated-copy":
+                    // TODO(install-ui): return DreamWeave.Launcher.Core.Install.ElevatedTaskRunner.Run(args[1])
+                    // (no UI, no MessageBox; the exit code is the LauncherError value). The UI step starts
+                    // this exe with verb "runas", waits for exit, then calls ZipOverlayResult.CleanUp() /
+                    // BytePatchResult.CleanUp(). Until then this mode must FAIL: a caller seeing 0 would
+                    // believe the copy happened.
+                    return (int)LauncherError.Unknown;
                 case "--uninstall":
                 case "--updated":
-                case "--elevated-copy":
-                    // --elevated-copy takes a <task> argument (args[1]) once implemented.
                     MessageBox.Show("Not implemented yet", LauncherInfo.ProductName);
                     return 0;
                 default:
