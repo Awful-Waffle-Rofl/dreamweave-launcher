@@ -282,5 +282,43 @@ namespace DreamWeave.Launcher.Tests.Install
                 Assert.IsFalse(File.Exists(r.TaskPath), "CleanUp removes the task file");
             }
         }
+
+        [TestMethod]
+        public void ReadOnlyRunningExecutableTarget_IsGameRunning_AttributeKept_NoOrphans()
+        {
+            using (var f = new Fixture(null))
+            {
+                string exe = Path.Combine(f.Ac, "pingcopy.exe");
+                using (var running = new RunningExe(exe))
+                {
+                    byte[] ping = File.ReadAllBytes(exe);
+                    var c = new ManifestComponent
+                    {
+                        Id = "fix",
+                        Kind = ComponentKinds.BytePatch,
+                        Target = "pingcopy.exe",
+                        InputSha256 = InstallData.Hash(ping),
+                        OutputSha256 = new string('C', 64),
+                        Patches = new List<BytePatch> { new BytePatch { Offset = 0, Expect = Hex(ping, 0, 2), Replace = "0000" } },
+                    };
+
+                    File.SetAttributes(exe, File.GetAttributes(exe) | FileAttributes.ReadOnly);
+                    try
+                    {
+                        var ex = Assert.ThrowsExactly<LauncherException>(() => f.Patcher.Apply(c, f.Ac));
+
+                        Assert.AreEqual(LauncherError.GameRunning, ex.Code, ex.Detail);
+                        CollectionAssert.AreEqual(ping, File.ReadAllBytes(exe));
+                        Assert.AreNotEqual(0, (int)(File.GetAttributes(exe) & FileAttributes.ReadOnly), "the read-only attribute must still be set");
+                    }
+                    finally
+                    {
+                        File.SetAttributes(exe, File.GetAttributes(exe) & ~FileAttributes.ReadOnly);
+                    }
+                }
+
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac), "no .dwtmp and no ~RF*.TMP may be left behind");
+            }
+        }
     }
 }

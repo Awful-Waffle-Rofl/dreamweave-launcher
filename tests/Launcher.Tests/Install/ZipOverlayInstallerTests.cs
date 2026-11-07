@@ -431,7 +431,7 @@ namespace DreamWeave.Launcher.Tests.Install
             {
                 File.WriteAllBytes(f.Target("a.dat"), OldA);
                 File.SetAttributes(f.Target("a.dat"), FileAttributes.ReadOnly);
-                File.WriteAllBytes(f.Target("foreign.dat~RF1234.TMP"), new byte[] { 1 });
+                File.WriteAllBytes(f.Target("a.dat~RF1234.TMP"), new byte[] { 1 });
                 InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
 
                 ZipOverlayResult r = f.Run();
@@ -439,7 +439,7 @@ namespace DreamWeave.Launcher.Tests.Install
                 Assert.AreEqual(InstallOutcome.Completed, r.Outcome);
                 CollectionAssert.AreEqual(A, File.ReadAllBytes(f.Target("a.dat")));
                 string[] orphans = Directory.GetFiles(f.Ac, "*~RF*.TMP", SearchOption.AllDirectories);
-                CollectionAssert.AreEqual(new[] { f.Target("foreign.dat~RF1234.TMP") }, orphans, "only the foreign file may remain; the replace's own leftover must be gone");
+                CollectionAssert.AreEqual(new[] { f.Target("a.dat~RF1234.TMP") }, orphans, "only the foreign file may remain; the replace's own leftover must be gone");
                 Assert.AreEqual(0, Directory.GetFiles(f.Ac, "*.dwtmp", SearchOption.AllDirectories).Length);
             }
         }

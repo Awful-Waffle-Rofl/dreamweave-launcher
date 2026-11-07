@@ -185,18 +185,25 @@ namespace DreamWeave.Launcher.Core.Detection
         /// </summary>
         public static bool IsNetworkPath(string path)
         {
-            if (string.IsNullOrEmpty(path) || !path.StartsWith("\\\\", StringComparison.Ordinal))
+            if (string.IsNullOrEmpty(path))
             {
                 return false;
             }
 
-            if (path.StartsWith(ExtendedUncPrefix, StringComparison.OrdinalIgnoreCase))
+            // Windows accepts either separator, so //server/share and \/server are UNC too.
+            string p = path.Replace('/', '\\');
+            if (!p.StartsWith("\\\\", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (p.StartsWith(ExtendedUncPrefix, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
 
-            return !path.StartsWith(ExtendedPrefix, StringComparison.Ordinal)
-                && !path.StartsWith("\\\\.\\", StringComparison.Ordinal);
+            return !p.StartsWith(ExtendedPrefix, StringComparison.Ordinal)
+                && !p.StartsWith("\\\\.\\", StringComparison.Ordinal);
         }
 
         /// <summary>
@@ -204,6 +211,16 @@ namespace DreamWeave.Launcher.Core.Detection
         /// bare <c>\\?\</c> prefix is dropped. Any other path is returned unchanged.
         /// </summary>
         public static string ToDisplayPath(string path)
+        {
+            return StripExtendedPrefix(path);
+        }
+
+        /// <summary>
+        /// Drops the extended-length prefix so the path can be checked as an ordinary one:
+        /// <c>\\?\UNC\server\share</c> becomes <c>\\server\share</c> and a bare <c>\\?\</c> is removed.
+        /// Any other path is returned unchanged.
+        /// </summary>
+        public static string StripExtendedPrefix(string path)
         {
             if (string.IsNullOrEmpty(path))
             {

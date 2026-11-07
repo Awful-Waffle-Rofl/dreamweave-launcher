@@ -26,6 +26,11 @@ namespace DreamWeave.Launcher.Tests.Detection
 
         [DataTestMethod]
         [DataRow(@"\\server\share\ac", true)]
+        [DataRow(@"//server/share/ac", true)]
+        [DataRow(@"\/server/share/ac", true)]
+        [DataRow(@"/\server\share", true)]
+        [DataRow(@"//?/UNC/server/share", true)]
+        [DataRow(@"//?/C:/ac", false)]
         [DataRow(@"\\?\UNC\server\share\ac", true)]
         [DataRow(@"\\?\C:\ac", false)]
         [DataRow(@"\\.\C:\ac", false)]
@@ -38,6 +43,8 @@ namespace DreamWeave.Launcher.Tests.Detection
         [DataTestMethod]
         [DataRow(@"\\server\share\0.part")]
         [DataRow(@"\\?\UNC\server\share\0.part")]
+        [DataRow(@"//server/share/0.part")]
+        [DataRow(@"\/server/share/0.part")]
         public void NetworkPath_RefusalSaysNetworkPath(string path)
         {
             string reason = AcPathSafety.CheckLocalFixedPath(path);

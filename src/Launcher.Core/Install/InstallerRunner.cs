@@ -207,7 +207,7 @@ namespace DreamWeave.Launcher.Core.Install
                 throw new LauncherException(LauncherError.InstallerFailed, "Windows could not report where the downloaded installer is.", new Win32Exception(Marshal.GetLastWin32Error()));
             }
 
-            string path = AcPathSafety.ToDisplayPath(sb.ToString());
+            string path = AcPathSafety.StripExtendedPrefix(sb.ToString());
 
             string reason = AcPathSafety.CheckLocalFixedPath(path);
             if (reason != null)

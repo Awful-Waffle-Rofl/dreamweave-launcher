@@ -357,5 +357,35 @@ namespace DreamWeave.Launcher.Tests.Install
                 StringAssert.Contains(r.Detail, "junction");
             }
         }
+
+        [TestMethod]
+        public void OverlayOntoReadOnlyRunningExe_IsGameRunning_AttributeKept_NoOrphans()
+        {
+            using (var f = new Fixture())
+            {
+                // A real running image living at the manifest path a.dat.
+                using (var running = new RunningExe(f.Target("a.dat")))
+                {
+                    byte[] before = File.ReadAllBytes(running.Path);
+                    File.SetAttributes(running.Path, File.GetAttributes(running.Path) | FileAttributes.ReadOnly);
+                    try
+                    {
+                        string task = f.OverlayTask(new ElevatedTaskFile { Path = "a.dat", Staged = f.StageFile("0.part", A) });
+
+                        ElevatedTaskResult r = f.Run(task);
+
+                        Assert.AreEqual(LauncherError.GameRunning, r.Code, r.Detail);
+                        CollectionAssert.AreEqual(before, File.ReadAllBytes(running.Path));
+                        Assert.AreNotEqual(0, (int)(File.GetAttributes(running.Path) & FileAttributes.ReadOnly), "the read-only attribute must still be set");
+                    }
+                    finally
+                    {
+                        File.SetAttributes(running.Path, File.GetAttributes(running.Path) & ~FileAttributes.ReadOnly);
+                    }
+                }
+
+                Assert.IsFalse(InstallData.AnyTempLeft(f.Ac), "no .dwtmp and no ~RF*.TMP may be left behind");
+            }
+        }
     }
 }
