@@ -330,9 +330,22 @@ namespace DreamWeave.Launcher.UI
             _window.CloseGuard = () => InstallCloseRules.Decide(session.Phase);
             _window.StopRequested = () =>
             {
-                closeWhenStopped = true;
-                cancel.Enabled = false;
-                cts?.Cancel();
+                // The answer can come after the phase changed under the open prompt.
+                switch (session.RequestStop(cts))
+                {
+                    case StopOutcome.Blocked:
+                        MessageBox.Show(_window, UiText.CloseBlocked, LauncherInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        break;
+                    case StopOutcome.NotRunning:
+                        // Run already returned: nothing to wait for. Posted, because this runs inside FormClosing.
+                        _window.CloseGuard = null;
+                        _window.Post(_window.Close);
+                        break;
+                    default:
+                        closeWhenStopped = true;
+                        cancel.Enabled = false;
+                        break;
+                }
             };
 
             string TitleOf(string id) => components.FirstOrDefault(c => c.Id == id)?.Title ?? id;
@@ -387,6 +400,13 @@ namespace DreamWeave.Launcher.UI
                     case InstallEventKind.HandoffEnded:
                         handoff.Visible = false;
                         break;
+                    case InstallEventKind.CriticalStarted:
+                        cancel.Enabled = false;
+                        break;
+                    case InstallEventKind.CriticalEnded:
+                        // Events arrive late: only re-enable while the run is still stoppable and not already stopping.
+                        cancel.Enabled = session.Phase == InstallPhase.Stoppable && !closeWhenStopped && cts != null && !cts.IsCancellationRequested;
+                        break;
                 }
 
                 totalBar.Value = (int)Math.Round(aggregate.Fraction * 1000);
@@ -435,8 +455,11 @@ namespace DreamWeave.Launcher.UI
             finished.Click += (s, e) => session.CheckInstallNow();
             cancel.Click += (s, e) =>
             {
-                cancel.Enabled = false;
-                cts?.Cancel();
+                // Ignored while the game folder is being written; the button is disabled then anyway.
+                if (session.RequestStop(cts) != StopOutcome.Blocked)
+                {
+                    cancel.Enabled = false;
+                }
             };
             errors.RetryClicked += (s, e) => Run();
             errors.TryLaterClicked += (s, e) => _window.Close();

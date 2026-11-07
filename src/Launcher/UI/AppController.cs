@@ -276,9 +276,16 @@ namespace DreamWeave.Launcher.UI
                 return;
             }
 
-            _services.Shutdown();
-            _instance?.Release();
-            _window.Close();
+            try
+            {
+                _services.Shutdown();
+            }
+            finally
+            {
+                // The uninstaller is already waiting on the mutex: hand it over even if the flush failed.
+                _instance?.Release();
+                _window.Close();
+            }
         }
     }
 }

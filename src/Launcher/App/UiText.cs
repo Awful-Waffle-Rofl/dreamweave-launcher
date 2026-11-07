@@ -146,8 +146,8 @@ namespace DreamWeave.Launcher.App
         public const string StatusUnknownBlockedFormat = "\"{0}\" could not be checked, usually because Asheron's Call is running. Close the game, then click Check again.";
         public const string CheckAgain = "Check again";
         public const string StopInstallPrompt = "Stop the install?";
-        public const string CloseBlocked = "The game files are being written right now. Wait for this step to finish before closing."; // DRAFT
+        public const string CloseBlocked = "The game files are being written right now. Wait for this step to finish before closing.";
         public const string UninstallCredentialsLeft = "Some saved passwords could not be removed. Open Windows Credential Manager and remove entries starting with DreamWeave/.";
-        public const string UninstallClientFailed = "The Asheron's Call client's uninstaller did not finish, so the client may still be installed."; // DRAFT
+        public const string UninstallClientFailed = "The Asheron's Call client's uninstaller did not finish, so the client may still be installed.";
     }
 }

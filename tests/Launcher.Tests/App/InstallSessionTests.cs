@@ -261,6 +261,25 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual(CloseDecision.Allow, InstallCloseRules.Decide(session.Phase));
         }
 
+        [TestMethod]
+        public void RequestStop_DuringDownloadCancels_AfterTheRunIsNotRunning()
+        {
+            InstallClient(ClientBytes);
+            _downloads.Gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var m = AppFixtures.Manifest(Installer());
+            var session = new InstallSession(_deps, m, _acFolder);
+            using (var cts = new CancellationTokenSource())
+            {
+                Task<InstallRunResult> run = session.RunAsync(m.Components, new Collector(), cts.Token);
+                WaitFor(() => _downloads.ThreadIds.Count == 1).GetAwaiter().GetResult();
+                Assert.AreEqual(StopOutcome.Stopping, session.RequestStop(cts));
+                Assert.IsTrue(cts.IsCancellationRequested);
+                _downloads.Gate.SetResult(true);
+                run.GetAwaiter().GetResult();
+                Assert.AreEqual(StopOutcome.NotRunning, session.RequestStop(cts), "the prompt answered after Run returned closes at once");
+            }
+        }
+
         internal sealed class Collector : IProgress<InstallEvent>
         {
             private readonly ConcurrentQueue<InstallEvent> _events = new ConcurrentQueue<InstallEvent>();

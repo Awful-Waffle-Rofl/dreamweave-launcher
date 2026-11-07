@@ -24,6 +24,10 @@ namespace DreamWeave.Launcher.App
         HandoffStarted,
         HandoffNotDetected,
         HandoffEnded,
+
+        /// <summary>The game folder is being written: Cancel is unavailable until <see cref="CriticalEnded"/>.</summary>
+        CriticalStarted,
+        CriticalEnded,
     }
 
     /// <summary>One update from an <see cref="InstallSession"/>, delivered through an <see cref="IProgress{T}"/>.</summary>
@@ -109,6 +113,96 @@ namespace DreamWeave.Launcher.App
         }
     }
 
+    /// <summary>What a Stop or Cancel request did.</summary>
+    internal enum StopOutcome
+    {
+        /// <summary>The run was asked to stop; it returns Cancelled shortly.</summary>
+        Stopping = 0,
+
+        /// <summary>The game folder is being written: nothing was cancelled.</summary>
+        Blocked = 1,
+
+        /// <summary>No run is in progress: there is nothing to wait for.</summary>
+        NotRunning = 2,
+    }
+
+    /// <summary>
+    /// Owns the install phase and decides every Stop or Cancel request. A stop and entry into the
+    /// Critical phase take the same lock, so a stop can never land after a commit has started: either
+    /// the stop wins and the commit is refused, or the commit wins and the stop is blocked.
+    /// </summary>
+    internal sealed class InstallStopGate
+    {
+        private readonly object _gate = new object();
+        private int _phase;
+        private bool _stopPending;
+
+        public InstallPhase Phase => (InstallPhase)Volatile.Read(ref _phase);
+
+        /// <summary>Moves to Idle or Stoppable. Critical is entered only through <see cref="EnterCritical"/>.</summary>
+        public void SetPhase(InstallPhase phase)
+        {
+            if (phase == InstallPhase.Critical)
+            {
+                throw new ArgumentException("Use EnterCritical.", nameof(phase));
+            }
+
+            lock (_gate)
+            {
+                Volatile.Write(ref _phase, (int)phase);
+            }
+        }
+
+        /// <summary>Starts a write into the game folder, unless a stop has already been asked for.</summary>
+        public void EnterCritical(CancellationToken ct)
+        {
+            lock (_gate)
+            {
+                if (_stopPending || ct.IsCancellationRequested)
+                {
+                    throw new LauncherException(LauncherError.Cancelled, "Stopped before writing to the game folder.");
+                }
+
+                Volatile.Write(ref _phase, (int)InstallPhase.Critical);
+            }
+        }
+
+        /// <summary>Cancels <paramref name="cts"/> unless the game folder is being written.</summary>
+        public StopOutcome RequestStop(CancellationTokenSource cts)
+        {
+            StopOutcome outcome;
+            lock (_gate)
+            {
+                InstallPhase phase = Phase;
+                if (phase == InstallPhase.Critical)
+                {
+                    return StopOutcome.Blocked;
+                }
+
+                outcome = phase == InstallPhase.Idle ? StopOutcome.NotRunning : StopOutcome.Stopping;
+                _stopPending = true;
+            }
+
+            // Cancelled outside the lock: token callbacks run synchronously and must not hold it.
+            try
+            {
+                cts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _stopPending = false;
+                }
+            }
+
+            return outcome;
+        }
+    }
+
     /// <summary>Everything an <see cref="InstallSession"/> touches, so tests can substitute each piece.</summary>
     internal sealed class InstallDependencies
     {
@@ -175,7 +269,7 @@ namespace DreamWeave.Launcher.App
         private readonly HashSet<string> _launchedInstallers = new HashSet<string>(StringComparer.Ordinal);
         private TaskCompletionSource<bool> _poke = NewPoke();
         private string _acFolder;
-        private int _phase;
+        private readonly InstallStopGate _stop = new InstallStopGate();
 
         public InstallSession(InstallDependencies deps, LauncherManifest manifest, string acFolder)
         {
@@ -185,7 +279,13 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>What the session is doing now (read from any thread).</summary>
-        public InstallPhase Phase => (InstallPhase)Volatile.Read(ref _phase);
+        public InstallPhase Phase => _stop.Phase;
+
+        /// <summary>
+        /// Stop or Cancel from the player: cancels <paramref name="cts"/> unless the game folder is being
+        /// written right now, in which case nothing is cancelled and <see cref="StopOutcome.Blocked"/> is returned.
+        /// </summary>
+        public StopOutcome RequestStop(CancellationTokenSource cts) => _stop.RequestStop(cts);
 
         /// <summary>"I finished": run a detection pass now instead of waiting for the next poll.</summary>
         public void CheckInstallNow()
@@ -388,7 +488,7 @@ namespace DreamWeave.Launcher.App
             DownloadResult file = await DownloadAsync(c, c.Id + ".zip", progress, ct).ConfigureAwait(false);
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Installing));
             var installer = new ZipOverlayInstaller(_deps.Paths, _deps.Disk);
-            SetPhase(InstallPhase.Critical);
+            EnterCritical(c.Id, events, ct);
             try
             {
                 ZipOverlayResult result = await Task.Run(() => installer.Install(_manifest, c, file.Path, folder, progress, ct), ct).ConfigureAwait(false);
@@ -405,6 +505,7 @@ namespace DreamWeave.Launcher.App
             finally
             {
                 SetPhase(InstallPhase.Stoppable);
+                events.Report(new InstallEvent(InstallEventKind.CriticalEnded, c.Id));
             }
         }
 
@@ -422,7 +523,7 @@ namespace DreamWeave.Launcher.App
 
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Installing));
             var patcher = new BytePatcher(_deps.Paths, _deps.Disk);
-            SetPhase(InstallPhase.Critical);
+            EnterCritical(c.Id, events, ct);
             try
             {
                 BytePatchResult result = await Task.Run(() => patcher.Apply(c, folder), ct).ConfigureAwait(false);
@@ -438,6 +539,7 @@ namespace DreamWeave.Launcher.App
             finally
             {
                 SetPhase(InstallPhase.Stoppable);
+                events.Report(new InstallEvent(InstallEventKind.CriticalEnded, c.Id));
             }
         }
 
@@ -483,7 +585,13 @@ namespace DreamWeave.Launcher.App
 
         private void SetPhase(InstallPhase phase)
         {
-            Volatile.Write(ref _phase, (int)phase);
+            _stop.SetPhase(phase);
+        }
+
+        private void EnterCritical(string componentId, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            _stop.EnterCritical(ct);
+            events.Report(new InstallEvent(InstallEventKind.CriticalStarted, componentId));
         }
 
         private static void TryDeleteStaged(string path)
