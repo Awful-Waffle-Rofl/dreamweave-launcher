@@ -336,12 +336,73 @@ namespace DreamWeave.Launcher.App
                     }
                 }
 
-                return new InstallRunResult(LauncherError.None, null, _acFolder);
+                return await VerifyPlanAsync(components, events, cancellationToken).ConfigureAwait(false);
             }
             finally
             {
                 SetPhase(InstallPhase.Idle);
             }
+        }
+
+        /// <summary>
+        /// After every step has run, checks the files once more and re-runs a non-installer step whose
+        /// result no longer holds. The retail installer can still be copying its stock files after
+        /// detection first sees the client, and those late writes undo the game data step; "Done" must
+        /// mean the files are right, not that every step returned. A second failure is reported.
+        /// </summary>
+        private async Task<InstallRunResult> VerifyPlanAsync(IReadOnlyList<ManifestComponent> components, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            foreach (ManifestComponent c in components)
+            {
+                if (c.Kind == ComponentKinds.Installer)
+                {
+                    continue;
+                }
+
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        return new InstallRunResult(LauncherError.Cancelled, c.Id, _acFolder);
+                    }
+
+                    string folder = _acFolder;
+                    ComponentStatus status;
+                    try
+                    {
+                        status = await Task.Run(() => _deps.Evaluator.Evaluate(c, _manifest, folder, null, ct), ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        return new InstallRunResult(Classify(ex, ct), c.Id, _acFolder);
+                    }
+
+                    if (status.State != ComponentState.Missing && status.State != ComponentState.NeedsRepair)
+                    {
+                        break;
+                    }
+
+                    if (attempt == 1)
+                    {
+                        _deps.Telemetry.RecordComponent(c.Id, TelemetryOutcome.Failed, LauncherError.Unknown, TimeSpan.Zero);
+                        return new InstallRunResult(LauncherError.Unknown, c.Id, _acFolder);
+                    }
+
+                    events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Verifying));
+                    try
+                    {
+                        await RunOneAsync(c, events, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherError code = Classify(ex, ct);
+                        _deps.Telemetry.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, TimeSpan.Zero);
+                        return new InstallRunResult(code, c.Id, _acFolder);
+                    }
+                }
+            }
+
+            return new InstallRunResult(LauncherError.None, null, _acFolder);
         }
 
         private async Task<bool> RunOneAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)

@@ -287,6 +287,8 @@ namespace DreamWeave.Launcher.Tests.App
             public void Report(InstallEvent value) => _events.Enqueue(value);
 
             public bool Has(InstallEventKind kind) => _events.Any(e => e.Kind == kind);
+
+            public InstallEvent[] All => _events.ToArray();
         }
 
         internal sealed class FakeDownloader : IDownloader
