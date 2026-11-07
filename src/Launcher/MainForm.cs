@@ -8,6 +8,7 @@ namespace DreamWeave.Launcher
     {
         public MainForm()
         {
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = LauncherInfo.ProductName;
             ClientSize = new Size(640, 400);
             StartPosition = FormStartPosition.CenterScreen;

@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest
@@ -33,7 +36,15 @@ jobs:
           if ($exe.Length -gt 3145728) { Write-Error "Exe exceeds 3 MB limit (3145728 bytes)"; exit 1 }
           "EXE_PATH=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Check no unembedded DLLs
+        shell: pwsh
+        run: |
+          $dir = Split-Path $env:EXE_PATH
+          $dlls = Get-ChildItem $dir -Filter *.dll
+          if ($dlls) { Write-Error "Unembedded DLLs: $($dlls.Name -join ', ')"; exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: DreamWeaveLauncher
           path: ${{ env.EXE_PATH }}
+          if-no-files-found: error
