@@ -128,6 +128,8 @@ namespace DreamWeave.Launcher.Tests
         [DataRow("http://play.acdreamweave.com")]
         [DataRow("::1")]
         [DataRow("2001:db8::1")]
+        [DataRow("[::1]")]
+        [DataRow("[2001:db8::1]")]
         [DataRow("[::1%3]")]
         [DataRow("[zz::1]")]
         [DataRow("[1.2.3.4]")]
@@ -139,6 +141,9 @@ namespace DreamWeave.Launcher.Tests
         [DataRow("1.2.3")]
         [DataRow("256.1.1.1")]
         [DataRow("01.2.3.4")]
+        [DataRow("1234.1.1.1")]
+        [DataRow("1.2.3.4.5")]
+        [DataRow("123")]
         [DataRow("host\tname")]
         [DataRow("play.acdreamweave.com -x")]
         public void ServerHost_Invalid_IsRejected(string host)
@@ -156,14 +161,37 @@ namespace DreamWeave.Launcher.Tests
         [DataRow("xn--bcher-kva.example")]
         [DataRow("127.0.0.1")]
         [DataRow("0.0.0.0")]
-        [DataRow("[::1]")]
-        [DataRow("[2001:db8::1]")]
         public void ServerHost_Valid_IsAccepted(string host)
         {
             JObject m = Sample();
             m["server"]["host"] = host;
 
             Assert.AreEqual(host, Verify(Bytes(m)).Server.Host);
+        }
+
+        [TestMethod]
+        public void ServerHost_LengthBoundaries()
+        {
+            string label63 = new string('a', 63);
+            string label64 = new string('a', 64);
+            // 63 + 1 + 63 + 1 + 63 + 1 + 61 = 253 characters; one more = 254.
+            string host253 = label63 + "." + label63 + "." + label63 + "." + new string('b', 61);
+            string host254 = label63 + "." + label63 + "." + label63 + "." + new string('b', 62);
+            Assert.AreEqual(253, host253.Length);
+            Assert.AreEqual(254, host254.Length);
+
+            Assert.IsTrue(ManifestParser.IsValidServerHost(label63 + ".example"), "63-char label");
+            Assert.IsFalse(ManifestParser.IsValidServerHost(label64 + ".example"), "64-char label");
+            Assert.IsTrue(ManifestParser.IsValidServerHost(host253), "253-char host");
+            Assert.IsFalse(ManifestParser.IsValidServerHost(host254), "254-char host");
+
+            // The same boundaries through the full signed verify path.
+            JObject ok = Sample();
+            ok["server"]["host"] = host253;
+            Assert.AreEqual(host253, Verify(Bytes(ok)).Server.Host);
+            JObject bad = Sample();
+            bad["server"]["host"] = label64 + ".example";
+            Assert.AreEqual(LauncherError.ManifestInvalid, Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(bad))).Code);
         }
 
         [TestMethod]

@@ -125,7 +125,7 @@ namespace DreamWeave.Launcher.Core.Manifests
 
             if (!IsValidServerHost(m.Server.Host))
             {
-                throw Invalid("its server host '" + m.Server.Host + "' is not a host name, IPv4 address or bracketed IPv6 address.");
+                throw Invalid("its server host '" + m.Server.Host + "' is not a host name or IPv4 address.");
             }
 
             if (m.Server.Port < 1 || m.Server.Port > 65535)
@@ -300,9 +300,11 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// <summary>
         /// The server host is substituted UNQUOTED into the client command line (<c>-h {host}:{port}</c>),
         /// so it must be exactly one of: a DNS host name (letters, digits, hyphens; dot-separated
-        /// labels of 1-63 characters not starting or ending with a hyphen; at most 253 characters),
-        /// a dotted-quad IPv4 address, or a bracketed IPv6 address (<c>[2001:db8::1]</c>, no zone id).
-        /// Anything else (spaces, quotes, an unbracketed IPv6, a port, a scheme) is rejected.
+        /// labels of 1-63 characters not starting or ending with a hyphen; at most 253 characters;
+        /// a name made only of digits and dots is treated as an IPv4 attempt and must be one),
+        /// or a dotted-quad IPv4 address. IPv6 is NOT accepted: client support for it in
+        /// <c>-h</c> is untested and the production server is a DNS name. Anything else (spaces,
+        /// quotes, brackets, a port, a scheme) is rejected.
         /// </summary>
         internal static bool IsValidServerHost(string host)
         {
@@ -311,20 +313,6 @@ namespace DreamWeave.Launcher.Core.Manifests
                 return false;
             }
 
-            if (host[0] == '[')
-            {
-                if (host.Length < 4 || host[host.Length - 1] != ']')
-                {
-                    return false;
-                }
-
-                string inner = host.Substring(1, host.Length - 2);
-                System.Net.IPAddress v6;
-                return inner.IndexOf('%') < 0
-                    && inner.All(ch => ch == ':' || ch == '.' || Uri.IsHexDigit(ch))
-                    && System.Net.IPAddress.TryParse(inner, out v6)
-                    && v6.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6;
-            }
 
             if (host.All(ch => ch == '.' || (ch >= '0' && ch <= '9')))
             {

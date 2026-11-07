@@ -135,7 +135,9 @@ namespace DreamWeave.Launcher.Core.Manifests
     /// compiled-in floor). It is computed once per load and used for every source and for the
     /// cache fallback, so losing the state file alone cannot reopen a rollback while a valid
     /// cache exists, and a failed cache or state write cannot reopen one within the session.
-    /// Hold ONE provider for the process lifetime so the in-session floor covers every load.</item>
+    /// The in-session floor is re-read just before a fetched manifest is accepted, so a load
+    /// that verified against an older floor while another load accepted a higher serial is
+    /// refused as a rollback rather than accepted.</item>
     /// <item>Every response is size-capped (<see cref="MaxManifestBytes"/>, <see cref="ManifestSignature.MaxFileBytes"/>).</item>
     /// <item>A source whose pair fails the signature check is refetched ONCE with a cache-busting
     /// query (a CDN can briefly serve a new manifest with the old signature); any other failure,
@@ -148,6 +150,15 @@ namespace DreamWeave.Launcher.Core.Manifests
     /// <item>If no source verifies, the cached pair (re-verified against the floor) is used, with
     /// status ManifestUnavailable.</item>
     /// </list>
+    /// <para>
+    /// Usage contract: construct ONE provider at startup and share it for the process lifetime
+    /// (the in-session floor lives on the instance). Serialize calls to <see cref="LoadAsync"/>
+    /// (do not run two at once). The app must keep the last non-null <see cref="ManifestLoadResult"/>
+    /// it received: once the floor has risen in-session, a later offline reload can legitimately
+    /// return no manifest (the cache may hold an older serial than one already accepted).
+    /// <see cref="LoadAsync"/> touches <see cref="StateStore"/>, which can block, so call it from a
+    /// background thread only.
+    /// </para>
     /// </summary>
     public sealed class ManifestProvider
     {
@@ -166,7 +177,10 @@ namespace DreamWeave.Launcher.Core.Manifests
         private readonly IReadOnlyList<ManifestSource> _sources;
         private long _acceptedThisProcess;
 
-        /// <summary>Creates a provider.</summary>
+        /// <summary>
+        /// Creates a provider. Construct it ONCE at startup and share it; see the class remarks
+        /// for the usage contract (serialized loads, keep the last non-null result, background thread).
+        /// </summary>
         /// <param name="fetcher">HTTP transport.</param>
         /// <param name="verifier">Verifier holding the trusted keys and the compiled-in serial floor.</param>
         /// <param name="paths">Supplies the cache file location.</param>
@@ -201,10 +215,12 @@ namespace DreamWeave.Launcher.Core.Manifests
             foreach (ManifestSource source in _sources)
             {
                 VerifiedManifest verified = null;
+                string verifiedName = source.Name;
                 for (int pass = 0; pass < 2 && verified == null; pass++)
                 {
                     ThrowIfCancelled(cancellationToken);
                     string name = pass == 0 ? source.Name : source.Name + " (refetch)";
+                    verifiedName = name;
                     try
                     {
                         Uri sigUri = pass == 0 ? source.SignatureUri : CacheBust(source.SignatureUri);
@@ -212,7 +228,6 @@ namespace DreamWeave.Launcher.Core.Manifests
                         byte[] sig = await _fetcher.GetBytesAsync(sigUri, ManifestSignature.MaxFileBytes, cancellationToken).ConfigureAwait(false);
                         byte[] manifest = await _fetcher.GetBytesAsync(manifestUri, MaxManifestBytes, cancellationToken).ConfigureAwait(false);
                         verified = _verifier.Verify(manifest, sig, floor);
-                        attempts.Add(new ManifestSourceAttempt(name, LauncherError.None, "Verified serial " + verified.Serial + "."));
                     }
                     catch (OperationCanceledException ex)
                     {
@@ -245,11 +260,24 @@ namespace DreamWeave.Launcher.Core.Manifests
 
                 if (verified != null)
                 {
+                    // Another load may have accepted a higher serial while this one was fetching.
+                    long current = Math.Max(floor, Interlocked.Read(ref _acceptedThisProcess));
+                    if (verified.Serial < current)
+                    {
+                        attempts.Add(new ManifestSourceAttempt(
+                            verifiedName,
+                            LauncherError.ManifestRollback,
+                            "Serial " + verified.Serial + " is older than serial " + current + ", accepted earlier in this session, so it was refused."));
+                        continue;
+                    }
+
+                    attempts.Add(new ManifestSourceAttempt(verifiedName, LauncherError.None, "Verified serial " + verified.Serial + "."));
                     Accept(verified, attempts);
                     return new ManifestLoadResult(verified, LauncherError.None, false, source.Name, attempts.AsReadOnly());
                 }
             }
 
+            floor = Math.Max(floor, Interlocked.Read(ref _acceptedThisProcess));
             VerifiedManifest cached = TryReadCache(floor, attempts);
             LauncherError status = sawNewerSchema ? LauncherError.ManifestSchemaUnsupported : LauncherError.ManifestUnavailable;
             return new ManifestLoadResult(cached, status, cached != null, cached != null ? "cache" : null, attempts.AsReadOnly());

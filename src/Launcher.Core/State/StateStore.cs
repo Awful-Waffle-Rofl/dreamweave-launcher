@@ -23,10 +23,13 @@ namespace DreamWeave.Launcher.Core.State
     /// <c>state.json.corrupt-&lt;utc ticks&gt;</c> and the store starts fresh.
     /// </para>
     /// <para>
-    /// Every call does synchronous file I/O and can WAIT (up to the lock timeout, 30 seconds by
-    /// default) for another launcher instance to release the lock file, so never call the
-    /// constructor, <see cref="Update"/> or <see cref="Open"/> on the UI thread; run them on a
-    /// background thread. A timed-out wait throws <see cref="LauncherError.StateLocked"/>.
+    /// Every member can block. The constructor, <see cref="Open"/> and <see cref="Update"/> do
+    /// synchronous file I/O and can WAIT (up to the lock timeout, 30 seconds by default) for
+    /// another launcher instance to release the lock file; <see cref="Read{T}"/>,
+    /// <see cref="HighestManifestSerial"/> and <see cref="InstallId"/> take the same in-process
+    /// lock an in-flight <see cref="Update"/> holds, so they can wait just as long. Call the store
+    /// (and <see cref="Manifests.ManifestProvider.LoadAsync"/>, which uses it) from background
+    /// threads only, never the UI thread. A timed-out wait throws <see cref="LauncherError.StateLocked"/>.
     /// </para>
     /// </summary>
     public sealed class StateStore
