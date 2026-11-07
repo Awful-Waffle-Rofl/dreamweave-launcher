@@ -32,7 +32,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
                     InactivityTimeout = inactivity ?? TimeSpan.FromSeconds(10),
                 };
                 Service = new DownloadService(Staging, Disk, new IDownloadTransport[] { new HttpTransport(DownloadFixtures.Client(), Options) });
-                Request = new DownloadRequest("ac-client", Transports.Http, Server.FileUri, expectedSize ?? content.Length, expectedSha ?? Hasher.ComputeSha256Hex(content), Path.Combine(Staging, "ac1install.exe"));
+                Request = new DownloadRequest("ac-client", Transports.Http, Server.FileUri, expectedSize ?? content.Length, expectedSha ?? Hasher.ComputeSha256Hex(content), Path.Combine(Staging, "ac-client", "ac1install.exe"));
             }
 
             public byte[] Content { get; }
@@ -68,7 +68,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
 
             public void SeedPart(byte[] bytes, string etag, string url, string sha, long size)
             {
-                Directory.CreateDirectory(Staging);
+                Directory.CreateDirectory(Path.GetDirectoryName(Request.DestinationPath));
                 File.WriteAllBytes(Request.PartPath, bytes);
                 File.WriteAllText(
                     Request.SidecarPath,
@@ -113,7 +113,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
             byte[] content = DownloadFixtures.Content(Size);
             using (var rig = new Rig((ctx, i) => Serve.FileAsync(ctx, content), content))
             {
-                Directory.CreateDirectory(rig.Staging);
+                Directory.CreateDirectory(Path.GetDirectoryName(rig.Request.DestinationPath));
                 File.WriteAllBytes(rig.Request.DestinationPath, content);
                 Assert.AreEqual(LauncherError.None, rig.Run());
                 Assert.IsTrue(rig.Result.AlreadyPresent);
@@ -497,7 +497,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 var paths = new AppPaths(dir.Path);
                 var component = new ManifestComponent { Id = "ac-client", Transport = Transports.Http, Url = "https://example.test/a.exe", Size = 3, Sha256 = new string('A', 64) };
                 DownloadRequest req = DownloadRequest.FromComponent(component, paths, "a.exe");
-                Assert.AreEqual(Path.Combine(paths.StagingDir, "a.exe"), req.DestinationPath);
+                Assert.AreEqual(Path.Combine(paths.StagingDir, "ac-client", "a.exe"), req.DestinationPath, "each component gets its own folder");
                 Assert.AreEqual("ac-client", req.StepId);
                 Assert.AreEqual(req.DestinationPath + ".part", req.PartPath);
                 Assert.AreEqual(req.DestinationPath + ".part.json", req.SidecarPath);
@@ -513,9 +513,61 @@ namespace DreamWeave.Launcher.Tests.Downloads
             byte[] content = DownloadFixtures.Content(16);
             using (var rig = new Rig((ctx, i) => Serve.FileAsync(ctx, content), content))
             {
-                var bad = new DownloadRequest("x", "ftp", rig.Server.FileUri, 16, Hasher.ComputeSha256Hex(content), Path.Combine(rig.Staging, "x.bin"));
+                var bad = new DownloadRequest("x", "ftp", rig.Server.FileUri, 16, Hasher.ComputeSha256Hex(content), Path.Combine(rig.Staging, "x", "x.bin"));
                 Assert.AreEqual(LauncherError.ManifestInvalid, DownloadFixtures.Run(() => rig.Service.DownloadAsync(bad, null, CancellationToken.None)));
                 Assert.AreEqual(0, rig.Server.Requests.Count);
+            }
+        }
+
+        [TestMethod]
+        public void RestartTruncatesPartBeforeSidecarWrite()
+        {
+            // A changed ETag forces a restart from zero. With the sidecar locked the sidecar write
+            // fails; by then the stale part must already be truncated, never left beside new metadata.
+            byte[] content = DownloadFixtures.Content(Size);
+            using (var rig = new Rig((ctx, i) => Serve.FileAsync(ctx, content, etag: "\"v2\""), content))
+            {
+                rig.SeedPart(DownloadFixtures.Content(Size / 2, seed: 99), "\"v1\"");
+                LauncherError error;
+                using (new FileStream(rig.Request.SidecarPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+                {
+                    error = rig.Run();
+                }
+
+                Assert.AreNotEqual(LauncherError.None, error, "the sidecar write must have failed");
+                Assert.IsTrue(File.Exists(rig.Request.PartPath));
+                Assert.AreEqual(0, new FileInfo(rig.Request.PartPath).Length, "part truncated before the sidecar write");
+                Assert.IsFalse(File.Exists(rig.Request.DestinationPath));
+            }
+        }
+
+        [TestMethod]
+        public void DestinationMustBeInItsComponentFolder()
+        {
+            byte[] content = DownloadFixtures.Content(16);
+            using (var rig = new Rig((ctx, i) => Serve.FileAsync(ctx, content), content))
+            {
+                string sha = Hasher.ComputeSha256Hex(content);
+                var flat = new DownloadRequest("ac-client", Transports.Http, rig.Server.FileUri, 16, sha, Path.Combine(rig.Staging, "a.exe"));
+                Assert.ThrowsExactly<ArgumentException>(() => rig.Service.DownloadAsync(flat, null, CancellationToken.None).GetAwaiter().GetResult());
+                var other = new DownloadRequest("ac-client", Transports.Http, rig.Server.FileUri, 16, sha, Path.Combine(rig.Staging, "eor-dats", "a.exe"));
+                Assert.ThrowsExactly<ArgumentException>(() => rig.Service.DownloadAsync(other, null, CancellationToken.None).GetAwaiter().GetResult());
+                Assert.AreEqual(0, rig.Server.Requests.Count);
+            }
+        }
+
+        [TestMethod]
+        public void UnsafeComponentId_IsManifestInvalid()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                foreach (string id in new[] { "..", ".", "a\\b", "a/b", "", " x", "x." })
+                {
+                    var component = new ManifestComponent { Id = id, Transport = Transports.Http, Url = "https://example.test/a.exe", Size = 3, Sha256 = new string('A', 64) };
+                    LauncherException ex = Assert.ThrowsExactly<LauncherException>(() => DownloadRequest.FromComponent(component, paths, "a.exe"), "id '" + id + "'");
+                    Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code);
+                }
             }
         }
 

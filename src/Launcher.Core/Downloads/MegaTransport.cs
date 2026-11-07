@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.IO;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -32,6 +34,11 @@ namespace DreamWeave.Launcher.Core.Downloads
         private readonly Func<IMegaClient> _clientFactory;
         private readonly MegaTransportOptions _options;
 
+        // Part paths whose last attempt was abandoned while its library read was still running.
+        // Instance state (not per call), so a cancel during a stall followed by an immediate new
+        // DownloadAsync still treats the held part as transient. Cleared once an attempt deletes the part.
+        private readonly ConcurrentDictionary<string, bool> _possiblyHeld = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Production constructor (MegaApiClient).</summary>
         public MegaTransport()
             : this(() => new MegaApiClientAdapter())
@@ -58,10 +65,10 @@ namespace DreamWeave.Launcher.Core.Downloads
         public async Task DownloadToPartAsync(DownloadRequest request, TransferProgress progress, CancellationToken cancellationToken)
         {
             int retriesUsed = 0;
-            bool previousAbandoned = false;
+            string key = Path.GetFullPath(request.PartPath);
             while (true)
             {
-                var attempt = new Attempt(previousAbandoned);
+                var attempt = new Attempt(_possiblyHeld.ContainsKey(key));
                 try
                 {
                     await AttemptAsync(request, progress, attempt, cancellationToken).ConfigureAwait(false);
@@ -89,10 +96,6 @@ namespace DreamWeave.Launcher.Core.Downloads
                 {
                     attempt.Detach();
                 }
-
-                // Sticky until an attempt gets past the part deletion: a library read abandoned two
-                // attempts ago can still be holding the file.
-                previousAbandoned = attempt.Abandoned || (previousAbandoned && !attempt.ClearedPart);
             }
         }
 
@@ -110,7 +113,8 @@ namespace DreamWeave.Launcher.Core.Downloads
                 PartFiles.Delete(request.PartPath, "clearing an old partial download");
             }
 
-            attempt.ClearedPart = true;
+            bool ignored;
+            _possiblyHeld.TryRemove(Path.GetFullPath(request.PartPath), out ignored);
             using (IMegaClient client = _clientFactory())
             {
                 await WithCancellation(client.LoginAnonymousAsync(), cancellationToken).ConfigureAwait(false);
@@ -158,7 +162,11 @@ namespace DreamWeave.Launcher.Core.Downloads
                             attempt.Detach();
                             linked.Cancel();
                             await Task.WhenAny(download, Task.Delay(_options.AbandonGrace)).ConfigureAwait(false);
-                            attempt.Abandoned = !download.IsCompleted;
+                            if (!download.IsCompleted)
+                            {
+                                _possiblyHeld[Path.GetFullPath(request.PartPath)] = true;
+                            }
+
                             Observe(download);
                             cancellationToken.ThrowIfCancellationRequested();
                             throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.");
@@ -186,10 +194,6 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
 
             public bool PreviousAbandoned { get; }
-
-            public bool Abandoned { get; set; }
-
-            public bool ClearedPart { get; set; }
 
             public void Report(TransferProgress progress, long bytes)
             {

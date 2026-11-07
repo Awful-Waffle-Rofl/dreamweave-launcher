@@ -63,7 +63,7 @@ namespace DreamWeave.Launcher.Core.Downloads
             IDownloadTransport transport = Validate(request);
             try
             {
-                EnsureStagingDir();
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(request.DestinationPath)));
 
                 DownloadResult existing = await TryExistingAsync(request, progress, cancellationToken).ConfigureAwait(false);
                 if (existing != null)
@@ -133,6 +133,14 @@ namespace DreamWeave.Launcher.Core.Downloads
                 throw new ArgumentException("Downloads must be saved inside the staging folder (" + _stagingDir + ").", nameof(request));
             }
 
+            // One folder per component (StagingDir\<StepId>\), so no other component's files can sit
+            // beside this one; the install executor refuses an installer with any DLL next to it.
+            string expectedFolder = Path.GetFullPath(DownloadRequest.ComponentFolder(_stagingDir, request.StepId));
+            if (!string.Equals(Path.GetDirectoryName(dest), expectedFolder, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("Downloads must be saved in their component's own staging folder (" + expectedFolder + ").", nameof(request));
+            }
+
             IDownloadTransport transport;
             if (request.Transport == null || !_transports.TryGetValue(request.Transport, out transport))
             {
@@ -140,11 +148,6 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
 
             return transport;
-        }
-
-        private void EnsureStagingDir()
-        {
-            Directory.CreateDirectory(_stagingDir);
         }
 
         private static async Task<DownloadResult> TryExistingAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)

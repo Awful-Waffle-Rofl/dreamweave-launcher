@@ -86,9 +86,10 @@ namespace DreamWeave.Launcher.Core.Downloads
 
             if (e is IOException io)
             {
-                // Only two IOException kinds are worth a retry: a network interruption (the
-                // connection stream wraps a SocketException/WebException) and a sharing violation
-                // (ERROR_SHARING_VIOLATION, 0x20: antivirus or a still-unwinding read holding the part).
+                // Only these IOException kinds are worth a retry: a network interruption (the
+                // connection stream wraps a SocketException/WebException), a sharing violation
+                // (ERROR_SHARING_VIOLATION, 0x20: antivirus or a still-unwinding read holding the part),
+                // and file-exists (below).
                 // Everything else (disk full, bad path, device errors) fails fast.
                 if (IsNetworkInterruption(io))
                 {
@@ -96,7 +97,10 @@ namespace DreamWeave.Launcher.Core.Downloads
                     return new LauncherException(LauncherError.NetworkUnavailable, "The connection to mega.nz was interrupted.", e);
                 }
 
-                transient = (io.HResult & 0xFFFF) == 0x20;
+                // 0x50 ERROR_FILE_EXISTS / 0xB7 ERROR_ALREADY_EXISTS: an abandoned earlier task
+                // re-created the part (CreateNew) between this attempt's delete and its own CreateNew.
+                int code = io.HResult & 0xFFFF;
+                transient = code == 0x20 || code == 0x50 || code == 0xB7;
                 return LauncherException.FromIo(e, "saving the download");
             }
 

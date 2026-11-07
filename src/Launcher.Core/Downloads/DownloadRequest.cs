@@ -53,7 +53,8 @@ namespace DreamWeave.Launcher.Core.Downloads
 
         /// <summary>
         /// Builds a request for a downloadable manifest component, saved as
-        /// <paramref name="fileName"/> inside <see cref="AppPaths.StagingDir"/>.
+        /// <paramref name="fileName"/> in that component's own folder,
+        /// <c>StagingDir\&lt;component id&gt;\</c> (see <see cref="ComponentFolder"/>).
         /// </summary>
         public static DownloadRequest FromComponent(ManifestComponent component, AppPaths paths, string fileName)
         {
@@ -78,7 +79,35 @@ namespace DreamWeave.Launcher.Core.Downloads
                 throw new LauncherException(LauncherError.ManifestInvalid, "The download address for '" + component.Id + "' is not valid.");
             }
 
-            return new DownloadRequest(component.Id, component.Transport, url, component.Size, component.Sha256, Path.Combine(paths.StagingDir, fileName));
+            return new DownloadRequest(component.Id, component.Transport, url, component.Size, component.Sha256, Path.Combine(ComponentFolder(paths.StagingDir, component.Id), fileName));
+        }
+
+        /// <summary>
+        /// The folder a component's download (and its <c>.part</c> and sidecar) lives in:
+        /// <c>&lt;stagingDir&gt;\&lt;componentId&gt;</c>. One folder per component means nothing another
+        /// component downloaded (for example a DLL) can ever sit beside an installer.
+        /// </summary>
+        /// <exception cref="LauncherException"><see cref="LauncherError.ManifestInvalid"/> when the id is not a safe folder name.</exception>
+        public static string ComponentFolder(string stagingDir, string componentId)
+        {
+            if (!IsSafeFolderName(componentId))
+            {
+                throw new LauncherException(LauncherError.ManifestInvalid, "The component id '" + componentId + "' cannot be used as a folder name.");
+            }
+
+            return Path.Combine(stagingDir, componentId);
+        }
+
+        /// <summary>True for a non-empty single path segment with no invalid characters, not <c>.</c> or <c>..</c>.</summary>
+        internal static bool IsSafeFolderName(string name)
+        {
+            return !string.IsNullOrWhiteSpace(name)
+                && name != "." && name != ".."
+                && name.Trim() == name
+                && !name.EndsWith(".", StringComparison.Ordinal)
+                && name.IndexOfAny(Path.GetInvalidFileNameChars()) < 0
+                && name.IndexOf(Path.DirectorySeparatorChar) < 0
+                && name.IndexOf(Path.AltDirectorySeparatorChar) < 0;
         }
     }
 }

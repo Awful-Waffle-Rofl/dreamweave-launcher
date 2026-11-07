@@ -70,6 +70,16 @@ namespace DreamWeave.Launcher.Tests.Downloads
         }
 
         [TestMethod]
+        public void FileExists_IsTransient()
+        {
+            bool transient;
+            Map(new IOException("already exists", unchecked((int)0x80070050)), out transient);
+            Assert.IsTrue(transient, "ERROR_FILE_EXISTS");
+            Map(new IOException("already exists", unchecked((int)0x800700B7)), out transient);
+            Assert.IsTrue(transient, "ERROR_ALREADY_EXISTS");
+        }
+
+        [TestMethod]
         public void DiskFullIOException_IsDiskFull_NotTransient()
         {
             bool transient;

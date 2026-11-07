@@ -10,6 +10,12 @@ namespace DreamWeave.Launcher.Core.Downloads
     /// emitted at most once per <see cref="ReportInterval"/>, plus an unconditional one from
     /// <see cref="Complete"/>. <see cref="Report"/> and <see cref="Complete"/> are serialised by a
     /// lock, so a late callback from another thread cannot interleave with them.
+    /// <para>
+    /// The sink is invoked INSIDE that lock, on whatever thread the transport reports from, so it
+    /// must return quickly and never block or wait on the UI thread. UI code should pass a
+    /// <see cref="Progress{T}"/> created on the UI thread, which posts each report to the UI's
+    /// synchronization context instead of running it inline.
+    /// </para>
     /// </summary>
     public sealed class TransferProgress
     {

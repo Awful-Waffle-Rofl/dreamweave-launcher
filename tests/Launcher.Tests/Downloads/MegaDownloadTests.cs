@@ -262,6 +262,48 @@ namespace DreamWeave.Launcher.Tests.Downloads
         }
 
         [TestMethod]
+        public void CancelDuringStall_ThenImmediateNewDownload_TreatsHeldPartAsTransient()
+        {
+            byte[] content = DownloadFixtures.Content(Size);
+            var waits = new List<TimeSpan>();
+            using (var release = new ManualResetEventSlim(false))
+            using (var cts = new CancellationTokenSource())
+            {
+                var options = new MegaTransportOptions
+                {
+                    InactivityTimeout = TimeSpan.FromSeconds(30),
+                    AbandonGrace = TimeSpan.FromMilliseconds(50),
+                    Retry = new RetryPolicy
+                    {
+                        Delay = (d, ct) =>
+                        {
+                            lock (waits)
+                            {
+                                waits.Add(d);
+                            }
+
+                            release.Set();
+                            return Task.Delay(300, ct);
+                        },
+                    },
+                };
+                using (var rig = new Rig(content, i => i == 0 ? (IMegaClient)new StallingMegaClient(content, release, TimeSpan.Zero) : new FakeMegaClient(i, content), options))
+                {
+                    cts.CancelAfter(400);
+                    Assert.AreEqual(LauncherError.Cancelled, rig.Run(cts.Token));
+                    Assert.IsTrue(File.Exists(rig.Request.PartPath), "precondition: the abandoned read still holds the part");
+                    Assert.AreEqual(0, waits.Count);
+
+                    // A new DownloadAsync on the same service, while the stalled read still holds the file.
+                    Assert.AreEqual(LauncherError.None, rig.Run(), "the held part is transient on a fresh call, not Unknown");
+                    Assert.AreEqual(1, waits.Count, "one back-off while the old read unwound");
+                    Assert.AreEqual(2, rig.Clients.Count, "the held attempt fails before creating a client");
+                    CollectionAssert.AreEqual(content, File.ReadAllBytes(rig.Request.DestinationPath));
+                }
+            }
+        }
+
+        [TestMethod]
         public void Cancellation_DeletesPart_AndReportsCancelled()
         {
             byte[] content = DownloadFixtures.Content(Size);
@@ -299,7 +341,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
                     },
                     options ?? new MegaTransportOptions { Retry = DownloadFixtures.InstantRetry(Waits) });
                 Service = new DownloadService(Staging, new FakeDiskSpace(long.MaxValue), new IDownloadTransport[] { transport });
-                Request = new DownloadRequest("eor-dats", Transports.Mega, new Uri("https://mega.nz/file/abc#key"), content.Length, Hasher.ComputeSha256Hex(content), Path.Combine(Staging, "ac-updates.zip"));
+                Request = new DownloadRequest("eor-dats", Transports.Mega, new Uri("https://mega.nz/file/abc#key"), content.Length, Hasher.ComputeSha256Hex(content), Path.Combine(Staging, "eor-dats", "ac-updates.zip"));
             }
 
             public byte[] Content { get; }
