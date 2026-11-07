@@ -74,5 +74,60 @@ namespace DreamWeave.Launcher.Tests.Telemetry
             Assert.IsNotNull(TelemetryEndpoint.Validate("http://127.0.0.1:5000/e", "play.example.test", null, true));
             Assert.IsNull(TelemetryEndpoint.Validate("http://example.test/e", "play.example.test", null, true));
         }
+
+        [TestMethod]
+        public void ReviewProbeUrls_NeverResolveOutsideTheServerDomain()
+        {
+            const string srv = "play.acdreamweave.com";
+            foreach (string e in new[]
+            {
+                "https://evil.com.acdreamweave.com.attacker.net/e", "https://acdreamweave.com.evil.tld/e",
+                "https://ACDREAMWEAVE.COM/e", "https://www.acdreamweave.com./e", "https://www.acdreamweave.com.:443/e",
+                "https://www.acdr\u0435amweave.com/e", "https://www.xn--acdreamweave-x.com/e", "https://xn--acdreamweave.com/e",
+                "https://www.acdreamweave.com\\@evil.com/e", "https://evil.com#@www.acdreamweave.com/e", "https://www.acdreamweave.com:443/e",
+                "https://www.acdreamweave.com/e?", "https://%61cdreamweave.com/e", "https://a.b.acdreamweave.com/e",
+            })
+            {
+                Uri u = TelemetryEndpoint.Validate(e, srv, null);
+                if (u != null)
+                {
+                    string host = u.IdnHost;
+                    Assert.IsTrue(host == "acdreamweave.com" || host.EndsWith(".acdreamweave.com", StringComparison.Ordinal), e + " resolved to " + host);
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TrailingDot_Punycode_AndCase()
+        {
+            const string srv = "play.acdreamweave.com";
+            Assert.IsNull(TelemetryEndpoint.Validate("https://www.acdreamweave.com./e", srv, null), "trailing dot on the endpoint is refused");
+            Assert.IsNull(TelemetryEndpoint.Validate("https://www.xn--acdreamweave-x.com/e", srv, null));
+            Assert.IsNull(TelemetryEndpoint.Validate("https://www.acdr\u0435amweave.com/e", srv, null), "cyrillic look-alike");
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://ACDREAMWEAVE.COM/e", srv, null));
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://www.acdreamweave.com/e", "PLAY.ACDREAMWEAVE.COM", null), "upper-case server host");
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://www.acdreamweave.com/e", "play.acdreamweave.com.", null), "trailing dot on the server host is trimmed");
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://www.acdreamweave.com/e", "play.acdreamweave.com:9000", null));
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://www.b\u00fccher.example/e", "play.b\u00fccher.example", null), "an IDN host matches itself in punycode form");
+        }
+
+        [TestMethod]
+        public void SharedHostingDomains_NeverMatchByDomain_ButCanBeAllowListed()
+        {
+            Assert.IsNull(TelemetryEndpoint.Validate("https://x.duckdns.org/e", "mine.duckdns.org", null));
+            Assert.IsNull(TelemetryEndpoint.Validate("https://x.github.io/e", "mine.github.io", null));
+            Assert.IsNull(TelemetryEndpoint.Validate("https://x.herokuapp.com/e", "mine.herokuapp.com", null));
+            Assert.IsNull(TelemetryEndpoint.Validate("https://x.ddns.net/e", "mine.ddns.net", null));
+            Assert.IsNull(TelemetryEndpoint.Validate("https://x.no-ip.org/e", "mine.no-ip.org", null));
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://x.duckdns.org/e", "mine.duckdns.org", new[] { "x.duckdns.org" }));
+        }
+
+        [TestMethod]
+        public void MoreTwoPartSuffixes_AreHandled()
+        {
+            Assert.IsNull(TelemetryEndpoint.Validate("https://evil.com.ng/e", "play.my.com.ng", null));
+            Assert.IsNotNull(TelemetryEndpoint.Validate("https://www.my.com.ng/e", "play.my.com.ng", null));
+            Assert.IsNull(TelemetryEndpoint.Validate("https://www.other.com.ph/e", "play.my.com.ph", null));
+        }
     }
 }

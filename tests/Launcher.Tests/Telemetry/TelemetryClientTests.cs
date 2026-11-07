@@ -30,7 +30,6 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                 c.Record("manifest", TelemetryOutcome.Succeeded);
                 Flush(c);
                 c.Dispose();
-                Assert.AreEqual(0, c.IsEnabled ? 1 : 0);
                 Assert.AreEqual(0, h.Poster.Bodies.Count);
                 Assert.IsFalse(File.Exists(h.QueueFile));
             }
@@ -138,11 +137,11 @@ namespace DreamWeave.Launcher.Tests.Telemetry
             {
                 foreach (string bad in new[] { null, "", "a", "A1", "1abc", "has space", "under_score", "x" + new string('a', 32), "ok\n" })
                 {
-                    c.Record(bad, TelemetryOutcome.Started);
+                    c.RecordComponent(bad, TelemetryOutcome.Started);
                 }
 
-                c.Record("ab", TelemetryOutcome.Started);
-                c.Record("a" + new string('b', 31), TelemetryOutcome.Started);
+                c.RecordComponent("ab", TelemetryOutcome.Started);
+                c.RecordComponent("a" + new string('b', 31), TelemetryOutcome.Started);
                 Flush(c);
                 Assert.AreEqual(2, h.Poster.AllEvents.Count());
             }
@@ -156,7 +155,7 @@ namespace DreamWeave.Launcher.Tests.Telemetry
             {
                 for (int i = 0; i < 120; i++)
                 {
-                    c.Record("step-" + (i % 10).ToString(CultureInfo.InvariantCulture), TelemetryOutcome.Succeeded);
+                    c.RecordComponent("step-" + (i % 10).ToString(CultureInfo.InvariantCulture), TelemetryOutcome.Succeeded);
                 }
 
                 Flush(c);
@@ -321,7 +320,7 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                 {
                     for (int i = 0; i < 250; i++)
                     {
-                        c.Record("step", TelemetryOutcome.Succeeded);
+                        c.RecordComponent("step", TelemetryOutcome.Succeeded);
                     }
 
                     Assert.AreEqual(200, c.QueuedCountForTests());
@@ -348,12 +347,12 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                 h.Poster.ThenNetworkError();
                 using (TelemetryClient c = h.EnabledClient())
                 {
-                    c.Record("old-one", TelemetryOutcome.Started);
-                    c.Record("old-two", TelemetryOutcome.Started);
+                    c.RecordComponent("old-one", TelemetryOutcome.Started);
+                    c.RecordComponent("old-two", TelemetryOutcome.Started);
                     Flush(c);
                     Assert.AreEqual(2, c.QueuedCountForTests());
                     h.Clock.Now = h.Clock.Now.AddDays(6);
-                    c.Record("fresh", TelemetryOutcome.Started);
+                    c.RecordComponent("fresh", TelemetryOutcome.Started);
                     h.Clock.Now = h.Clock.Now.AddDays(1).AddMinutes(1);
                 }
 

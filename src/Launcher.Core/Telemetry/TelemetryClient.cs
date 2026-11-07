@@ -90,6 +90,13 @@ namespace DreamWeave.Launcher.Core.Telemetry
         private Task _worker;
         private bool _disposed;
         private DateTime _notBeforeUtc = DateTime.MinValue;
+        private DateTime _serverDisabledUntilUtc = DateTime.MinValue;
+
+        // Bumped (under _gate) by every opt-out. A batch remembers the generation and install id it was
+        // taken under; it is posted only while both are still current. _installId is the id sent on the
+        // wire: loaded from the store on Configure / opt-in and replaced by the opt-out itself.
+        private int _optOutGeneration;
+        private Guid _installId;
 
         /// <summary>Creates a client for production use. It is OFF until <see cref="ConfigureAsync"/> is called.</summary>
         /// <param name="paths">Where the queue file lives (<see cref="AppPaths.DataDir"/>).</param>
@@ -133,6 +140,9 @@ namespace DreamWeave.Launcher.Core.Telemetry
             }
         }
 
+        /// <summary>UTC time before which the worker will not send again (test hook).</summary>
+        internal DateTime NotBeforeUtc => _notBeforeUtc;
+
         /// <summary>Number of events currently queued (for diagnostics and tests).</summary>
         internal int QueuedCount
         {
@@ -149,11 +159,31 @@ namespace DreamWeave.Launcher.Core.Telemetry
         /// Queues one event. Returns immediately, never blocks on disk or network and never throws.
         /// A no-op unless telemetry is enabled; an event with an invalid step is dropped.
         /// </summary>
-        /// <param name="step">Step id, <c>^[a-z][a-z0-9-]{1,31}$</c> (for example <c>manifest</c> or a component id).</param>
+        /// <param name="step">One of the fixed step ids in <see cref="TelemetrySteps"/>; any other value is dropped. For a manifest component use <see cref="RecordComponent"/>.</param>
         /// <param name="outcome">How the step ended.</param>
         /// <param name="error">The failure classification; its numeric value is sent. Use <see cref="LauncherError.None"/> when there is none.</param>
         /// <param name="duration">How long the step took, or null if not measured.</param>
         public void Record(string step, TelemetryOutcome outcome, LauncherError error = LauncherError.None, TimeSpan? duration = null)
+        {
+            if (!TelemetrySteps.IsKnown(step))
+            {
+                return;
+            }
+
+            RecordCore(step, outcome, error, duration);
+        }
+
+        /// <summary>
+        /// As <see cref="Record"/> for a manifest component id (for example <c>ac-client</c>), which is
+        /// manifest-defined and so not in <see cref="TelemetrySteps"/>. The id must still match
+        /// <c>^[a-z][a-z0-9-]{1,31}$</c> or the event is dropped.
+        /// </summary>
+        public void RecordComponent(string componentId, TelemetryOutcome outcome, LauncherError error = LauncherError.None, TimeSpan? duration = null)
+        {
+            RecordCore(componentId, outcome, error, duration);
+        }
+
+        private void RecordCore(string step, TelemetryOutcome outcome, LauncherError error, TimeSpan? duration)
         {
             try
             {
@@ -219,12 +249,30 @@ namespace DreamWeave.Launcher.Core.Telemetry
             string endpoint = manifest?.Telemetry?.Endpoint;
             string serverHost = manifest?.Server?.Host;
             Uri validated = TelemetryEndpoint.Validate(endpoint, serverHost, _allowedHosts, _options.AllowLoopbackHttp);
+            Guid id = optIn ? _store.InstallId : Guid.Empty;
             lock (_ioGate)
             {
                 lock (_gate)
                 {
                     _optIn = optIn;
                     _endpoint = validated;
+                    if (optIn)
+                    {
+                        _installId = id;
+                    }
+                    else
+                    {
+                        _optOutGeneration++;
+                        _queue.Clear();
+                        _loaded = false;
+                    }
+                }
+
+                if (!optIn)
+                {
+                    // Opted out: a queue file left by an earlier run must not linger.
+                    DeleteQueueFilesWithRetry();
+                    return;
                 }
 
                 if (IsEnabled)
@@ -257,32 +305,57 @@ namespace DreamWeave.Launcher.Core.Telemetry
         {
             if (!optIn)
             {
+                Guid newId = Guid.NewGuid();
                 lock (_ioGate)
                 {
                     lock (_gate)
                     {
                         _optIn = false;
+                        _optOutGeneration++;
+                        _installId = newId;
                         _queue.Clear();
                         _loaded = false;
                     }
 
-                    DeleteQueueFiles();
+                    DeleteQueueFilesWithRetry();
                 }
 
                 _store.Update(s =>
                 {
                     s.TelemetryOptIn = false;
-                    s.InstallId = Guid.NewGuid();
+                    s.InstallId = newId;
                 });
                 return;
             }
 
-            _store.Update(s => s.TelemetryOptIn = true);
+            bool wasOptedIn = false;
+            _store.Update(s =>
+            {
+                wasOptedIn = s.TelemetryOptIn;
+                s.TelemetryOptIn = true;
+            });
+            Guid currentId = _store.InstallId;
             lock (_ioGate)
             {
                 lock (_gate)
                 {
                     _optIn = true;
+                    _installId = currentId;
+                }
+
+                if (!wasOptedIn)
+                {
+                    // Turning on after being off: whatever queue file exists is stale or foreign; discard it.
+                    lock (_gate)
+                    {
+                        _queue.Clear();
+                    }
+
+                    DeleteQueueFilesWithRetry();
+                    lock (_gate)
+                    {
+                        _loaded = true;
+                    }
                 }
 
                 if (IsEnabled)
@@ -296,6 +369,9 @@ namespace DreamWeave.Launcher.Core.Telemetry
         /// <summary>
         /// Sends everything that is queued now (no debounce), and persists the result. For app exit and
         /// tests; the background flusher does the same after a short delay. Honours the same retry rules.
+        /// Callers MUST pass a bounded token (for example a few seconds at app exit): a hung server would
+        /// otherwise be waited on for the poster's timeout and any Retry-After. Cancelling the token
+        /// surfaces as <see cref="OperationCanceledException"/>; the queue stays on disk.
         /// </summary>
         public async Task FlushNowAsync(CancellationToken cancellationToken)
         {
@@ -400,15 +476,19 @@ namespace DreamWeave.Launcher.Core.Telemetry
                     token.ThrowIfCancellationRequested();
                     List<TelemetryEvent> batch;
                     Uri endpoint;
+                    int generation;
+                    Guid installId;
                     lock (_gate)
                     {
-                        if (!IsEnabledLocked())
+                        if (!IsEnabledLocked() || _clock.UtcNow < _serverDisabledUntilUtc)
                         {
                             return;
                         }
 
                         TrimLocked(_clock.UtcNow);
                         endpoint = _endpoint;
+                        generation = _optOutGeneration;
+                        installId = _installId;
                         batch = TakeBatchLocked();
                     }
 
@@ -427,9 +507,13 @@ namespace DreamWeave.Launcher.Core.Telemetry
                     BatchResult result;
                     try
                     {
-                        result = await SendBatchAsync(endpoint, batch, token).ConfigureAwait(false);
+                        result = await SendBatchAsync(endpoint, batch, generation, installId, token).ConfigureAwait(false);
                     }
-                    catch (LauncherException ex) when (ex.Code != LauncherError.Cancelled)
+                    catch (LauncherException ex) when (ex.Code == LauncherError.Cancelled)
+                    {
+                        throw new OperationCanceledException(ex.Message, ex, token);
+                    }
+                    catch (LauncherException ex)
                     {
                         // Network trouble: keep the events, pause, and stop this cycle.
                         _notBeforeUtc = _clock.UtcNow + _options.FailureCooldown;
@@ -481,9 +565,8 @@ namespace DreamWeave.Launcher.Core.Telemetry
             return batch;
         }
 
-        private async Task<BatchResult> SendBatchAsync(Uri endpoint, List<TelemetryEvent> batch, CancellationToken token)
+        private async Task<BatchResult> SendBatchAsync(Uri endpoint, List<TelemetryEvent> batch, int generation, Guid installId, CancellationToken token)
         {
-            Guid installId = _store.InstallId;
             byte[] body = BuildBody(installId, batch);
             while (body.Length > MaxBodyBytes && batch.Count > 1)
             {
@@ -498,6 +581,16 @@ namespace DreamWeave.Launcher.Core.Telemetry
 
             for (int attempt = 0; ; attempt++)
             {
+                lock (_gate)
+                {
+                    // Re-checked before EVERY post, retries included: an opt-out since the batch was taken
+                    // means it must not leave, and must never carry the new install id.
+                    if (!IsEnabledLocked() || _optOutGeneration != generation)
+                    {
+                        return BatchResult.Keep;
+                    }
+                }
+
                 HttpPostResult result = await _poster.PostJsonAsync(endpoint, body, token).ConfigureAwait(false);
                 if (result.IsSuccess)
                 {
@@ -508,6 +601,14 @@ namespace DreamWeave.Launcher.Core.Telemetry
                 {
                     // 400, 413, 415, other 4xx/5xx and redirects (never followed): drop, never retry.
                     return BatchResult.Dropped;
+                }
+
+                if (result.Status == 503 && result.Code == "disabled")
+                {
+                    // The server has no storage configured: nothing a retry can fix. Stay quiet for the process.
+                    _serverDisabledUntilUtc = _clock.UtcNow + _options.ServerDisabledPause;
+                    _notBeforeUtc = _serverDisabledUntilUtc;
+                    return BatchResult.Keep;
                 }
 
                 TimeSpan wait = result.RetryAfter ?? _options.DefaultRetryAfter;
@@ -657,7 +758,7 @@ namespace DreamWeave.Launcher.Core.Telemetry
         }
 
         /// <summary>Deletes the queue file and any leftover temp siblings. Caller holds <c>_ioGate</c>.</summary>
-        private void DeleteQueueFiles()
+        private bool DeleteQueueFiles()
         {
             try
             {
@@ -669,11 +770,23 @@ namespace DreamWeave.Launcher.Core.Telemetry
                         File.Delete(f);
                     }
                 }
+
+                return true;
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
             {
-                // A locked file is retried by nothing; the in-memory queue is already empty and
-                // the file is ignored once telemetry is off. Surface nothing: opt-out must not fail.
+                // Opt-out must not fail; the caller retries once and then gives up.
+                return false;
+            }
+        }
+
+        /// <summary>Deletes the queue files, trying a second time after a short pause if the first attempt failed. Caller holds <c>_ioGate</c>.</summary>
+        private void DeleteQueueFilesWithRetry()
+        {
+            if (!DeleteQueueFiles())
+            {
+                Thread.Sleep(50);
+                DeleteQueueFiles();
             }
         }
 
@@ -758,6 +871,9 @@ namespace DreamWeave.Launcher.Core.Telemetry
 
         /// <summary>Pause after a network failure.</summary>
         public TimeSpan FailureCooldown { get; set; } = TimeSpan.FromSeconds(60);
+
+        /// <summary>How long to stay silent after the server answers 503 <c>disabled</c>.</summary>
+        public TimeSpan ServerDisabledPause { get; set; } = TimeSpan.FromHours(6);
 
         /// <summary>False in tests that drive flushing by hand.</summary>
         public bool StartFlusher { get; set; } = true;

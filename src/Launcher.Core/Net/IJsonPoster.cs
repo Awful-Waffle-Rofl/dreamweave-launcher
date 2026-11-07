@@ -8,11 +8,18 @@ namespace DreamWeave.Launcher.Core.Net
     public sealed class HttpPostResult
     {
         /// <summary>Creates a result.</summary>
-        public HttpPostResult(int status, TimeSpan? retryAfter)
+        public HttpPostResult(int status, TimeSpan? retryAfter, string code = null)
         {
             Status = status;
             RetryAfter = retryAfter;
+            Code = code;
         }
+
+        /// <summary>
+        /// The contract's <c>code</c> from a 503 body (for example <c>disabled</c> or <c>busy</c>), read from at most
+        /// <see cref="JsonPoster.MaxErrorBodyBytes"/> bytes and only for 503; null otherwise or when not parseable.
+        /// </summary>
+        public string Code { get; }
 
         /// <summary>The HTTP status code.</summary>
         public int Status { get; }

@@ -23,6 +23,9 @@ namespace DreamWeave.Launcher.Tests.Telemetry
 
         public List<TimeSpan> Delays { get; } = new List<TimeSpan>();
 
+        /// <summary>Invoked (once, then cleared) inside the next delay, on the delaying thread.</summary>
+        public Action OnDelay { get; set; }
+
         public DateTime UtcNow
         {
             get
@@ -42,6 +45,13 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                 Now = Now + delay;
             }
 
+            Action hook = OnDelay;
+            if (hook != null)
+            {
+                OnDelay = null;
+                hook();
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(0);
         }
@@ -59,9 +69,9 @@ namespace DreamWeave.Launcher.Tests.Telemetry
 
         public List<Uri> Uris { get; } = new List<Uri>();
 
-        public FakePoster Then(int status, TimeSpan? retryAfter = null)
+        public FakePoster Then(int status, TimeSpan? retryAfter = null, string code = null)
         {
-            _script.Enqueue(new HttpPostResult(status, retryAfter));
+            _script.Enqueue(new HttpPostResult(status, retryAfter, code));
             return this;
         }
 
@@ -127,9 +137,9 @@ namespace DreamWeave.Launcher.Tests.Telemetry
         }
 
         /// <summary>A client with the flusher OFF (tests drive <see cref="TelemetryClient.FlushNowAsync"/>).</summary>
-        public TelemetryClient NewClient(IJsonPoster poster = null, bool startFlusher = false, bool loopback = false)
+        public TelemetryClient NewClient(IJsonPoster poster = null, bool startFlusher = false, bool loopback = false, Action<TelemetryOptions> tweak = null, StateStore store = null)
         {
-            return new TelemetryClient(Paths, Store, null, new TelemetryOptions
+            var options = new TelemetryOptions
             {
                 Poster = poster ?? Poster,
                 Clock = Clock,
@@ -139,7 +149,9 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                 AllowLoopbackHttp = loopback,
                 Debounce = TimeSpan.Zero,
                 MinRequestInterval = TimeSpan.Zero,
-            });
+            };
+            tweak?.Invoke(options);
+            return new TelemetryClient(Paths, store ?? Store, null, options);
         }
 
         /// <summary>A configured, enabled client (opt-in persisted and applied, valid endpoint).</summary>

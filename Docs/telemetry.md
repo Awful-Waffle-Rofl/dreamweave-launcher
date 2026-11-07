@@ -56,6 +56,7 @@ no headers. Daily files are deleted after 90 days.
   later, in batches, with at least a few seconds between requests.
 - If the server answers 429 (too many requests) or 503 (busy) the launcher waits for the server's `Retry-After` time
   and tries that batch **once more**; if it is still refused the events stay queued for a later start.
+- A 503 whose body says disabled (the server has no storage configured) is not retried at all, and the launcher stays quiet for the rest of that run (the events stay queued).
 - Any other answer (for example 400, 413, 415) means the batch is dropped and not retried.
 - If the network is unreachable the events stay queued and sending pauses for a minute.
 - The launcher never retries in a loop, and a telemetry failure never delays or fails a launch.

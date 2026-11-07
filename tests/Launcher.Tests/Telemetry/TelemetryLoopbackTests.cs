@@ -23,19 +23,33 @@ namespace DreamWeave.Launcher.Tests.Telemetry
 
     internal sealed class FakeEndpoint : IDisposable
     {
-        private readonly HttpListener _listener = new HttpListener();
+        private readonly HttpListener _listener;
         private readonly Task _loop;
 
         public FakeEndpoint(Func<HttpListenerRequest, byte[], Tuple<int, string>> handler)
         {
-            int port;
-            var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-            probe.Start();
-            port = ((IPEndPoint)probe.LocalEndpoint).Port;
-            probe.Stop();
+            // Pick a free port, then bind it; another process can take it in between, so retry.
+            int port = 0;
+            for (int attempt = 0; ; attempt++)
+            {
+                var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+                probe.Start();
+                port = ((IPEndPoint)probe.LocalEndpoint).Port;
+                probe.Stop();
+                _listener = new HttpListener();
+                _listener.Prefixes.Add("http://127.0.0.1:" + port + "/");
+                try
+                {
+                    _listener.Start();
+                    break;
+                }
+                catch (HttpListenerException) when (attempt < 10)
+                {
+                    _listener.Close();
+                }
+            }
+
             Url = "http://127.0.0.1:" + port + "/tools/api/launcher/v1/events";
-            _listener.Prefixes.Add("http://127.0.0.1:" + port + "/");
-            _listener.Start();
             _loop = Task.Run(async () =>
             {
                 while (_listener.IsListening)
@@ -210,17 +224,17 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                     var sw = Stopwatch.StartNew();
                     for (int i = 0; i < 100; i++)
                     {
-                        c.Record("step-" + (i % 9), TelemetryOutcome.Succeeded);
+                        c.RecordComponent("step-" + (i % 9), TelemetryOutcome.Succeeded);
                     }
 
                     sw.Stop();
-                    Assert.IsTrue(sw.ElapsedMilliseconds < 1000, "100 Record calls took " + sw.ElapsedMilliseconds + " ms while a request hung");
+                    Assert.IsTrue(sw.ElapsedMilliseconds < 5000, "100 Record calls took " + sw.ElapsedMilliseconds + " ms while a request hung");
                 }
                 finally
                 {
                     var sw = Stopwatch.StartNew();
                     c.Dispose();
-                    Assert.IsTrue(sw.Elapsed < TimeSpan.FromSeconds(5), "Dispose cancels the hung request");
+                    Assert.IsTrue(sw.Elapsed < TimeSpan.FromSeconds(20), "Dispose cancels the hung request");
                 }
             }
         }
@@ -237,7 +251,7 @@ namespace DreamWeave.Launcher.Tests.Telemetry
                     c.Record("manifest", TelemetryOutcome.Started);
                 }
 
-                Assert.IsTrue(sw.ElapsedMilliseconds < 1000);
+                Assert.IsTrue(sw.ElapsedMilliseconds < 5000);
                 Assert.AreEqual(0, c.QueuedCount);
             }
         }

@@ -19,7 +19,9 @@ namespace DreamWeave.Launcher.Core.Telemetry
     /// The registrable domain is an APPROXIMATION without a public-suffix list: the last two DNS
     /// labels, or the last three when the last two form one of the common two-part suffixes in
     /// <see cref="TwoPartSuffixes"/> (for example <c>co.uk</c>). A server host that is an IP
-    /// address has no registrable domain, so then only the allow list can authorise an endpoint.
+    /// address, or one under a shared-hosting / dynamic-DNS domain (<see cref="SharedHostingDomains"/>, for
+    /// example <c>duckdns.org</c>), has no usable registrable domain, so then only the allow list can authorise an
+    /// endpoint. Both lists are hand-kept and incomplete; add to them when a case is found.
     /// </para>
     /// </summary>
     public static class TelemetryEndpoint
@@ -30,6 +32,23 @@ namespace DreamWeave.Launcher.Core.Telemetry
             "com.au", "net.au", "org.au", "co.nz", "org.nz",
             "co.jp", "ne.jp", "or.jp", "com.br", "com.mx",
             "co.za", "co.in", "com.cn", "com.tr", "com.sg",
+            "com.ng", "org.ng", "com.ph", "com.my", "com.hk", "com.tw", "com.ar", "com.co", "com.pe",
+            "com.ua", "com.vn", "com.pk", "com.eg", "com.sa", "co.il", "co.kr", "co.id", "co.th",
+            "org.in", "net.in", "gov.au", "edu.au", "gov.in", "ac.nz", "net.nz", "com.pl", "com.ru",
+        };
+
+        /// <summary>
+        /// Shared-hosting and dynamic-DNS domains: anyone can register a name under them, so "same
+        /// registrable domain" proves nothing. A server or endpoint host under one of these never
+        /// matches by domain; only the explicit allow list can authorise it.
+        /// </summary>
+        private static readonly HashSet<string> SharedHostingDomains = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "duckdns.org", "no-ip.org", "no-ip.com", "no-ip.biz", "ddns.net", "dyndns.org", "dyndns.com", "hopto.org",
+            "zapto.org", "myftp.org", "servegame.com", "freeddns.org", "github.io", "githubusercontent.com", "herokuapp.com",
+            "azurewebsites.net", "pages.dev", "workers.dev", "netlify.app", "vercel.app", "onrender.com", "fly.dev",
+            "glitch.me", "web.app", "firebaseapp.com", "blogspot.com", "appspot.com", "cloudfront.net", "amazonaws.com",
+            "trycloudflare.com", "ngrok.io", "ngrok-free.app", "000webhostapp.com",
         };
 
         /// <summary>
@@ -57,6 +76,12 @@ namespace DreamWeave.Launcher.Core.Telemetry
             }
 
             string host = uri.IdnHost.ToLowerInvariant();
+            if (host.EndsWith(".", StringComparison.Ordinal))
+            {
+                // A fully-qualified trailing dot is a different spelling of the same name; refuse rather than normalise.
+                return null;
+            }
+
             if (allowLoopbackHttp && uri.Scheme == Uri.UriSchemeHttp && IPAddress.TryParse(host, out IPAddress ip) && IPAddress.IsLoopback(ip))
             {
                 return uri;
@@ -114,7 +139,8 @@ namespace DreamWeave.Launcher.Core.Telemetry
                 take = 3;
             }
 
-            return string.Join(".", labels, labels.Length - take, take);
+            string domain = string.Join(".", labels, labels.Length - take, take);
+            return SharedHostingDomains.Contains(domain) ? null : domain;
         }
     }
 }

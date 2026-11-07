@@ -3,6 +3,8 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
+using Newtonsoft.Json.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -19,6 +21,9 @@ namespace DreamWeave.Launcher.Core.Net
     {
         /// <summary>Default overall timeout for one POST.</summary>
         public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(15);
+
+        /// <summary>Most bytes read from a 503 response body (to learn its <c>code</c>); no other body is ever read.</summary>
+        public const int MaxErrorBodyBytes = 1024;
 
         private readonly HttpClient _client;
         private readonly TimeSpan _timeout;
@@ -74,7 +79,8 @@ namespace DreamWeave.Launcher.Core.Net
                     using (var content = new ByteArrayContent(body))
                     {
                         content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-                        using (HttpResponseMessage response = await _client.PostAsync(uri, content, cts.Token).ConfigureAwait(false))
+                        using (var request = new HttpRequestMessage(HttpMethod.Post, uri) { Content = content })
+                        using (HttpResponseMessage response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false))
                         {
                             TimeSpan? retryAfter = null;
                             RetryConditionHeaderValue header = response.Headers.RetryAfter;
@@ -95,7 +101,13 @@ namespace DreamWeave.Launcher.Core.Net
                                 retryAfter = TimeSpan.Zero;
                             }
 
-                            return new HttpPostResult((int)response.StatusCode, retryAfter);
+                            string code = null;
+                            if ((int)response.StatusCode == 503)
+                            {
+                                code = await ReadCodeAsync(response, cts.Token).ConfigureAwait(false);
+                            }
+
+                            return new HttpPostResult((int)response.StatusCode, retryAfter, code);
                         }
                     }
                 }
@@ -116,6 +128,41 @@ namespace DreamWeave.Launcher.Core.Net
                 {
                     throw new LauncherException(LauncherError.NetworkUnavailable, "The connection to " + uri.Host + " was interrupted.", ex);
                 }
+            }
+        }
+
+        /// <summary>Reads at most <see cref="MaxErrorBodyBytes"/> bytes and returns the JSON <c>code</c> if it is a short lower-case token.</summary>
+        private static async Task<string> ReadCodeAsync(HttpResponseMessage response, CancellationToken token)
+        {
+            try
+            {
+                using (Stream s = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                {
+                    var buffer = new byte[MaxErrorBodyBytes];
+                    int total = 0;
+                    while (total < buffer.Length)
+                    {
+                        int n = await s.ReadAsync(buffer, total, buffer.Length - total, token).ConfigureAwait(false);
+                        if (n <= 0)
+                        {
+                            break;
+                        }
+
+                        total += n;
+                    }
+
+                    JObject o = JObject.Parse(Encoding.UTF8.GetString(buffer, 0, total));
+                    string code = o["code"] != null && o["code"].Type == JTokenType.String ? (string)o["code"] : null;
+                    return code != null && System.Text.RegularExpressions.Regex.IsMatch(code, "^[a-z_]{1,32}$") ? code : null;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return null;
             }
         }
 
