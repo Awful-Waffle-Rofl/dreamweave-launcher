@@ -10,10 +10,22 @@
     <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Launcher.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Fody" Version="6.9.3" PrivateAssets="all" />
     <PackageReference Include="Costura.Fody" Version="6.2.0" PrivateAssets="all" />
   </ItemGroup>
+  <!--
+    Costura embeds every copy-local reference into the exe and removes the loose copies, but only
+    when it weaves. An incremental build (seen with SDK 10.0.302) copies the references back without
+    re-weaving, which would ship Launcher.Core.dll, Newtonsoft.Json.dll and friends beside the exe.
+    Delete them after every build so the output is the exe, .config and .pdb on every SDK.
+  -->
+  <Target Name="RemoveEmbeddedCopyLocals" AfterTargets="Build">
+    <Delete Files="@(ReferenceCopyLocalPaths->'$(OutDir)%(DestinationSubDirectory)%(Filename)%(Extension)')" />
+  </Target>
 </Project>

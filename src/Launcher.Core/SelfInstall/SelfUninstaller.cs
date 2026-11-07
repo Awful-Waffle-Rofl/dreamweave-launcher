@@ -42,14 +42,26 @@ namespace DreamWeave.Launcher.Core.SelfInstall
     /// <summary>The outcome of <see cref="SelfUninstaller.Uninstall"/>. Uninstall is best-effort: it never stops at the first failure.</summary>
     public sealed class UninstallResult
     {
-        internal UninstallResult(IReadOnlyList<string> failures, bool selfDeleteScheduled, AcClientUninstallOutcome acClient, int? acClientExitCode, int credentialsRemoved)
+        internal UninstallResult(IReadOnlyList<string> failures, bool selfDeleteScheduled, AcClientUninstallOutcome acClient, int? acClientExitCode, int credentialsRemoved, IReadOnlyList<string> leftoverFolders, bool credentialsLeftOver)
         {
             Failures = failures;
             SelfDeleteScheduled = selfDeleteScheduled;
             AcClient = acClient;
             AcClientExitCode = acClientExitCode;
             CredentialsRemoved = credentialsRemoved;
+            LeftoverFolders = leftoverFolders ?? new string[0];
+            CredentialsLeftOver = credentialsLeftOver;
         }
+
+        /// <summary>
+        /// The launcher folders (<see cref="AppPaths.DataDir"/>, <see cref="AppPaths.InstallDir"/>) that
+        /// could not be fully removed, as full paths, for the player to delete by hand. Structured
+        /// data for the UI: unlike <see cref="Failures"/> it never carries exception text or account names.
+        /// </summary>
+        public IReadOnlyList<string> LeftoverFolders { get; }
+
+        /// <summary>True when at least one saved password could not be listed or removed.</summary>
+        public bool CredentialsLeftOver { get; }
 
         /// <summary>Plain-English descriptions of everything that could not be removed. Empty on full success.</summary>
         public IReadOnlyList<string> Failures { get; }
@@ -124,15 +136,25 @@ namespace DreamWeave.Launcher.Core.SelfInstall
                 ac = RunAcClientUninstaller(failures, out acExit);
             }
 
+            int before = failures.Count;
             int creds = RemoveCredentials(failures);
+            bool credentialsLeft = failures.Count > before;
             RemoveShortcut(failures);
             RemoveRegistration(failures);
 
+            var leftovers = new List<string>();
+            before = failures.Count;
             _env.FileSystem.DeleteTree(dataDir, null, failures);
+            if (failures.Count > before)
+            {
+                leftovers.Add(dataDir);
+            }
 
             string running = string.IsNullOrEmpty(options.CurrentExePath) ? null : Path.GetFullPath(options.CurrentExePath);
             bool runningInside = running != null && SelfInstallLayout.IsInside(running, installDir);
+            before = failures.Count;
             _env.FileSystem.DeleteTree(installDir, runningInside ? running : null, failures);
+            bool installLeft = failures.Count > before;
 
             bool scheduled = false;
             if (runningInside)
@@ -141,10 +163,16 @@ namespace DreamWeave.Launcher.Core.SelfInstall
                 if (!scheduled)
                 {
                     failures.Add(running + ": could not arrange for the launcher to delete itself; delete this file after the launcher closes.");
+                    installLeft = true;
                 }
             }
 
-            return new UninstallResult(failures, scheduled, ac, acExit, creds);
+            if (installLeft)
+            {
+                leftovers.Add(installDir);
+            }
+
+            return new UninstallResult(failures, scheduled, ac, acExit, creds, leftovers, credentialsLeft);
         }
 
         /// <summary>Splits an UninstallString into the program and its arguments.</summary>

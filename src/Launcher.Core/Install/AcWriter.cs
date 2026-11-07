@@ -23,7 +23,7 @@ namespace DreamWeave.Launcher.Core.Install
     /// replaces the target atomically (<see cref="File.Move(string, string)"/> when the target is absent).
     /// </para>
     /// </summary>
-    internal static class AcWriter
+    public static class AcWriter
     {
         /// <summary>Suffix of the sibling temp file a new version is written to before it replaces the target.</summary>
         internal const string TempSuffix = ".dwtmp";
@@ -422,6 +422,41 @@ namespace DreamWeave.Launcher.Core.Install
         }
 
         /// <summary>
+        /// The non-throwing preview of <see cref="RequireFreeSpaceCombined"/> for the UI: the same
+        /// per-folder needs (bytes plus <see cref="FreeSpaceMargin"/>) and, when both folders are on one
+        /// volume (<see cref="VolumeIdentity"/>), the combined need (both byte counts plus one margin).
+        /// </summary>
+        /// <exception cref="LauncherException">When the free space of a volume cannot be read.</exception>
+        public static FreeSpacePreview PreviewFreeSpace(Downloads.IDiskSpace disk, string firstFolder, long firstBytes, string secondFolder, long secondBytes)
+        {
+            return PreviewFreeSpace(disk, firstFolder, firstBytes, secondFolder, secondBytes, null);
+        }
+
+        /// <summary>As the public overload, with a volume-identity seam for tests.</summary>
+        internal static FreeSpacePreview PreviewFreeSpace(Downloads.IDiskSpace disk, string firstFolder, long firstBytes, string secondFolder, long secondBytes, Func<string, string> volumeId)
+        {
+            if (disk == null)
+            {
+                throw new ArgumentNullException(nameof(disk));
+            }
+
+            firstBytes = Math.Max(0, firstBytes);
+            secondBytes = Math.Max(0, secondBytes);
+            long firstFree = disk.GetFreeBytes(NearestExistingFolder(Path.GetFullPath(firstFolder)));
+            long secondFree = disk.GetFreeBytes(NearestExistingFolder(Path.GetFullPath(secondFolder)));
+            Func<string, string> identify = volumeId ?? VolumeIdentity;
+            string firstVolume = identify(firstFolder);
+            bool same = firstVolume != null && string.Equals(firstVolume, identify(secondFolder), StringComparison.OrdinalIgnoreCase);
+            return new FreeSpacePreview(
+                same,
+                firstFree,
+                checked(firstBytes + FreeSpaceMargin),
+                secondFree,
+                checked(secondBytes + FreeSpaceMargin),
+                same ? checked(firstBytes + secondBytes + FreeSpaceMargin) : (long?)null);
+        }
+
+        /// <summary>
         /// The volume GUID name (<c>\\?\Volume{...}\</c>) of the volume holding the nearest existing
         /// folder at or above <paramref name="folder"/>, or null when it cannot be resolved.
         /// <c>GetVolumePathName</c> finds the volume's mount point (a drive root or a mounted folder);
@@ -590,5 +625,40 @@ namespace DreamWeave.Launcher.Core.Install
                 _guards.Clear();
             }
         }
+    }
+
+    /// <summary>Result of <see cref="AcWriter.PreviewFreeSpace(Downloads.IDiskSpace, string, long, string, long)"/>.</summary>
+    public sealed class FreeSpacePreview
+    {
+        internal FreeSpacePreview(bool sameVolume, long firstFree, long firstNeeded, long secondFree, long secondNeeded, long? combinedNeeded)
+        {
+            SameVolume = sameVolume;
+            FirstFree = firstFree;
+            FirstNeeded = firstNeeded;
+            SecondFree = secondFree;
+            SecondNeeded = secondNeeded;
+            CombinedNeeded = combinedNeeded;
+        }
+
+        /// <summary>True when both folders resolve to the same volume.</summary>
+        public bool SameVolume { get; }
+
+        /// <summary>Bytes available on the first folder's volume.</summary>
+        public long FirstFree { get; }
+
+        /// <summary>Bytes the first folder's volume needs (its bytes plus the margin).</summary>
+        public long FirstNeeded { get; }
+
+        /// <summary>Bytes available on the second folder's volume.</summary>
+        public long SecondFree { get; }
+
+        /// <summary>Bytes the second folder's volume needs (its bytes plus the margin).</summary>
+        public long SecondNeeded { get; }
+
+        /// <summary>Same volume only: both byte counts plus one margin; otherwise null.</summary>
+        public long? CombinedNeeded { get; }
+
+        /// <summary>True when every check <see cref="AcWriter"/> would make passes.</summary>
+        public bool Enough => FirstFree >= FirstNeeded && SecondFree >= SecondNeeded && (!CombinedNeeded.HasValue || FirstFree >= CombinedNeeded.Value);
     }
 }
