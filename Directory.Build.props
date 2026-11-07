@@ -1,5 +1,7 @@
 <Project>
   <PropertyGroup>
+    <!-- Release version. The release workflow asserts the v<MAJOR>.<MINOR>.<PATCH> tag equals this. -->
+    <Version>1.0.0</Version>
     <TargetFramework>net48</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>

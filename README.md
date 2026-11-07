@@ -62,6 +62,12 @@ dotnet test DreamWeaveLauncher.sln -c Release
 
 CI builds on Windows and fails if the launcher exe grows past 3 MB.
 
+## Docs
+
+- [`Docs/release-runbook.md`](Docs/release-runbook.md) - maintainer release procedure, key setup and rotation.
+- [`Docs/code-signing-policy.md`](Docs/code-signing-policy.md) - code signing policy (pending approval).
+- [`Docs/privacy.md`](Docs/privacy.md) - privacy statement.
+
 ## License
 
 MIT, see `LICENSE`. Third-party components are listed in
