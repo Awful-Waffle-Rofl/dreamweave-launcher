@@ -189,6 +189,43 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void HeldLockFile_TimesOutAsStateLocked()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                StateStore.Open(paths);
+                using (new FileStream(paths.StateFile + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                {
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    var ex = Assert.ThrowsExactly<LauncherException>(() => new StateStore(paths.StateFile, TimeSpan.FromMilliseconds(200)));
+
+                    Assert.AreEqual(LauncherError.StateLocked, ex.Code);
+                    Assert.IsTrue(clock.Elapsed < TimeSpan.FromSeconds(10), "the injected timeout must be honoured: " + clock.Elapsed);
+                }
+
+                Assert.IsNotNull(new StateStore(paths.StateFile, TimeSpan.FromMilliseconds(200)), "control: succeeds once the lock is released");
+            }
+        }
+
+        [TestMethod]
+        [DataRow(unchecked((int)0x80070020), true)]
+        [DataRow(unchecked((int)0x80070021), true)]
+        [DataRow(unchecked((int)0x80070070), false)]
+        [DataRow(unchecked((int)0x80070005), false)]
+        [DataRow(unchecked((int)0x800700CE), false)]
+        public void OnlySharingAndLockViolations_AreRetried(int hresult, bool retried)
+        {
+            Assert.AreEqual(retried, StateStore.IsSharingOrLockViolation(new IOException("x", hresult)));
+        }
+
+        [TestMethod]
+        public void StateLocked_HasAppendedStableCode()
+        {
+            Assert.AreEqual(42, (int)LauncherError.StateLocked);
+        }
+
+        [TestMethod]
         public void AppPaths_DeriveFromRoot()
         {
             using (var dir = new TempDir())

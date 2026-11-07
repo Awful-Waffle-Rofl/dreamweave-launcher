@@ -123,6 +123,11 @@ namespace DreamWeave.Launcher.Core.Manifests
                 throw Invalid("its server host is empty.");
             }
 
+            if (!IsValidServerHost(m.Server.Host))
+            {
+                throw Invalid("its server host '" + m.Server.Host + "' is not a host name or IPv4 address.");
+            }
+
             if (m.Server.Port < 1 || m.Server.Port > 65535)
             {
                 throw Invalid("its server port " + m.Server.Port + " is outside 1-65535.");
@@ -277,26 +282,63 @@ namespace DreamWeave.Launcher.Core.Manifests
             }
         }
 
-        /// <summary>A path must be non-empty and relative: not rooted, no drive or stream colon, no empty, '.' or '..' segments.</summary>
+        /// <summary>
+        /// A path must pass <see cref="Detection.AcPathSafety.CheckRelativePath"/>: non-empty,
+        /// relative, no drive/stream colon, wildcard, control or reserved character, no empty or
+        /// '..' segment, no segment ending in a dot or space, and no Windows device name
+        /// (CON, PRN, AUX, NUL, COM0-9, LPT0-9 and the superscript 1-3 forms, with or without an extension).
+        /// </summary>
         private static void RequireRelativePath(string path, string what)
         {
-            if (string.IsNullOrWhiteSpace(path) || path.IndexOf(':') >= 0 || path.StartsWith("/", StringComparison.Ordinal) || path.StartsWith("\\", StringComparison.Ordinal))
+            string reason = Detection.AcPathSafety.CheckRelativePath(path);
+            if (reason != null)
             {
-                throw Invalid(what + " '" + path + "' is not a relative path.");
+                throw Invalid(what + " '" + path + "' is not allowed: " + reason + ".");
+            }
+        }
+
+        /// <summary>
+        /// The server host is substituted UNQUOTED into the client command line (<c>-h {host}:{port}</c>),
+        /// so it must be exactly one of: a DNS host name (letters, digits, hyphens; dot-separated
+        /// labels of 1-63 characters not starting or ending with a hyphen; at most 253 characters;
+        /// a name made only of digits and dots is treated as an IPv4 attempt and must be one),
+        /// or a dotted-quad IPv4 address. IPv6 is NOT accepted: client support for it in
+        /// <c>-h</c> is untested and the production server is a DNS name. Anything else (spaces,
+        /// quotes, brackets, a port, a scheme) is rejected.
+        /// </summary>
+        internal static bool IsValidServerHost(string host)
+        {
+            if (string.IsNullOrEmpty(host) || host.Length > 253)
+            {
+                return false;
             }
 
-            if (path.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+
+            if (host.All(ch => ch == '.' || (ch >= '0' && ch <= '9')))
             {
-                throw Invalid(what + " '" + path + "' contains invalid characters.");
+                string[] octets = host.Split('.');
+                return octets.Length == 4 && octets.All(o =>
+                    o.Length >= 1 && o.Length <= 3 && (o.Length == 1 || o[0] != '0') && int.Parse(o, System.Globalization.CultureInfo.InvariantCulture) <= 255);
             }
 
-            foreach (string segment in path.Split('/', '\\'))
+            foreach (string label in host.Split('.'))
             {
-                if (segment.Length == 0 || segment == "." || segment == ".." || segment.Trim().Length == 0)
+                if (label.Length < 1 || label.Length > 63 || label[0] == '-' || label[label.Length - 1] == '-')
                 {
-                    throw Invalid(what + " '" + path + "' has an empty, '.' or '..' segment.");
+                    return false;
+                }
+
+                foreach (char ch in label)
+                {
+                    bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-';
+                    if (!ok)
+                    {
+                        return false;
+                    }
                 }
             }
+
+            return true;
         }
 
         private static JsonSerializerSettings ManifestSerializerSettings()

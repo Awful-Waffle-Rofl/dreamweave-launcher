@@ -144,6 +144,109 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void InSessionAcceptance_RefusesLowerSerial_EvenWhenNothingPersisted()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                var state = StateStore.Open(paths);
+                var fetcher = new FakeHttpFetcher();
+                var provider = new ManifestProvider(fetcher, new ManifestVerifier(new[] { _key.PublicKey }), paths, state, Sources());
+
+                // Create the cache file (serial 1) so it can be locked, then lock it for the session.
+                Serve(fetcher, PrimaryUrl, 1);
+                Assert.AreEqual(LauncherError.None, provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult().Status);
+                using (new FileStream(paths.ManifestCacheFile, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    Serve(fetcher, PrimaryUrl, 7);
+                    ManifestLoadResult seven = provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                    Assert.AreEqual(7L, seven.Manifest.Serial);
+                    Assert.IsTrue(seven.Attempts.Any(a => a.SourceName == "cache-write" && a.Error != LauncherError.None), "precondition: 7 was not cached");
+                    Assert.AreEqual(1L, state.HighestManifestSerial, "precondition: 7 was not persisted");
+
+                    Serve(fetcher, PrimaryUrl, 6);
+                    ManifestLoadResult six = provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+
+                    Assert.AreEqual(LauncherError.ManifestRollback, six.Attempts[0].Error);
+                    Assert.IsNull(six.Manifest, "serial 6 must not be accepted after 7 in the same session");
+                }
+            }
+        }
+
+        [TestMethod]
+        public void ConcurrentLoad_ThatVerifiedAgainstOlderFloor_IsRefusedAtAccept()
+        {
+            using (var dir = new TempDir())
+            {
+                var paths = new AppPaths(dir.Path);
+                var state = StateStore.Open(paths);
+                byte[] m6 = TestManifests.Build(6);
+                byte[] m7 = TestManifests.Build(7);
+                var gate = new System.Threading.Tasks.TaskCompletionSource<bool>();
+                var fetcher = new GatedFetcher(gate.Task, _key.Sign(m6).ToFileBytes(), m6, _key.Sign(m7).ToFileBytes(), m7);
+                var provider = new ManifestProvider(fetcher, new ManifestVerifier(new[] { _key.PublicKey }), paths, state, new[] { ManifestSource.FromManifestUrl("primary", PrimaryUrl) });
+
+                // Load A computes its floor (1), then blocks inside its first fetch.
+                System.Threading.Tasks.Task<ManifestLoadResult> first = System.Threading.Tasks.Task.Run(() => provider.LoadAsync(CancellationToken.None));
+                Assert.IsTrue(fetcher.FirstCallEntered.Wait(TimeSpan.FromSeconds(10)), "precondition: load A reached the gated fetch");
+
+                // Load B runs to completion and accepts 7.
+                ManifestLoadResult second = provider.LoadAsync(CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(7L, second.Manifest.Serial);
+
+                // Release A: it gets serial 6, which verifies against its stale floor of 1.
+                gate.SetResult(true);
+                ManifestLoadResult a = first.GetAwaiter().GetResult();
+
+                Assert.AreEqual(LauncherError.ManifestRollback, a.Attempts[0].Error, a.Attempts[0].Detail);
+                Assert.IsFalse(a.Attempts.Any(x => x.SourceName == "primary" && x.Error == LauncherError.None), "serial 6 must not be accepted from the source");
+
+                // A then falls back to the cache, which load B filled with 7: that is the correct
+                // outcome (never 6). With no cache it would be null.
+                Assert.IsTrue(a.FromCache);
+                Assert.AreEqual(7L, a.Manifest.Serial);
+                Assert.AreEqual(7L, state.HighestManifestSerial, "serial 6 must not have been persisted over 7");
+            }
+        }
+
+        /// <summary>
+        /// Call 0 (load A's signature) waits on a gate; calls 1-2 (load B) return the serial-7 pair;
+        /// call 3 (load A's manifest, after the gate opens) returns serial 6. Calls after that are
+        /// offline. Order is fixed because load B runs to completion while load A is parked on call 0.
+        /// </summary>
+        private sealed class GatedFetcher : DreamWeave.Launcher.Core.Net.IHttpFetcher
+        {
+            private readonly System.Threading.Tasks.Task _gate;
+            private readonly byte[][] _bodies;
+            private int _calls = -1;
+
+            public GatedFetcher(System.Threading.Tasks.Task gate, byte[] sig6, byte[] m6, byte[] sig7, byte[] m7)
+            {
+                _gate = gate;
+                _bodies = new[] { sig6, sig7, m7, m6 };
+            }
+
+            public ManualResetEventSlim FirstCallEntered { get; } = new ManualResetEventSlim(false);
+
+            public async System.Threading.Tasks.Task<byte[]> GetBytesAsync(Uri uri, long maxBytes, CancellationToken cancellationToken)
+            {
+                int n = Interlocked.Increment(ref _calls);
+                if (n == 0)
+                {
+                    FirstCallEntered.Set();
+                    await _gate.ConfigureAwait(false);
+                }
+
+                if (n >= _bodies.Length)
+                {
+                    throw new LauncherException(LauncherError.NetworkUnavailable, "offline");
+                }
+
+                return _bodies[n];
+            }
+        }
+
+        [TestMethod]
         public void PrimaryDown_FallsBackToSecondary()
         {
             using (var dir = new TempDir())

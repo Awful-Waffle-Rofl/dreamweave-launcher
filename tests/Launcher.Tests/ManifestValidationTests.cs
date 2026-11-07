@@ -122,6 +122,135 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        [DataRow("play acdreamweave.com")]
+        [DataRow("\"play.acdreamweave.com\"")]
+        [DataRow("play.acdreamweave.com:9000")]
+        [DataRow("http://play.acdreamweave.com")]
+        [DataRow("::1")]
+        [DataRow("2001:db8::1")]
+        [DataRow("[::1]")]
+        [DataRow("[2001:db8::1]")]
+        [DataRow("[::1%3]")]
+        [DataRow("[zz::1]")]
+        [DataRow("[1.2.3.4]")]
+        [DataRow("-bad.example")]
+        [DataRow("bad-.example")]
+        [DataRow("a..b")]
+        [DataRow("trailing.dot.")]
+        [DataRow("under_score.example")]
+        [DataRow("1.2.3")]
+        [DataRow("256.1.1.1")]
+        [DataRow("01.2.3.4")]
+        [DataRow("1234.1.1.1")]
+        [DataRow("1.2.3.4.5")]
+        [DataRow("123")]
+        [DataRow("host\tname")]
+        [DataRow("play.acdreamweave.com -x")]
+        public void ServerHost_Invalid_IsRejected(string host)
+        {
+            JObject m = Sample();
+            m["server"]["host"] = host;
+
+            var ex = Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(m)));
+            Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code, host + ": " + ex.Detail);
+        }
+
+        [TestMethod]
+        [DataRow("play.acdreamweave.com")]
+        [DataRow("localhost")]
+        [DataRow("xn--bcher-kva.example")]
+        [DataRow("127.0.0.1")]
+        [DataRow("0.0.0.0")]
+        public void ServerHost_Valid_IsAccepted(string host)
+        {
+            JObject m = Sample();
+            m["server"]["host"] = host;
+
+            Assert.AreEqual(host, Verify(Bytes(m)).Server.Host);
+        }
+
+        [TestMethod]
+        public void ServerHost_LengthBoundaries()
+        {
+            string label63 = new string('a', 63);
+            string label64 = new string('a', 64);
+            // 63 + 1 + 63 + 1 + 63 + 1 + 61 = 253 characters; one more = 254.
+            string host253 = label63 + "." + label63 + "." + label63 + "." + new string('b', 61);
+            string host254 = label63 + "." + label63 + "." + label63 + "." + new string('b', 62);
+            Assert.AreEqual(253, host253.Length);
+            Assert.AreEqual(254, host254.Length);
+
+            Assert.IsTrue(ManifestParser.IsValidServerHost(label63 + ".example"), "63-char label");
+            Assert.IsFalse(ManifestParser.IsValidServerHost(label64 + ".example"), "64-char label");
+            Assert.IsTrue(ManifestParser.IsValidServerHost(host253), "253-char host");
+            Assert.IsFalse(ManifestParser.IsValidServerHost(host254), "254-char host");
+
+            // The same boundaries through the full signed verify path.
+            JObject ok = Sample();
+            ok["server"]["host"] = host253;
+            Assert.AreEqual(host253, Verify(Bytes(ok)).Server.Host);
+            JObject bad = Sample();
+            bad["server"]["host"] = label64 + ".example";
+            Assert.AreEqual(LauncherError.ManifestInvalid, Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(bad))).Code);
+        }
+
+        [TestMethod]
+        [DataRow("CON")]
+        [DataRow("prn.dat")]
+        [DataRow("sub/AUX")]
+        [DataRow("nul.txt")]
+        [DataRow("COM0")]
+        [DataRow("com9.dat")]
+        [DataRow("LPT0")]
+        [DataRow("lpt5.log")]
+        [DataRow("COM\u00B9")]
+        [DataRow("LPT\u00B3.dat")]
+        [DataRow("CONIN$")]
+        [DataRow("dir./file.dat")]
+        [DataRow("file.dat.")]
+        [DataRow("file.dat ")]
+        [DataRow("dir /file.dat")]
+        [DataRow("*.dat")]
+        [DataRow("file?.dat")]
+        [DataRow("file.dat:stream")]
+        [DataRow("a<b.dat")]
+        public void FilePath_Unsafe_IsRejected(string path)
+        {
+            JObject m = Sample();
+            Component(m, "eor-dats")["files"][0]["path"] = path;
+
+            var ex = Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(m)));
+            Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code, path + ": " + ex.Detail);
+        }
+
+        [TestMethod]
+        [DataRow("client_cell_1.dat")]
+        [DataRow("sub/dir/file.dat")]
+        [DataRow("CONSOLE.dat")]
+        [DataRow("COM10.dat")]
+        [DataRow("console")]
+        [DataRow("lpt.dat")]
+        public void FilePath_SafeLookalikes_AreAccepted(string path)
+        {
+            JObject m = Sample();
+            Component(m, "eor-dats")["files"][0]["path"] = path;
+
+            Assert.AreEqual(path, Verify(Bytes(m)).Components.Single(c => c.Id == "eor-dats").Files[0].Path);
+        }
+
+        [TestMethod]
+        public void TargetAndSatisfiedWhenPaths_UseTheSameRules()
+        {
+            JObject a = Sample();
+            Component(a, "palette-leak-fix")["target"] = "NUL";
+            Assert.AreEqual(LauncherError.ManifestInvalid, Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(a))).Code);
+
+            JObject b = Sample();
+            Component(b, "ac-client")["satisfiedWhen"][0]["path"] = "acclient.exe.";
+            Assert.AreEqual(LauncherError.ManifestInvalid, Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(b))).Code);
+        }
+
+        [TestMethod]
         public void Control_UnmutatedSampleRoundTripPasses()
         {
             // Positive control: the same serialize-and-sign path accepts the unmodified sample,
