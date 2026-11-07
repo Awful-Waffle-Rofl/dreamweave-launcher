@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Launch;
 using DreamWeave.Launcher.Core.Manifests;
@@ -20,6 +21,13 @@ namespace DreamWeave.Launcher.Tests.Launch
         {
             LauncherException ex = Assert.ThrowsExactly<LauncherException>(a);
             Assert.AreEqual(LauncherError.InvalidCredentials, ex.Code);
+            Assert.IsFalse(string.IsNullOrWhiteSpace(ex.Detail));
+        }
+
+        private static void AssertManifest(Action a)
+        {
+            LauncherException ex = Assert.ThrowsExactly<LauncherException>(a);
+            Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code);
             Assert.IsFalse(string.IsNullOrWhiteSpace(ex.Detail));
         }
 
@@ -157,8 +165,6 @@ namespace DreamWeave.Launcher.Tests.Launch
         [DataRow("my-host.example.org")]
         [DataRow("127.0.0.1")]
         [DataRow("192.168.1.20")]
-        [DataRow("[::1]")]
-        [DataRow("[2001:db8::1]")]
         public void ValidHosts_Accepted(string host)
         {
             Assert.IsTrue(Ok(host: host).Contains("-h " + host + ":9000"));
@@ -177,6 +183,8 @@ namespace DreamWeave.Launcher.Tests.Launch
         [DataRow("999.1.1.1")]
         [DataRow("1.2.3")]
         [DataRow("1.2.3.4.5")]
+        [DataRow("[::1]")]
+        [DataRow("[2001:db8::1]")]
         [DataRow("[::1")]
         [DataRow("[]")]
         [DataRow("[1.2.3.4]")]
@@ -185,14 +193,14 @@ namespace DreamWeave.Launcher.Tests.Launch
         [DataRow("host:9000")]
         public void InvalidHosts_Rejected(string host)
         {
-            AssertInvalid(() => Ok(host: host));
+            AssertManifest(() => Ok(host: host));
         }
 
         [TestMethod]
         public void OverlongHost_Rejected()
         {
-            AssertInvalid(() => Ok(host: new string('a', 64) + ".com"));
-            AssertInvalid(() => Ok(host: string.Join(".", new[] { new string('a', 60), new string('b', 60), new string('c', 60), new string('d', 60), new string('e', 60) })));
+            AssertManifest(() => Ok(host: new string('a', 64) + ".com"));
+            AssertManifest(() => Ok(host: string.Join(".", new[] { new string('a', 60), new string('b', 60), new string('c', 60), new string('d', 60), new string('e', 60) })));
         }
 
         [TestMethod]
@@ -210,7 +218,7 @@ namespace DreamWeave.Launcher.Tests.Launch
         [DataRow(65536)]
         public void InvalidPorts_Rejected(int port)
         {
-            AssertInvalid(() => Ok(port: port));
+            AssertManifest(() => Ok(port: port));
         }
 
         [TestMethod]
@@ -221,7 +229,7 @@ namespace DreamWeave.Launcher.Tests.Launch
         public void UnknownPlaceholder_Rejected(string template)
         {
             LauncherException ex = Assert.ThrowsExactly<LauncherException>(() => LaunchArgsBuilder.Build(template, "alice", "secret", "localhost", 9000, ""));
-            Assert.AreEqual(LauncherError.InvalidCredentials, ex.Code);
+            Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code);
             Assert.IsTrue(ex.Detail.Contains("placeholder"));
         }
 
@@ -231,13 +239,97 @@ namespace DreamWeave.Launcher.Tests.Launch
         [DataRow("   ")]
         public void EmptyTemplate_Rejected(string template)
         {
-            AssertInvalid(() => LaunchArgsBuilder.Build(template, "alice", "secret", "localhost", 9000, ""));
+            AssertManifest(() => LaunchArgsBuilder.Build(template, "alice", "secret", "localhost", 9000, ""));
         }
 
         [TestMethod]
         public void ExtraArgs_ControlCharsRejected()
         {
-            AssertInvalid(() => Ok(extra: "-x\n-y"));
+            AssertManifest(() => Ok(extra: "-x\n-y"));
+        }
+
+        // C# escape text on purpose: the source stays ASCII.
+        [TestMethod]
+        [DataRow("p\u00E4ss")]
+        [DataRow("\u4E2D")]
+        [DataRow("a\uD83D\uDE00b")]
+        [DataRow("\u00A0x")]
+        [DataRow("x\u007F")]
+        public void NonAscii_RejectedInBothFields(string value)
+        {
+            AssertInvalid(() => Ok(user: value));
+            AssertInvalid(() => Ok(pass: value));
+        }
+
+        [TestMethod]
+        public void PrintableAsciiBoundaries_Accepted()
+        {
+            Assert.IsNotNull(Ok(user: "!~", pass: " ~!"));
+        }
+
+        [TestMethod]
+        public void UnquotedPassPlaceholder_RejectsPasswordWithSpace()
+        {
+            AssertInvalid(() => LaunchArgsBuilder.Build("-a \"{user}\" -v {pass} -h {host}:{port}", "alice", "pa ss", "localhost", 9000, ""));
+            Assert.AreEqual("-a \"alice\" -v pass -h localhost:9000", LaunchArgsBuilder.Build("-a \"{user}\" -v {pass} -h {host}:{port}", "alice", "pass", "localhost", 9000, ""));
+            AssertInvalid(() => LaunchArgsBuilder.BuildRedacted("-v {pass}", "alice", "pa ss", "localhost", 9000, ""));
+        }
+
+        [DllImport("shell32.dll", SetLastError = true)]
+        private static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)] string commandLine, out int argc);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr mem);
+
+        private static string[] Argv(string commandLine)
+        {
+            int argc;
+            IntPtr p = CommandLineToArgvW(commandLine, out argc);
+            Assert.AreNotEqual(IntPtr.Zero, p);
+            try
+            {
+                var result = new string[argc];
+                for (int i = 0; i < argc; i++)
+                {
+                    result[i] = Marshal.PtrToStringUni(Marshal.ReadIntPtr(p, i * IntPtr.Size));
+                }
+
+                return result;
+            }
+            finally
+            {
+                LocalFree(p);
+            }
+        }
+
+        [TestMethod]
+        public void AdversarialValues_RoundTripThroughCommandLineToArgv()
+        {
+            string[] users = { "a\\b", "a\\\\b", "{pass}", "%PATH%", "{", "}{", "a^b", "a&b", "x|y", "{user}{host}", "-a" };
+            string[] passes = { "a\\b", "a\\\\b", "a\\\\ b", "a\\ b", "{pass}", "%PATH%", "{", "}", "a^b", "a&b", "x|y<z>", "p a s s", "-v", "\\\\x" };
+            foreach (string user in users)
+            {
+                foreach (string pass in passes)
+                {
+                    string line = LaunchArgsBuilder.Build(T, user, pass, "play.acdreamweave.com", 9000, "");
+                    // The first token is parsed as the program name, so prepend one.
+                    string[] argv = Argv("acclient.exe " + line);
+                    CollectionAssert.AreEqual(
+                        new[] { "acclient.exe", "-a", user, "-v", pass, "-h", "play.acdreamweave.com:9000", "-rodat", "on" },
+                        argv,
+                        "user=[" + user + "] pass=[" + pass + "]");
+                }
+            }
+        }
+
+        [TestMethod]
+        [DataRow("abc\\")]
+        [DataRow("abc\\\\")]
+        [DataRow("\\")]
+        public void TrailingBackslashValues_AreRejected(string value)
+        {
+            AssertInvalid(() => Ok(user: value));
+            AssertInvalid(() => Ok(pass: value));
         }
     }
 }

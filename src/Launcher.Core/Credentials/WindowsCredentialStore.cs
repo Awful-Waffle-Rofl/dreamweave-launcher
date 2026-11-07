@@ -73,7 +73,7 @@ namespace DreamWeave.Launcher.Core.Credentials
                 var cred = new Credential
                 {
                     Type = CredTypeGeneric,
-                    TargetName = prefix + account,
+                    TargetName = Target(account),
                     CredentialBlobSize = (uint)blob.Length,
                     CredentialBlob = blobPtr,
                     Persist = CredPersistLocalMachine,
@@ -101,7 +101,7 @@ namespace DreamWeave.Launcher.Core.Credentials
         {
             RequireAccount(account);
             IntPtr credPtr;
-            if (!CredRead(prefix + account, CredTypeGeneric, 0, out credPtr))
+            if (!CredRead(Target(account), CredTypeGeneric, 0, out credPtr))
             {
                 int err = Marshal.GetLastWin32Error();
                 if (err == ErrorNotFound)
@@ -126,7 +126,29 @@ namespace DreamWeave.Launcher.Core.Credentials
         public bool Delete(string account)
         {
             RequireAccount(account);
-            if (CredDelete(prefix + account, CredTypeGeneric, 0))
+            bool any = false;
+
+            // Repeat until Windows reports not-found, so no duplicate under the normalized key survives.
+            while (DeleteTarget(Target(account)))
+            {
+                any = true;
+            }
+
+            // Legacy entries saved under another spelling of the same account name.
+            foreach (string target in EnumerateTargets())
+            {
+                if (string.Equals(target, prefix + account, StringComparison.OrdinalIgnoreCase) && DeleteTarget(target))
+                {
+                    any = true;
+                }
+            }
+
+            return any;
+        }
+
+        private bool DeleteTarget(string target)
+        {
+            if (CredDelete(target, CredTypeGeneric, 0))
             {
                 return true;
             }
@@ -140,18 +162,23 @@ namespace DreamWeave.Launcher.Core.Credentials
             throw Unavailable("delete", err);
         }
 
-        /// <inheritdoc />
-        public IReadOnlyList<string> ListAccounts()
+        private string Target(string account)
         {
+            // Normalized so "Alice" and "alice" are one entry (the server lowercases account names).
+            return prefix + account.ToLowerInvariant();
+        }
+
+        private List<string> EnumerateTargets()
+        {
+            var targets = new List<string>();
             int count;
             IntPtr array;
-            var names = new List<string>();
             if (!CredEnumerate(prefix + "*", 0, out count, out array))
             {
                 int err = Marshal.GetLastWin32Error();
                 if (err == ErrorNotFound)
                 {
-                    return names;
+                    return targets;
                 }
 
                 throw Unavailable("list", err);
@@ -163,10 +190,10 @@ namespace DreamWeave.Launcher.Core.Credentials
                 {
                     IntPtr credPtr = Marshal.ReadIntPtr(array, i * IntPtr.Size);
                     var cred = (Credential)Marshal.PtrToStructure(credPtr, typeof(Credential));
-                    string target = cred.TargetName;
-                    if (target != null && target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && cred.Type == CredTypeGeneric)
+                    if (cred.TargetName != null && cred.Type == CredTypeGeneric &&
+                        cred.TargetName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                     {
-                        names.Add(target.Substring(prefix.Length));
+                        targets.Add(cred.TargetName);
                     }
                 }
             }
@@ -175,10 +202,24 @@ namespace DreamWeave.Launcher.Core.Credentials
                 CredFree(array);
             }
 
+            return targets;
+        }
+        /// <inheritdoc />
+        public IReadOnlyList<string> ListAccounts()
+        {
+            var names = new List<string>();
+            foreach (string target in EnumerateTargets())
+            {
+                string name = target.Substring(prefix.Length);
+                if (!names.Exists(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    names.Add(name);
+                }
+            }
+
             names.Sort(StringComparer.OrdinalIgnoreCase);
             return names;
         }
-
         private static string ReadPassword(IntPtr credPtr)
         {
             var cred = (Credential)Marshal.PtrToStructure(credPtr, typeof(Credential));
@@ -196,14 +237,15 @@ namespace DreamWeave.Launcher.Core.Credentials
             finally
             {
                 Array.Clear(bytes, 0, bytes.Length);
+                ZeroUnmanaged(cred.CredentialBlob, bytes.Length);
             }
         }
 
         private static void ZeroUnmanaged(IntPtr ptr, int length)
         {
-            for (int i = 0; i < length; i++)
+            if (length > 0)
             {
-                Marshal.WriteByte(ptr, i, 0);
+                Marshal.Copy(new byte[length], 0, ptr, length);
             }
         }
 

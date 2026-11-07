@@ -128,5 +128,18 @@ namespace DreamWeave.Launcher.Tests.Launch
             store.Save("alice", string.Empty);
             Assert.AreEqual(string.Empty, store.Get("alice"));
         }
+
+        [TestMethod]
+        public void CaseVariants_AreOneEntry_AndDeleteClearsAll()
+        {
+            store.Save("Alice", "first");
+            store.Save("alice", "second");
+            Assert.AreEqual("second", store.Get("Alice"));
+            Assert.AreEqual(1, store.ListAccounts().Count);
+            Assert.IsTrue(store.Delete("alice"));
+            Assert.IsNull(store.Get("Alice"));
+            Assert.IsNull(store.Get("alice"));
+            Assert.AreEqual(0, store.ListAccounts().Count);
+        }
     }
 }

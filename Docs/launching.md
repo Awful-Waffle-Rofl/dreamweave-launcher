@@ -11,14 +11,26 @@ signed manifest's `launch.argTemplate` (`LaunchArgsBuilder`).
   folder. The launcher never requests elevation and never touches other `acclient.exe` processes.
 - User and password are rejected (with a plain-English message) rather than escaped when they could
   break out of their quotes: a double quote, any control character, a trailing backslash, or (user
-  only) whitespace. Limits: user 1-50 characters (the server closes logins over 50 and the account
-  column is 50 wide), password 1-64 (the server has no explicit limit; 64 is the launcher's cap).
-  Host must be a host name, IPv4 address or bracketed IPv6 address; port 1-65535.
+  only) whitespace. A password containing a space is also rejected when the template does not wrap
+  `{pass}` in double quotes. Limits: user 1-50 characters (the server closes logins over 50 and the
+  account column is 50 wide), password 1-64 (the server has no explicit limit; 64 is the launcher's
+  cap). Host must be a host name or IPv4 address (no bracketed IPv6: client support is untested);
+  port 1-65535. Problems with the host, port or template come from the signed manifest and are
+  reported as `ManifestInvalid`; only user and password problems are `InvalidCredentials`.
 - `BuildRedacted` returns the same string with the password masked; use it for any log line. The
   launcher never logs the real command line and never puts the password in an error message.
-- The password is non-ASCII safe in the credential store, but the AC client is an ANSI program, so
-  passwords with characters outside the system code page may not reach the server intact.
 
+## Printable ASCII only (account name and password)
+
+The account name may use characters 0x21-0x7E and the password 0x20-0x7E (letters, digits, standard
+symbols; the password may also contain spaces). Anything else, including accented letters, CJK text
+and emoji, is refused before launch.
+
+Why: the server creates an account automatically on first login from whatever bytes arrive
+(`Source/ACE.Server/Network/Handlers/AuthenticationHandler.cs:90-110` in the server repo, which
+lowercases the name and hashes the password as received), and the client-to-server string path is
+not Unicode-safe. A non-ASCII password could therefore create an account that the player can never
+log into again, with no error shown. Refusing it up front is the only safe behavior.
 ## Saved passwords
 
 "Remember me" uses the Windows Credential Manager (generic credential, target `DreamWeave/<account>`,

@@ -1,6 +1,4 @@
 using System;
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -51,7 +49,7 @@ namespace DreamWeave.Launcher.Core.Launch
         {
             ValidateUser(user);
             ValidatePassword(pass);
-            return Expand(template, user, pass, host, port, extraArgs);
+            return Expand(template, user, pass, pass, host, port, extraArgs);
         }
 
         /// <summary>
@@ -62,20 +60,20 @@ namespace DreamWeave.Launcher.Core.Launch
         {
             ValidateUser(user);
             ValidatePassword(pass);
-            return Expand(template, user, PasswordMask, host, port, extraArgs);
+            return Expand(template, user, pass, PasswordMask, host, port, extraArgs);
         }
 
-        private static string Expand(string template, string user, string pass, string host, int port, string extraArgs)
+        private static string Expand(string template, string user, string pass, string insertPass, string host, int port, string extraArgs)
         {
             if (string.IsNullOrWhiteSpace(template))
             {
-                throw Invalid("The launch template is empty.");
+                throw Manifest("The launch template is empty.");
             }
 
             ValidateHost(host);
             if (port < 1 || port > 65535)
             {
-                throw Invalid("The server port must be between 1 and 65535.");
+                throw Manifest("The server port must be between 1 and 65535.");
             }
 
             ValidateExtraArgs(extraArgs);
@@ -88,11 +86,19 @@ namespace DreamWeave.Launcher.Core.Launch
                 switch (m.Groups[1].Value)
                 {
                     case "user": return user;
-                    case "pass": return pass;
+                    case "pass":
+                        bool quoted = m.Index > 0 && template[m.Index - 1] == '"'
+                            && m.Index + m.Length < template.Length && template[m.Index + m.Length] == '"';
+                        if (!quoted && pass.IndexOf(' ') >= 0)
+                        {
+                            throw Invalid("The password cannot contain spaces with the server's current launch settings. Choose a password without spaces.");
+                        }
+
+                        return insertPass;
                     case "host": return host;
                     case "port": return portText;
                     default:
-                        throw Invalid("The launch template uses an unknown placeholder '" + m.Value + "'. Allowed: {user}, {pass}, {host}, {port}.");
+                        throw Manifest("The launch template uses an unknown placeholder '" + m.Value + "'. Allowed: {user}, {pass}, {host}, {port}.");
                 }
             });
 
@@ -125,7 +131,7 @@ namespace DreamWeave.Launcher.Core.Launch
                 }
             }
 
-            CheckCommon(user, "account name");
+            CheckCommon(user, "account name", 0x21);
         }
 
         private static void ValidatePassword(string pass)
@@ -140,11 +146,11 @@ namespace DreamWeave.Launcher.Core.Launch
                 throw Invalid("The password is too long (at most " + MaxPasswordLength + " characters).");
             }
 
-            CheckCommon(pass, "password");
+            CheckCommon(pass, "password", 0x20);
         }
 
         // Rules shared by the two values that end up inside double quotes.
-        private static void CheckCommon(string value, string what)
+        private static void CheckCommon(string value, string what, int minChar)
         {
             foreach (char c in value)
             {
@@ -156,6 +162,14 @@ namespace DreamWeave.Launcher.Core.Launch
                 if (char.IsControl(c))
                 {
                     throw Invalid("The " + what + " cannot contain control characters.");
+                }
+
+                // Printable ASCII only. ACE creates an account from whatever bytes arrive and the
+                // client/server string path is not Unicode-safe, so a non-ASCII value would silently
+                // create an account the player cannot log into.
+                if (c < minChar || c > 0x7E)
+                {
+                    throw Invalid("The " + what + " can only use letters, digits and standard symbols (no accented or non-English characters).");
                 }
             }
 
@@ -170,26 +184,12 @@ namespace DreamWeave.Launcher.Core.Launch
         {
             if (string.IsNullOrEmpty(host))
             {
-                throw Invalid("The server host is empty.");
-            }
-
-            if (host[0] == '[')
-            {
-                IPAddress v6;
-                if (host[host.Length - 1] == ']' && host.Length > 2 &&
-                    IPAddress.TryParse(host.Substring(1, host.Length - 2), out v6) &&
-                    v6.AddressFamily == AddressFamily.InterNetworkV6 &&
-                    host.IndexOf('%') < 0)
-                {
-                    return;
-                }
-
-                throw Invalid("The server host is not a valid IPv6 address.");
+                throw Manifest("The server host is empty.");
             }
 
             if (host.Length > 253)
             {
-                throw Invalid("The server host name is too long.");
+                throw Manifest("The server host name is too long.");
             }
 
             string[] labels = host.Split('.');
@@ -198,7 +198,7 @@ namespace DreamWeave.Launcher.Core.Launch
             {
                 if (!HostLabel.IsMatch(label))
                 {
-                    throw Invalid("The server host '" + Safe(host) + "' is not a valid host name or IP address.");
+                    throw Manifest("The server host '" + Safe(host) + "' is not a valid host name or IP address.");
                 }
 
                 foreach (char c in label)
@@ -217,14 +217,14 @@ namespace DreamWeave.Launcher.Core.Launch
                 int octet;
                 if (labels.Length != 4)
                 {
-                    throw Invalid("The server host '" + Safe(host) + "' is not a valid IPv4 address.");
+                    throw Manifest("The server host '" + Safe(host) + "' is not a valid IPv4 address.");
                 }
 
                 foreach (string label in labels)
                 {
                     if (label.Length > 3 || !int.TryParse(label, out octet) || octet > 255)
                     {
-                        throw Invalid("The server host '" + Safe(host) + "' is not a valid IPv4 address.");
+                        throw Manifest("The server host '" + Safe(host) + "' is not a valid IPv4 address.");
                     }
                 }
             }
@@ -239,14 +239,14 @@ namespace DreamWeave.Launcher.Core.Launch
 
             if (extraArgs.Length > MaxExtraArgsLength)
             {
-                throw Invalid("The extra launch arguments are too long.");
+                throw Manifest("The extra launch arguments are too long.");
             }
 
             foreach (char c in extraArgs)
             {
                 if (char.IsControl(c))
                 {
-                    throw Invalid("The extra launch arguments cannot contain control characters.");
+                    throw Manifest("The extra launch arguments cannot contain control characters.");
                 }
             }
         }
@@ -261,6 +261,11 @@ namespace DreamWeave.Launcher.Core.Launch
             }
 
             return sb.ToString();
+        }
+
+        private static LauncherException Manifest(string detail)
+        {
+            return new LauncherException(LauncherError.ManifestInvalid, detail);
         }
 
         private static LauncherException Invalid(string detail)

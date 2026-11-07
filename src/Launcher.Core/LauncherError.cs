@@ -77,6 +77,7 @@ namespace DreamWeave.Launcher.Core
 
         /// <summary>The Windows Credential Manager could not be used (API failure or unavailable).</summary>
         CredentialStoreUnavailable = 74,
+
         /// <summary>The operation was cancelled by the player.</summary>
         Cancelled = 90,
 
