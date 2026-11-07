@@ -6,6 +6,8 @@
     <RootNamespace>DreamWeave.Launcher</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>AnyCPU</Platforms>
+    <!-- Do not copy referenced assemblies' XML docs next to the exe (only the exe ships). -->
+    <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />

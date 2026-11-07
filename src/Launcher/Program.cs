@@ -9,6 +9,9 @@ namespace DreamWeave.Launcher
         [STAThread]
         private static int Main(string[] args)
         {
+            // TODO(single-instance): take a per-user named mutex here before touching state or
+            // downloads. StateStore already serialises its own file across instances, but two
+            // launchers installing at once would still fight over the AC folder and staging dir.
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
