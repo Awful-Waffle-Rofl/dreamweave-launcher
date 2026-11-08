@@ -148,12 +148,24 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             foreach (string section in new[] { "InstallDelete", "UninstallDelete" })
             {
                 string body = Section(iss, section);
-                StringAssert.Contains(body, @"Type: files; Name: ""{app}\*.old""", section);
-                StringAssert.Contains(body, @"Type: files; Name: ""{app}\*.new""", section);
+                StringAssert.Contains(body, @"Type: files; Name: ""{app}\DreamWeaveLauncher.exe.old""", section);
+                StringAssert.Contains(body, @"Type: files; Name: ""{app}\DreamWeaveLauncher.exe.new""", section);
+
+                // The player may install into a folder holding their own files (and 8.3 short names make *.old match
+                // more than it looks): no wildcard of any kind is allowed in a delete section.
+                foreach (string line in body.Split('\n'))
+                {
+                    string entry = line.Trim();
+                    if (entry.Length > 0 && !entry.StartsWith(";", StringComparison.Ordinal))
+                    {
+                        Assert.IsFalse(entry.Contains("*") || entry.Contains("?"), "wildcard in [" + section + "]: " + entry);
+                    }
+                }
             }
 
             StringAssert.Contains(Section(iss, "InstallDelete"), @"{userprograms}\DreamWeave Launcher.lnk");
             Assert.IsFalse(iss.Contains("until it is retired"));
+            Assert.IsFalse(iss.Contains("sweeps them any more"));
         }
 
         [TestMethod]

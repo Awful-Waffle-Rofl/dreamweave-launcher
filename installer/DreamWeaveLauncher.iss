@@ -55,9 +55,10 @@ Filename: "{app}\DreamWeaveLauncher.exe"; Description: "{cm:LaunchProgram,DreamW
 [InstallDelete]
 ; Legacy migration: the old self-installing launcher's Start menu shortcut.
 Type: files; Name: "{userprograms}\DreamWeave Launcher.lnk"
-; Stale leftovers of the launcher's old self-update swap; nothing in the launcher sweeps them any more.
-Type: files; Name: "{app}\*.old"
-Type: files; Name: "{app}\*.new"
+; Leftovers from the retired self-updater (exe renamed to .old/.new). Exact names only: the player may
+; install into a folder holding their own files, and a wildcard (or an 8.3 short-name match) would delete them.
+Type: files; Name: "{app}\DreamWeaveLauncher.exe.old"
+Type: files; Name: "{app}\DreamWeaveLauncher.exe.new"
 
 [Registry]
 ; Legacy migration: the old self-installing launcher's uninstall entry. The old install folder is the
@@ -65,9 +66,9 @@ Type: files; Name: "{app}\*.new"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\DreamWeaveLauncher"; Flags: deletekey
 
 [UninstallDelete]
-; Update leftovers beside the exe.
-Type: files; Name: "{app}\*.old"
-Type: files; Name: "{app}\*.new"
+; Leftovers from the retired self-updater (exe renamed to .old/.new). Exact names only, never a wildcard.
+Type: files; Name: "{app}\DreamWeaveLauncher.exe.old"
+Type: files; Name: "{app}\DreamWeaveLauncher.exe.new"
 
 [Code]
 const
