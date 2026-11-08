@@ -957,14 +957,15 @@ namespace DreamWeave.Launcher.App
         /// InstallShield self-extractor exits early.
         /// <para>
         /// <paramref name="resumed"/> is set only when a Retry resumes waiting on an installer an earlier
-        /// run started and whose tree was still running then. Its tree is then known, so once the watch
-        /// reports nothing left and the install is still not there, the installer was closed before it
-        /// finished: that fails at once (InstallerClosedEarly) instead of waiting forever, and the next
-        /// Retry starts a new installer.
+        /// run started and whose tree was still running then. Its tree is then known, so once every poll
+        /// across a whole <see cref="InstallDependencies.SettleInterval"/> saw nothing of it and a last
+        /// detection still finds no install, the installer was closed before it finished: that fails
+        /// (InstallerClosedEarly) instead of waiting forever, and the next Retry starts a new installer.
         /// </para>
         /// </summary>
         private async Task<string> WaitForInstallAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct, InstallerProcessWatch resumed = null)
         {
+            Stopwatch goneFor = null;
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
@@ -980,9 +981,23 @@ namespace DreamWeave.Launcher.App
                     return found;
                 }
 
-                if (resumed != null && await Task.Run(() => resumed.Check(), ct).ConfigureAwait(false) == InstallerActivity.None)
+                if (resumed != null)
                 {
-                    // One more look: the installer may have finished between the detection and the check.
+                    // Gone only when every poll across a whole settle interval saw nothing: one empty poll can
+                    // be a hand-off to a process the watch cannot see yet. Any activity starts the window again.
+                    if (await Task.Run(() => resumed.Check(), ct).ConfigureAwait(false) == InstallerActivity.None)
+                    {
+                        goneFor = goneFor ?? Stopwatch.StartNew();
+                    }
+                    else
+                    {
+                        goneFor = null;
+                    }
+                }
+
+                if (goneFor != null && goneFor.Elapsed >= _deps.SettleInterval)
+                {
+                    // One more look at the end of the window: the installer may have just finished.
                     found = await Task.Run(() => Detect(c, ct), ct).ConfigureAwait(false);
                     if (found != null)
                     {

@@ -1029,15 +1029,22 @@ namespace DreamWeave.Launcher.Tests.App
         {
             using (var rig = new Rig())
             {
+                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(500);
                 InstallSession session = StartedThenStopped(rig);
 
                 var second = new Hooked(null);
                 Task<InstallRunResult> retry = session.RunAsync(rig.FullPlan(), second, CancellationToken.None);
                 WaitUntil(() => Has(second, InstallEventKind.HandoffStarted), "the resumed hand-off");
 
-                // The player closes the installer without finishing it.
+                // The player closes the installer without finishing it: gone for a whole settle interval.
+                int before = rig.Processes.Snapshots;
+                Stopwatch gone = Stopwatch.StartNew();
                 rig.Processes.Set();
                 Assert.IsTrue(retry.Wait(TimeSpan.FromSeconds(5)), "the resumed wait did not notice the installer was gone");
+                gone.Stop();
+                Assert.IsTrue(gone.Elapsed >= TimeSpan.FromMilliseconds(450), "failed before a whole settle interval of empty polls: " + gone.ElapsedMilliseconds + " ms");
+                Assert.IsTrue(gone.Elapsed < TimeSpan.FromMilliseconds(500 + 1500), "took far longer than the settle interval plus a poll: " + gone.ElapsedMilliseconds + " ms");
+                Assert.IsTrue(rig.Processes.Snapshots - before > 1, "failed on a single empty poll");
                 InstallRunResult r = retry.Result;
                 Assert.AreEqual(LauncherError.InstallerClosedEarly, r.Error);
                 Assert.AreEqual("ac-client", r.ComponentId);
@@ -1052,6 +1059,39 @@ namespace DreamWeave.Launcher.Tests.App
                 InstallRunResult third = session.RunAsync(rig.FullPlan(), new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
                 Assert.AreEqual(LauncherError.None, third.Error, third.ComponentId);
                 Assert.AreEqual(2, rig.Log.Count(l => l == "installer-started"), "the Retry must start exactly one new installer");
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void ResumedInstaller_EmptyForOnePoll_ThenBack_DoesNotFail()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(500);
+                InstallSession session = StartedThenStopped(rig);
+
+                var second = new Hooked(null);
+                Task<InstallRunResult> retry = session.RunAsync(rig.FullPlan(), second, CancellationToken.None);
+                WaitUntil(() => Has(second, InstallEventKind.HandoffStarted), "the resumed hand-off");
+
+                // One poll sees nothing: the setup handed off to its engine, which is not a descendant and only
+                // shows up a moment later. (A tracked id that vanished is dropped for good, so "back" is the
+                // engine, as it would be for real.)
+                int seen = rig.Processes.Snapshots;
+                rig.Processes.Set();
+                WaitUntil(() => rig.Processes.Snapshots >= seen + 1, "one empty poll");
+                rig.Processes.Set((77, 600, "IDriver.exe"));
+                Thread.Sleep(1500);
+                Assert.IsFalse(retry.IsCompleted, "a single empty poll failed the resumed wait: " + (retry.IsCompleted ? retry.Result.Error.ToString() : string.Empty));
+
+                // The installer then finishes normally.
+                File.WriteAllBytes(Path.Combine(rig.Ac, "acclient.exe"), Exe);
+                File.WriteAllBytes(rig.Dat, StockDat);
+                rig.Processes.Set();
+                Assert.IsTrue(retry.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, retry.Result.Error, retry.Result.ComponentId);
+                Assert.AreEqual(1, rig.Log.Count(l => l == "installer-started"));
                 rig.AssertAllSatisfied();
             }
         }
