@@ -301,6 +301,43 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.IsFalse(p.IsStarting);
         }
 
+        private sealed class BlockingSlots : ISlotAccountStore
+        {
+            public System.Threading.ManualResetEventSlim InSave { get; } = new System.Threading.ManualResetEventSlim(false);
+
+            public System.Threading.ManualResetEventSlim Release { get; } = new System.Threading.ManualResetEventSlim(false);
+
+            public IReadOnlyList<string> Load() => new List<string>();
+
+            public void Save(IReadOnlyList<string> accounts)
+            {
+                InSave.Set();
+                Release.Wait(TimeSpan.FromSeconds(10));
+            }
+        }
+
+        [TestMethod]
+        public void StartInFlight_IsTrue_WhileTheNamesAreBeingSaved_ForPlayOneAndPlayAll()
+        {
+            foreach (bool all in new[] { false, true })
+            {
+                var slots = new BlockingSlots();
+                var starter = new ScriptedStarter();
+                LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), slots);
+                List<SlotInput> rows = Rows("mainacct", "pw", string.Empty, string.Empty, string.Empty, string.Empty);
+
+                Task run = all ? (Task)p.PlayAllAsync(rows, false, null, TimeSpan.Zero) : p.PlaySlotAsync(0, rows, false);
+                Assert.IsTrue(slots.InSave.Wait(TimeSpan.FromSeconds(10)), "the save began");
+                Assert.IsTrue(p.IsStartInFlight, (all ? "Play all" : "Play one") + ": a close now must wait");
+                Assert.AreEqual(0, starter.Args.Count, "the client has not started yet");
+
+                slots.Release.Set();
+                run.GetAwaiter().GetResult();
+                Assert.AreEqual(1, starter.Args.Count);
+                Assert.IsFalse(p.IsStartInFlight);
+            }
+        }
+
         private sealed class HookStarter : IGameStarter
         {
             private readonly Action _onStart;

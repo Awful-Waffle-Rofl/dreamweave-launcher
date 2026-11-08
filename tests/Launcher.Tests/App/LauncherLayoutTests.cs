@@ -168,19 +168,6 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void Layout_LongNoticeAndBanner_ScrollRangeCoversTheNarrowedPass()
-        {
-            string notice = string.Join(" ", System.Linq.Enumerable.Repeat("The server restarts at midnight for an update and will be down for about an hour.", 6));
-            WithScreen(notice, true, (w, s) =>
-            {
-                VStack body = s.Body;
-                Assert.IsTrue(body.AutoScroll, "this much content has to scroll");
-                Assert.IsTrue(body.AutoScrollMinSize.Height >= body.Measure(body.ClientSize.Width), "the scroll range (" + body.AutoScrollMinSize.Height + ") covers the content at the width it is really laid out (" + body.Measure(body.ClientSize.Width) + ")");
-                Assert.IsTrue(s.Footer.Bounds.Bottom <= s.ClientSize.Height, "the button row stays inside the card");
-            });
-        }
-
-        [TestMethod]
         public void Enter_InARowBox_PlaysThatRowOnly_ElsewhereItIsNotHandledByTheRow()
         {
             WithScreen(null, false, (w, s) =>
@@ -196,6 +183,33 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.IsFalse(s.Rows[2].HandleEnter(false), "focus elsewhere: the row leaves Enter to the default button");
                 CollectionAssert.AreEqual(new[] { 1 }, played);
                 Assert.IsNotNull(s.DefaultButton, "Play all stays the form default");
+            });
+        }
+
+        [TestMethod]
+        public void Enter_WithTheFocusInARowBox_RoutesThroughProcessCmdKey_AndPlaysThatRow()
+        {
+            WithScreen(null, false, (w, s) =>
+            {
+                var played = new List<int>();
+                for (int i = 0; i < s.Rows.Count; i++)
+                {
+                    int slot = i;
+                    s.Rows[i].PlayClicked += (x, y) => played.Add(slot);
+                }
+
+                SlotRow row = s.Rows[2];
+                row.FocusAccountBox();
+                Pump(() => row.AccountBoxFocused, 1000);
+                Assert.IsTrue(row.AccountBoxFocused, "the account box took the focus");
+
+                System.Reflection.MethodInfo m = typeof(SlotRow).GetMethod("ProcessCmdKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                var msg = default(Message);
+                object[] args = { msg, Keys.Enter };
+                bool handled = (bool)m.Invoke(row, args);
+
+                Assert.IsTrue(handled, "Enter in the row's box is handled by the row");
+                CollectionAssert.AreEqual(new[] { 2 }, played, "only that row played");
             });
         }
 

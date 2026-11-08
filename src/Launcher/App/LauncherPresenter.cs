@@ -144,6 +144,8 @@ namespace DreamWeave.Launcher.App
         private readonly ISlotAccountStore _slots;
         private readonly string[] _filled = new string[SlotCount];
         private bool _starting;
+        private bool _saving;
+        private bool _playingOne;
         private bool _batch;
         private CancellationTokenSource _batchCancel;
 
@@ -464,6 +466,7 @@ namespace DreamWeave.Launcher.App
 
             // Names first, as Play all does. The flag keeps a second start out while the save runs.
             _batch = true;
+            _playingOne = true;
             try
             {
                 await SaveSlotsAsync(inputs).ConfigureAwait(false);
@@ -472,6 +475,7 @@ namespace DreamWeave.Launcher.App
             }
             finally
             {
+                _playingOne = false;
                 _batch = false;
             }
         }
@@ -573,7 +577,7 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>True while a client start is running (a close must wait for it; it is never interrupted).</summary>
-        public bool IsStartInFlight => _starting;
+        public bool IsStartInFlight => _starting || _saving || _playingOne;
 
         /// <summary>Completes once no client start is running.</summary>
         public async Task WhenNoStartInFlightAsync()
@@ -597,6 +601,7 @@ namespace DreamWeave.Launcher.App
                 names.Add(i < inputs.Count ? inputs[i].Account : string.Empty);
             }
 
+            _saving = true;
             return Task.Run(() =>
             {
                 try
@@ -605,7 +610,11 @@ namespace DreamWeave.Launcher.App
                 }
                 catch (LauncherException)
                 {
-                    // Only the row names are lost; the game already started.
+                    // Only the row names are lost.
+                }
+                finally
+                {
+                    _saving = false;
                 }
             });
         }

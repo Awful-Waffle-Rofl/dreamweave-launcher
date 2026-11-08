@@ -100,6 +100,14 @@ namespace DreamWeave.Launcher.UI
             return true;
         }
 
+        /// <summary>Gives the account box the keyboard focus.</summary>
+        internal void FocusAccountBox()
+        {
+            _account.Focus();
+        }
+
+        internal bool AccountBoxFocused => _account.Focused;
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             // Key presses in the child boxes bubble up here before the form's default button sees them.
