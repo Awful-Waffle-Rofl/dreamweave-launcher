@@ -47,8 +47,15 @@ if (-not $iscc) {
     exit 1
 }
 
-$innoVersion = (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
-if (-not $innoVersion) { $innoVersion = (Get-Item -LiteralPath $iscc).VersionInfo.FileVersion }
+# ISCC.exe carries no file version resource (reads 0.0.0.0); its startup banner states the version:
+# "Inno Setup 6.x.y Command-Line Compiler". Run with no arguments it prints the banner and usage.
+$banner = (& $iscc 2>&1 | Out-String)
+$innoVersion = $null
+if ($banner -match 'Inno Setup\s+(\d+\.\d+(\.\d+)*)') { $innoVersion = $Matches[1] }
+if (-not $innoVersion) {
+    Write-Error "Could not read the Inno Setup version from the ISCC banner: $banner"
+    exit 1
+}
 Write-Host "Inno Setup compiler: $iscc (version $innoVersion)"
 if ($innoVersion -notmatch '^6\.') {
     Write-Error "Inno Setup major version 6 is required, found '$innoVersion'"
