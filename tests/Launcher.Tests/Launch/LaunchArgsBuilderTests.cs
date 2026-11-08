@@ -34,13 +34,13 @@ namespace DreamWeave.Launcher.Tests.Launch
         [TestMethod]
         public void DefaultTemplate_ProducesExactCommandLine()
         {
-            Assert.AreEqual("-a \"alice\" -v \"secret\" -h play.acdreamweave.com:9000 -rodat on", Ok());
+            Assert.AreEqual("-a \"alice\" -v \"secret\" -h play.acdreamweave.com:9000 -rodat off", Ok());
         }
 
         [TestMethod]
         public void ExtraArgs_AreAppendedAfterTemplate()
         {
-            Assert.AreEqual("-a \"alice\" -v \"secret\" -h play.acdreamweave.com:9000 -rodat on -foo bar", Ok(extra: " -foo bar "));
+            Assert.AreEqual("-a \"alice\" -v \"secret\" -h play.acdreamweave.com:9000 -rodat off -foo bar", Ok(extra: " -foo bar "));
         }
 
         [TestMethod]
@@ -315,7 +315,7 @@ namespace DreamWeave.Launcher.Tests.Launch
                     // The first token is parsed as the program name, so prepend one.
                     string[] argv = Argv("acclient.exe " + line);
                     CollectionAssert.AreEqual(
-                        new[] { "acclient.exe", "-a", user, "-v", pass, "-h", "play.acdreamweave.com:9000", "-rodat", "on" },
+                        new[] { "acclient.exe", "-a", user, "-v", pass, "-h", "play.acdreamweave.com:9000", "-rodat", "off" },
                         argv,
                         "user=[" + user + "] pass=[" + pass + "]");
                 }

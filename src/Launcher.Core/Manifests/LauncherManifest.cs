@@ -130,7 +130,7 @@ namespace DreamWeave.Launcher.Core.Manifests
     public sealed class LaunchInfo
     {
         /// <summary>Default template, verified against the End-of-Retail client (login packet received).</summary>
-        public const string DefaultArgTemplate = "-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat on";
+        public const string DefaultArgTemplate = "-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat off";
 
         /// <summary>Template with <c>{user}</c>, <c>{pass}</c>, <c>{host}</c>, <c>{port}</c> placeholders.</summary>
         [JsonProperty("argTemplate")]

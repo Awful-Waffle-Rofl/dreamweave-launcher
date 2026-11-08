@@ -8,7 +8,7 @@
     "port": 9000
   },
   "launch": {
-    "argTemplate": "-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat on",
+    "argTemplate": "-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat off",
     "extraArgs": ""
   },
   "launcher": {

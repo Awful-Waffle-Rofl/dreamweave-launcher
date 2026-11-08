@@ -168,7 +168,7 @@ namespace DreamWeave.Launcher.Tests
             byte[] manifest = TestManifests.Build(5);
             VerifiedManifest v = Trusting(_key).Verify(manifest, _key.Sign(manifest).ToFileBytes(), 0);
 
-            Assert.AreEqual("-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat on", v.Manifest.Launch.ArgTemplate);
+            Assert.AreEqual("-a \"{user}\" -v \"{pass}\" -h {host}:{port} -rodat off", v.Manifest.Launch.ArgTemplate);
         }
 
         [TestMethod]
