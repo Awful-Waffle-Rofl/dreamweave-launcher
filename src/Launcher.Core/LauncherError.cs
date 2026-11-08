@@ -90,7 +90,7 @@ namespace DreamWeave.Launcher.Core
         /// <summary>A Decal launch was asked for, but the player's Decal Inject.dll was not found (or is not Decal's registered one); no client was started.</summary>
         DecalNotFound = 76,
 
-        /// <summary>The Decal launch helper could not be run, gave no usable answer, or did not finish in time; no client was started by the launcher.</summary>
+        /// <summary>The Decal launch helper could not be run or gave no usable answer; no client was started by the launcher.</summary>
         DecalHelperFailed = 77,
 
         /// <summary>The Decal launch helper did not finish in time. The client may still open late, so the player is told to check before trying again.</summary>

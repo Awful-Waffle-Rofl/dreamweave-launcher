@@ -130,7 +130,7 @@ namespace DreamWeave.Launcher.App
         /// <summary>
         /// Runs the helper-runner on its own task and waits at most the backstop (plus a short grace so a
         /// runner that honours the backstop itself reports its own timeout first). A helper that does not
-        /// finish is NOT killed: the launcher only stops waiting and reports LaunchFailed.
+        /// finish is NOT killed: the launcher only stops waiting and reports DecalHelperTimeout.
         /// </summary>
         private HelperOutput RunWithBackstop(string acFolder, string args)
         {
