@@ -87,14 +87,20 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 Mega = mega;
                 Http = http;
                 Staging = Path.Combine(_dir.Path, "staging");
-                Service = new DownloadService(Staging, new FakeDiskSpace(long.MaxValue), new IDownloadTransport[] { mega, http });
+                Service = new DownloadService(Staging, new FakeDiskSpace(long.MaxValue), new IDownloadTransport[] { mega, http }, Log);
                 Dest = Path.Combine(DownloadRequest.ComponentFolder(Staging, "ac-client"), "ac-client.exe");
                 Request = new DownloadRequest("ac-client", Transports.Mega, new Uri("https://mega.nz/file/PRIMARY#key"), Good.Length, Hasher.ComputeSha256Hex(Good), Dest)
                 {
                     Alternates = new[] { new DownloadSource(Transports.Http, new Uri("https://mirror.example.test/ac1install.exe"), "Mirror One") },
                     OnFallback = label => Fallbacks.Add(label),
+                    OnSourceStarted = a => Started.Add(a),
+                    SourceLabel = "Primary Label",
                 };
             }
+
+            public RecordingLog Log { get; } = new RecordingLog();
+
+            public List<SourceAttempt> Started { get; } = new List<SourceAttempt>();
 
             public ScriptedTransport Mega { get; }
 
@@ -126,6 +132,67 @@ namespace DreamWeave.Launcher.Tests.Downloads
             }
 
             public void Dispose() => _dir.Dispose();
+        }
+
+        private sealed class RecordingLog : IDownloadLog
+        {
+            public List<DownloadAttemptRecord> Records { get; } = new List<DownloadAttemptRecord>();
+
+            public void Record(DownloadAttemptRecord record) => Records.Add(record);
+        }
+
+        [TestMethod]
+        public void EverySource_IsAnnouncedWithItsLabel_AndAFallbackCarriesThePreviousFailure()
+        {
+            using (var r = new Rig(new ScriptedTransport("mega", Fails(LauncherError.NetworkUnavailable)), new ScriptedTransport("http", Writes(Good))))
+            {
+                r.Service.DownloadAsync(r.Request, null, CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(2, r.Started.Count);
+                Assert.AreEqual(0, r.Started[0].Index);
+                Assert.IsFalse(r.Started[0].IsFallback);
+                Assert.AreEqual("Primary Label", r.Started[0].Source.Label);
+                Assert.AreEqual(Transports.Mega, r.Started[0].Source.Transport);
+                Assert.IsNull(r.Started[0].PreviousFailure);
+                Assert.IsTrue(r.Started[1].IsFallback);
+                Assert.AreEqual("Mirror One", r.Started[1].Source.Label);
+                Assert.AreEqual(LauncherError.NetworkUnavailable, r.Started[1].PreviousFailure.Code);
+            }
+        }
+
+        [TestMethod]
+        public void EverySourceAttempt_IsLogged_WithTransportHostOutcomeAndError()
+        {
+            using (var r = new Rig(new ScriptedTransport("mega", Fails(LauncherError.NetworkUnavailable, leavePartial: true)), new ScriptedTransport("http", Writes(Good))))
+            {
+                r.Service.DownloadAsync(r.Request, null, CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(2, r.Log.Records.Count);
+                DownloadAttemptRecord first = r.Log.Records[0];
+                Assert.AreEqual("ac-client", first.ComponentId);
+                Assert.AreEqual(0, first.SourceIndex);
+                Assert.AreEqual(Transports.Mega, first.Transport);
+                Assert.AreEqual("mega.nz", first.Host);
+                Assert.AreEqual(DownloadAttemptOutcome.Failed, first.Outcome);
+                Assert.AreEqual(LauncherError.NetworkUnavailable, ((LauncherException)first.Error).Code);
+                DownloadAttemptRecord second = r.Log.Records[1];
+                Assert.AreEqual(1, second.SourceIndex);
+                Assert.AreEqual("mirror.example.test", second.Host);
+                Assert.AreEqual(DownloadAttemptOutcome.Succeeded, second.Outcome);
+                Assert.AreEqual(Good.Length, second.Bytes);
+                Assert.IsNull(second.Error);
+            }
+        }
+
+        [TestMethod]
+        public void AnAlreadyVerifiedFile_IsLoggedAsAlreadyPresent()
+        {
+            using (var r = new Rig(new ScriptedTransport("mega"), new ScriptedTransport("http")))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(r.Dest));
+                File.WriteAllBytes(r.Dest, Good);
+                r.Service.DownloadAsync(r.Request, null, CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(DownloadAttemptOutcome.AlreadyPresent, r.Log.Records.Single().Outcome);
+                Assert.AreEqual(0, r.Started.Count);
+            }
         }
 
         [TestMethod]

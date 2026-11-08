@@ -26,6 +26,30 @@ namespace DreamWeave.Launcher.Core.Downloads
         public string Label { get; }
     }
 
+    /// <summary>Which source a download is about to try (see <see cref="DownloadRequest.OnSourceStarted"/>).</summary>
+    public sealed class SourceAttempt
+    {
+        /// <summary>Creates a notice.</summary>
+        public SourceAttempt(int index, DownloadSource source, LauncherException previousFailure)
+        {
+            Index = index;
+            Source = source ?? throw new ArgumentNullException(nameof(source));
+            PreviousFailure = previousFailure;
+        }
+
+        /// <summary>0 for the primary source, 1.. for each alternate in manifest order.</summary>
+        public int Index { get; }
+
+        /// <summary>The source about to be tried.</summary>
+        public DownloadSource Source { get; }
+
+        /// <summary>Why the previous source was given up (null for the primary).</summary>
+        public LauncherException PreviousFailure { get; }
+
+        /// <summary>True for an alternate (a fallback), false for the primary.</summary>
+        public bool IsFallback => Index > 0;
+    }
+
     /// <summary>
     /// One file to download and verify. Every field comes from the signed manifest except
     /// <see cref="DestinationPath"/>, which the caller chooses under <see cref="AppPaths.StagingDir"/>.
@@ -57,6 +81,25 @@ namespace DreamWeave.Launcher.Core.Downloads
 
         /// <summary>Called with the player-facing label of an alternate source just before it is tried (may run on a pool thread).</summary>
         public Action<string> OnFallback { get; set; }
+
+        /// <summary>
+        /// Called just before EVERY source is tried, the primary included, with which source it is and, for
+        /// an alternate, why the one before it failed (may run on a pool thread).
+        /// </summary>
+        public Action<SourceAttempt> OnSourceStarted { get; set; }
+
+        /// <summary>Player-facing description of the primary source (the manifest component's sourceLabel), or null.</summary>
+        public string SourceLabel { get; set; }
+
+        /// <summary>Set by a transport that learns the server actually serving the bytes (mega's storage host); logged per attempt.</summary>
+        public string ServedFromHost { get; set; }
+
+        /// <summary>
+        /// Bytes the last attempt at this source received before it ended, set by the transport (and by
+        /// <see cref="DownloadService"/> from its progress tracker). Logged for a failed attempt, whose
+        /// part file may already be deleted.
+        /// </summary>
+        public long BytesReceived { get; set; }
 
         /// <summary>
         /// Distinguishes this source's in-progress files from every other source's (empty for the primary,
@@ -145,6 +188,7 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
 
             request.Alternates = alternates;
+            request.SourceLabel = component.SourceLabel;
             return request;
         }
 

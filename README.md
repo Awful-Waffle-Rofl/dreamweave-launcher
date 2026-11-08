@@ -16,9 +16,10 @@ DreamWeave.
 
 - It ships only our own code. It never bundles, caches or re-hosts any WB Games
   or Turbine files.
-- The client installer is downloaded by the player from archive.org, and the
-  End-of-Retail data from an existing community mega.nz link. Every download is
-  verified by SHA-256 against a signed manifest that we host.
+- The player downloads the original game installer and the final game data
+  files from community uploads on mega.nz. The installer also has a backup copy
+  on the Internet Archive. Every download is verified by SHA-256 against a
+  signed manifest that we host.
 - It launches `acclient.exe` with login arguments for DreamWeave only.
 - By default it never modifies the client, never injects into client files or
   client processes, and never requires a modified client to play.

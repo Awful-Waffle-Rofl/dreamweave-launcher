@@ -777,11 +777,52 @@ namespace DreamWeave.Launcher.App
         private Task<DownloadResult> DownloadAsync(ManifestComponent c, string fileName, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
         {
             DownloadRequest request = DownloadRequest.FromComponent(c, _deps.Paths, fileName);
-            request.OnFallback = label => events.Report(new InstallEvent(
-                InstallEventKind.SourceChanged,
-                c.Id,
-                text: string.Format(System.Globalization.CultureInfo.InvariantCulture, UiText.FallbackSourceFormat, string.IsNullOrWhiteSpace(label) ? c.Title ?? c.Id : label)));
+            request.OnSourceStarted = attempt => events.Report(new InstallEvent(InstallEventKind.SourceChanged, c.Id, text: SourceText(c, attempt)));
             return _deps.Downloads.DownloadAsync(request, progress, ct);
+        }
+
+        /// <summary>
+        /// The progress row's source line: which source is in use and, after a fallback, why the
+        /// previous one was given up.
+        /// </summary>
+        internal static string SourceText(ManifestComponent c, SourceAttempt attempt)
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            string label = string.IsNullOrWhiteSpace(attempt.Source.Label) ? c.Title ?? c.Id : attempt.Source.Label;
+            if (!attempt.IsFallback)
+            {
+                return string.Format(inv, UiText.DownloadingFromFormat, label);
+            }
+
+            return string.Format(inv, UiText.FallbackSourceFormat, label)
+                + Environment.NewLine
+                + string.Format(inv, UiText.FallbackReasonFormat, FallbackReason(attempt.PreviousFailure));
+        }
+
+        private static string FallbackReason(LauncherException failure)
+        {
+            if (failure == null)
+            {
+                return UiText.FallbackReasonUnknown;
+            }
+
+            switch (failure.Code)
+            {
+                case LauncherError.HashMismatch:
+                case LauncherError.SizeMismatch:
+                    return UiText.FallbackReasonDamaged;
+                case LauncherError.SourceQuotaExceeded:
+                    return UiText.FallbackReasonQuota;
+                case LauncherError.ManifestInvalid:
+                    return UiText.FallbackReasonUnusable;
+                case LauncherError.NetworkUnavailable:
+                    return UiText.FallbackReasonNetwork;
+                case LauncherError.SourceHttpError:
+                    return UiText.FallbackReasonUnavailable;
+                default:
+                    // Never the failure's Detail: that is technical text, and launcher.log already records it.
+                    return UiText.FallbackReasonUnknown;
+            }
         }
 
         private string RequireFolder()

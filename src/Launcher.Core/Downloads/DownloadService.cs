@@ -29,16 +29,18 @@ namespace DreamWeave.Launcher.Core.Downloads
         private readonly string _stagingDir;
         private readonly IDiskSpace _disk;
         private readonly Dictionary<string, IDownloadTransport> _transports = new Dictionary<string, IDownloadTransport>(StringComparer.Ordinal);
+        private readonly IDownloadLog _log;
 
-        /// <summary>Production constructor: HTTP and mega.nz transports, real free-space query.</summary>
+        /// <summary>Production constructor: HTTP and mega.nz transports, real free-space query, <see cref="AppPaths.LogFile"/> log.</summary>
         public DownloadService(AppPaths paths)
-            : this(paths?.StagingDir, new SystemDiskSpace(), new IDownloadTransport[] { new HttpTransport(new HttpStreamClient()), new MegaTransport() })
+            : this(paths?.StagingDir, new SystemDiskSpace(), new IDownloadTransport[] { new HttpTransport(new HttpStreamClient()), new MegaTransport() }, paths == null ? null : new FileDownloadLog(paths.LogFile))
         {
         }
 
-        /// <summary>Constructor for tests and custom wiring.</summary>
-        public DownloadService(string stagingDir, IDiskSpace disk, IEnumerable<IDownloadTransport> transports)
+        /// <summary>Constructor for tests and custom wiring. <paramref name="log"/> (optional) receives one record per source attempt.</summary>
+        public DownloadService(string stagingDir, IDiskSpace disk, IEnumerable<IDownloadTransport> transports, IDownloadLog log = null)
         {
+            _log = log;
             if (string.IsNullOrWhiteSpace(stagingDir))
             {
                 throw new ArgumentException("A staging folder is required.", nameof(stagingDir));
@@ -68,6 +70,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                 DownloadResult existing = await TryExistingAsync(request, progress, cancellationToken).ConfigureAwait(false);
                 if (existing != null)
                 {
+                    Log(request, 0, DownloadAttemptOutcome.AlreadyPresent, existing.Size, TimeSpan.Zero, null);
                     return existing;
                 }
             }
@@ -94,7 +97,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                     throw new LauncherException(LauncherError.Cancelled, "Cancelled.");
                 }
 
-                DownloadSource source = i == 0 ? new DownloadSource(request.Transport, request.Url, null) : request.Alternates[i - 1];
+                DownloadSource source = i == 0 ? new DownloadSource(request.Transport, request.Url, request.SourceLabel) : request.Alternates[i - 1];
                 DownloadRequest attempt = request.ForSource(source, i, i < total - 1);
                 if (i > 0)
                 {
@@ -103,10 +106,11 @@ namespace DreamWeave.Launcher.Core.Downloads
                     request.OnFallback?.Invoke(source.Label);
                 }
 
+                request.OnSourceStarted?.Invoke(new SourceAttempt(i, source, last));
                 previous = attempt;
                 try
                 {
-                    DownloadResult result = await DownloadFromSourceAsync(attempt, progress, cancellationToken).ConfigureAwait(false);
+                    DownloadResult result = await DownloadFromSourceAsync(attempt, i, progress, cancellationToken).ConfigureAwait(false);
                     DeleteSourceParts(request);
 
                     // The primary's own part (an abandoned read may have left it) is not wanted any more either.
@@ -168,7 +172,53 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
         }
 
-        private async Task<DownloadResult> DownloadFromSourceAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+        private async Task<DownloadResult> DownloadFromSourceAsync(DownloadRequest request, int sourceIndex, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+        {
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                DownloadResult result = await DownloadFromSourceCoreAsync(request, progress, cancellationToken).ConfigureAwait(false);
+                Log(request, sourceIndex, DownloadAttemptOutcome.Succeeded, result.Size, clock.Elapsed, null);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                bool cancelled = cancellationToken.IsCancellationRequested || (ex is LauncherException le && le.Code == LauncherError.Cancelled);
+                long onDisk = Math.Max(0, PartFiles.LengthOrMissing(request.PartPath));
+                Log(request, sourceIndex, cancelled ? DownloadAttemptOutcome.Cancelled : DownloadAttemptOutcome.Failed, Math.Max(request.BytesReceived, onDisk), clock.Elapsed, ex);
+                throw;
+            }
+        }
+
+        private void Log(DownloadRequest request, int sourceIndex, DownloadAttemptOutcome outcome, long bytes, TimeSpan duration, Exception error)
+        {
+            if (_log == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _log.Record(new DownloadAttemptRecord
+                {
+                    ComponentId = request.StepId,
+                    SourceIndex = sourceIndex,
+                    Transport = request.Transport,
+                    Host = request.Url != null && request.Url.IsAbsoluteUri ? request.Url.Host : null,
+                    StorageHost = request.ServedFromHost,
+                    Outcome = outcome,
+                    Bytes = bytes,
+                    Duration = duration,
+                    Error = error,
+                });
+            }
+            catch (Exception)
+            {
+                // A log sink never fails a download.
+            }
+        }
+
+        private async Task<DownloadResult> DownloadFromSourceCoreAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
         {
             Validate(request);
             IDownloadTransport transport = TransportFor(request);
@@ -192,6 +242,10 @@ namespace DreamWeave.Launcher.Core.Downloads
                 {
                     DiscardPart(request);
                     throw;
+                }
+                finally
+                {
+                    request.BytesReceived = Math.Max(request.BytesReceived, tracker.BytesDone);
                 }
 
                 tracker.Complete();

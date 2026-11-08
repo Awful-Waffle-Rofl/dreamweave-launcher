@@ -47,6 +47,10 @@ no headers. Daily files are deleted after 90 days.
 - `%LOCALAPPDATA%\DreamWeave\telemetry-queue.json` holds events that have not been delivered yet, so a failed send
   or a closed launcher does not lose them. It holds the same fields as above plus the time each event happened. It
   never holds the install id (that is read from `state.json` when a batch is sent).
+- `%LOCALAPPDATA%\DreamWeave\launcher.log` (plus at most one older `launcher.log.1`, each capped at about 1 MB) records
+  each download attempt: component id, source type, host name, outcome, bytes, duration and the error type and
+  message. It is local only and is never sent. The Windows profile folder is written as `%USERPROFILE%`, and it never
+  holds an account name or password. Uninstall deletes it with the rest of the folder.
 - The queue keeps at most 200 events; the oldest are dropped first. An event older than 7 days is dropped without
   being sent.
 

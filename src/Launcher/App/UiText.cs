@@ -13,7 +13,7 @@ namespace DreamWeave.Launcher.App
         public const string WelcomeIntro = "DreamWeave Launcher sets up Asheron's Call on this PC and connects you to the DreamWeave server.";
 
         // FIXED W2
-        public const string WelcomeSources = "It downloads the original game installer from the Internet Archive and the final game data files from a community upload on mega.nz. Nothing is downloaded until you choose it on the next screens.";
+        public const string WelcomeSources = "It downloads the original game installer and the final game data files from community uploads on mega.nz. The installer also has a backup copy on the Internet Archive. Nothing is downloaded until you choose it on the next screens.";
 
         // FIXED T1
         public const string TelemetryOptIn = "Send anonymous setup diagnostics (step, result and error code only - no account names, passwords or file paths). Off by default.";
@@ -74,6 +74,18 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>Shown on the progress screen when a download falls back to a mirror ({0} = the mirror's source label).</summary>
         public const string FallbackSourceFormat = "Trying another source: {0}";
+
+        // Progress screen source line while a component downloads ({0} = the source's label).
+        public const string DownloadingFromFormat = "Downloading from: {0}";
+
+        // Second line under FallbackSourceFormat ({0} = one of the reasons below, or the failure's own plain description).
+        public const string FallbackReasonFormat = "The previous source did not work: {0}";
+        public const string FallbackReasonDamaged = "the file it sent was damaged or incomplete.";
+        public const string FallbackReasonQuota = "its free download limit has been reached for your connection.";
+        public const string FallbackReasonUnusable = "this launcher cannot use that source.";
+        public const string FallbackReasonNetwork = "it could not be reached or stopped sending data.";
+        public const string FallbackReasonUnavailable = "the file is no longer available there.";
+        public const string FallbackReasonUnknown = "it failed.";
         public const string StatusDone = "Done";
         public const string StatusNeedsRepair = "Needs repair";
         public const string StatusWillDownload = "Will download";
@@ -132,7 +144,7 @@ namespace DreamWeave.Launcher.App
         // ---- Start-up and self-install ----
 
         public const string Loading = "Getting the latest download list...";
-        public const string SelfInstallPrompt = "Install DreamWeave Launcher on this PC? It adds a Start menu shortcut and an entry in Apps and Features, and needs no administrator rights.";
+        public const string SelfInstallPrompt = "Install DreamWeave Launcher on this PC? It adds a Start menu shortcut and an entry in Apps and Features.";
         public const string SelfInstallFailed = "The launcher could not be installed. You can keep using it from where it is.";
         public const string SelfInstallStartFailed = "DreamWeave Launcher was installed but could not be started. Open it from the Start menu.";
         public const string NeedsNewerLauncher = "This launcher is too old to install the current game files. Update the launcher to continue.";

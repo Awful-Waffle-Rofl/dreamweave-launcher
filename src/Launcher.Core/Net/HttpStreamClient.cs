@@ -80,6 +80,9 @@ namespace DreamWeave.Launcher.Core.Net
             }
         }
 
+        /// <summary>The limit on waiting for response headers.</summary>
+        internal TimeSpan HeaderTimeout => _headerTimeout;
+
         /// <summary>Disposes the underlying client.</summary>
         public void Dispose()
         {
