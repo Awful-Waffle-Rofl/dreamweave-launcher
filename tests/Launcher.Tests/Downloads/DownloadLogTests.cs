@@ -28,6 +28,18 @@ namespace DreamWeave.Launcher.Tests.Downloads
         }
 
         [TestMethod]
+        public void Note_WritesOneCleanedLine_WithTimeAndKind()
+        {
+            using (var dir = new TempDir())
+            {
+                var log = new FileDownloadLog(Path.Combine(dir.Path, "launcher.log"), userProfile: @"C:\Users\someone");
+                log.Note("install", "proceeding: helpers IDriver.exe\r\nfrom C:\\Users\\someone\\x");
+                string line = File.ReadAllLines(log.FilePath).Single();
+                StringAssert.Matches(line, new System.Text.RegularExpressions.Regex(@"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z install proceeding: helpers IDriver\.exe  from %USERPROFILE%\\x$"));
+            }
+        }
+
+        [TestMethod]
         public void LogFile_LivesInTheDataFolder_WhichUninstallDeletesWhole()
         {
             var paths = new AppPaths(@"C:\Root");

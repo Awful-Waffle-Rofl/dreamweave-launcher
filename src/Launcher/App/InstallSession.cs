@@ -273,6 +273,9 @@ namespace DreamWeave.Launcher.App
         /// <summary>Lists running processes, to tell whether the started installer (and its helpers) are still running.</summary>
         public IProcessTable Processes { get; set; } = ToolhelpProcessTable.Instance;
 
+        /// <summary>Writes one line to launcher.log about an install decision (never throws).</summary>
+        public Action<string> InstallLog { get; set; } = line => { };
+
         /// <summary>Wait before re-checking a file that could not be read (locked by a scanner, say) during the final check.</summary>
         public TimeSpan VerifyRetryDelay { get; set; } = TimeSpan.FromSeconds(3);
 
@@ -290,6 +293,7 @@ namespace DreamWeave.Launcher.App
                 ReadSavedFolder = () => s.State.Read(st => st.AcFolder),
                 SaveFolder = folder => s.State.Update(st => st.AcFolder = folder),
                 RunElevated = (task, cleanUp) => s.Elevated.Run(task, cleanUp),
+                InstallLog = line => new FileDownloadLog(s.Paths.LogFile).Note("install", line),
             };
         }
     }
@@ -559,7 +563,10 @@ namespace DreamWeave.Launcher.App
         /// </list>
         /// There is no carrying on regardless: after <see cref="InstallDependencies.SettleTimeout"/> the
         /// player is asked to finish the installer, and the wait goes on. "I finished" runs one check at
-        /// once, with the same process and in-use conditions; it never skips either.
+        /// once with the same in-use and settle conditions, which it never skips. The one thing a click
+        /// relaxes: InstallShield helpers alone (outside the tracked installer tree) no longer block,
+        /// because a helper can linger after the wizard closes. That decision is logged with the helper
+        /// names. Helpers alone still block the automatic path.
         /// </summary>
         private async Task WaitForInstallerDoneAsync(ManifestComponent installer, string folder, InstallerProcessWatch watch, IProgress<InstallEvent> events, CancellationToken ct)
         {
@@ -576,6 +583,24 @@ namespace DreamWeave.Launcher.App
             string previous = null;
             bool poked = false;
             bool warned = false;
+
+            // One look: the files' stamps, or null while the installer (as far as this look allows) runs or a file is in use.
+            string Look(bool helpersAllowed, out IReadOnlyList<string> helpers)
+            {
+                helpers = new string[0];
+                if (watch != null)
+                {
+                    InstallerActivity activity = watch.Check();
+                    helpers = watch.LastHelpers;
+                    if (activity == InstallerActivity.Tree || (activity == InstallerActivity.HelpersOnly && !helpersAllowed))
+                    {
+                        return null;
+                    }
+                }
+
+                return SettleSnapshot(folder, targets);
+            }
+
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
@@ -585,28 +610,37 @@ namespace DreamWeave.Launcher.App
                     poke = _poke.Task;
                 }
 
-                bool running = watch != null && await Task.Run(() => watch.IsRunning(), ct).ConfigureAwait(false);
-                string snapshot = running ? null : await Task.Run(() => SettleSnapshot(folder, targets), ct).ConfigureAwait(false);
-                if (snapshot != null && snapshot == previous)
+                IReadOnlyList<string> helpers = null;
+                bool clicked = poked;
+                string snapshot = await Task.Run(() => Look(clicked, out helpers), ct).ConfigureAwait(false);
+                if (snapshot != null && snapshot == previous && (!poked || helpers.Count == 0))
                 {
+                    // An automatic pass never reaches here with helpers running; a click with none needs no note.
                     return;
                 }
 
                 if (poked && snapshot != null)
                 {
-                    // "I finished" with the installer gone and the files openable: one confirming look a
+                    // "I finished" with the installer tree gone and the files openable: one confirming look a
                     // short gap later, rather than make the player wait a full settle interval.
                     await Task.Delay(_deps.PollInterval, ct).ConfigureAwait(false);
-                    string confirm = await Task.Run(() => watch != null && watch.IsRunning() ? null : SettleSnapshot(folder, targets), ct).ConfigureAwait(false);
+                    IReadOnlyList<string> confirmHelpers = null;
+                    string confirm = await Task.Run(() => Look(true, out confirmHelpers), ct).ConfigureAwait(false);
                     if (confirm != null && confirm == snapshot)
                     {
+                        if (confirmHelpers.Count > 0)
+                        {
+                            _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: installer tree gone and files settled, InstallShield helper processes still running: " + string.Join(", ", confirmHelpers));
+                        }
+
                         return;
                     }
 
                     snapshot = confirm;
                 }
 
-                previous = snapshot;
+                // A look that allowed helpers must not pair with a later automatic look that does not.
+                previous = poked ? null : snapshot;
                 if (poked)
                 {
                     events.Report(new InstallEvent(InstallEventKind.HandoffNotDetected, installer.Id, text: UiText.InstallerStillRunning));

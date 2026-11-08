@@ -117,16 +117,12 @@ namespace DreamWeave.Launcher.App
         public const string AskingPermission = "Windows will ask for permission to write to the game folder.";
         public const string HandoffNotDetected = "The install has not been detected yet. Finish the installer, then click \"I finished\" again.";
 
-        // DRAFT: a downloaded component waiting for the install phase.
         public const string StepDownloading = "Downloading";
 
-        // DRAFT
         public const string StepDownloaded = "Downloaded";
 
-        // DRAFT: the settle wait ran past its timeout, or "I finished" found the installer still busy.
         public const string InstallerStillRunning = "The Asheron's Call installer still seems to be running. Finish the installer, then click \"I finished\".";
 
-        // DRAFT: wording given by the owner's task.
         public const string InstallerHoldsGameFile = "A game file is still in use, probably by the Asheron's Call installer. Finish the installer, then click Retry.";
         public const string CancelledResumable = "Stopped. Finished downloads are kept, and the game installer download picks up where it left off next time.";
         public const string DoneTitle = "All set";

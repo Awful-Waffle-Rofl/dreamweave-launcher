@@ -156,6 +156,9 @@ namespace DreamWeave.Launcher.Tests.App
 
             public LauncherError FailWith { get; set; }
 
+            /// <summary>Transport the scripted failure names (DownloadService sets it the same way).</summary>
+            public string FailTransport { get; set; }
+
             public async Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
             {
                 string name = Path.GetFileName(request.DestinationPath);
@@ -166,7 +169,13 @@ namespace DreamWeave.Launcher.Tests.App
 
                 if (name == FailFile)
                 {
-                    throw new LauncherException(FailWith, "scripted");
+                    var ex = new LauncherException(FailWith, "scripted");
+                    if (FailTransport != null)
+                    {
+                        ex.Data["transport"] = FailTransport;
+                    }
+
+                    throw ex;
                 }
 
                 Log?.Enqueue("downloaded:" + name);
@@ -217,6 +226,7 @@ namespace DreamWeave.Launcher.Tests.App
                     Paths = new AppPaths(Path.Combine(_dir.Path, "root")),
                     Downloads = Downloads,
                     Processes = Processes,
+                    InstallLog = line => InstallLogLines.Enqueue(line),
                     Disk = new FixedDiskSpace(long.MaxValue / 4),
                     Locator = new AcInstallLocator(new FakeRegistry(), fs, Ac),
                     Evaluator = Evaluator,
@@ -240,6 +250,9 @@ namespace DreamWeave.Launcher.Tests.App
             public Starter Starter { get; }
 
             public FakeProcessTable Processes { get; } = new FakeProcessTable();
+
+            /// <summary>Lines the session wrote to launcher.log.</summary>
+            public ConcurrentQueue<string> InstallLogLines { get; } = new ConcurrentQueue<string>();
 
             public string StatePath => Path.Combine(_dir.Path, "state.json");
 
@@ -732,6 +745,101 @@ namespace DreamWeave.Launcher.Tests.App
                 InstallRunResult retry = session.RunAsync(rig.FullPlan(), new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
                 Assert.AreEqual(LauncherError.None, retry.Error, retry.ComponentId);
                 rig.AssertAllSatisfied();
+            }
+        }
+        [TestMethod]
+        public void TreeGone_HelperAlive_IFinished_Proceeds_AndLogsTheHelpers()
+        {
+            using (var rig = new Rig())
+            {
+                // The wizard has closed (no tracked process) but a COM-started helper lingers.
+                rig.Deps.SettleInterval = TimeSpan.FromMinutes(5);
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((77, 600, "IDriver.exe"), (600, 4, "svchost.exe"));
+                var events = new Hooked(null);
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+                Assert.IsFalse(OverlayStarted(events));
+
+                session.CheckInstallNow();
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)), "I finished with only a helper left did not proceed");
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                string line = rig.InstallLogLines.SingleOrDefault();
+                Assert.IsNotNull(line, "the decision must be logged");
+                StringAssert.Contains(line, "IDriver.exe");
+                StringAssert.Contains(line, "I finished");
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void TreeGone_HelperAlive_WithoutAClick_KeepsWaiting()
+        {
+            using (var rig = new Rig())
+            using (var cts = new CancellationTokenSource())
+            {
+                rig.Deps.SettleTimeout = TimeSpan.FromMilliseconds(200);
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((77, 600, "ISBEW64.exe"));
+                var events = new Hooked(null);
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, cts.Token);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.InstallerStillRunning), "the finish-the-installer status");
+                int seen = rig.Processes.Snapshots;
+                WaitUntil(() => rig.Processes.Snapshots >= seen + 8, "more polls");
+                Assert.IsFalse(OverlayStarted(events), "a helper alone must still block the automatic path");
+                Assert.AreEqual(0, rig.InstallLogLines.Count);
+
+                cts.Cancel();
+                Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
+            }
+        }
+
+        [TestMethod]
+        public void TreeAlive_IFinished_KeepsWaiting()
+        {
+            using (var rig = new Rig())
+            using (var cts = new CancellationTokenSource())
+            {
+                rig.Deps.SettleInterval = TimeSpan.FromMinutes(5);
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((4242, 900, "setup-root.exe"), (77, 600, "IDriver.exe"));
+                var events = new Hooked(null);
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), events, cts.Token);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+
+                session.CheckInstallNow();
+                WaitUntil(() => Has(events, InstallEventKind.HandoffNotDetected, UiText.InstallerStillRunning), "the still-running answer");
+                Thread.Sleep(200);
+                Assert.IsFalse(OverlayStarted(events), "I finished went on while the installer itself still ran");
+                Assert.AreEqual(0, rig.InstallLogLines.Count);
+
+                cts.Cancel();
+                Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
+            }
+        }
+
+        [TestMethod]
+        public void MegaQuota_InTheDownloadPhase_ShowsTheQuotaMessage_BeforeTheInstallerOpens()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Downloads.FailFile = "eor-dats.zip";
+                rig.Downloads.FailWith = LauncherError.SourceQuotaExceeded;
+                rig.Downloads.FailTransport = Transports.Mega;
+                var events = new Hooked(null);
+                InstallRunResult r = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None).GetAwaiter().GetResult();
+
+                Assert.AreEqual(LauncherError.SourceQuotaExceeded, r.Error);
+                Assert.AreEqual("eor-dats", r.ComponentId);
+                Assert.AreEqual(Transports.Mega, r.SourceTransport);
+                Assert.AreEqual(UiText.MegaQuota, ErrorMessages.For(r.Error, r.SourceTransport));
+                StringAssert.EndsWith(UiText.MegaQuota, "and click Retry.");
+                Assert.AreEqual("ac-client", r.RetryFromId, "Retry re-runs the plan from the start; the installer download is found in place");
+                Assert.IsFalse(rig.Log.Contains("installer-started"), "the installer window must not open after a failed download");
+                Assert.IsFalse(Has(events, InstallEventKind.HandoffStarted));
+                Assert.IsFalse(Has(events, InstallEventKind.StepStarted), "nothing is installed before every download is verified");
             }
         }
     }

@@ -418,12 +418,16 @@ namespace DreamWeave.Launcher.UI
                     case InstallEventKind.HandoffStarted:
                         notDetected.Text = string.Empty;
                         handoff.Visible = true;
+
+                        // The installer's own progress is unknown: a moving bar, not a nearly full one.
+                        totalBar.Style = ProgressBarStyle.Marquee;
                         break;
                     case InstallEventKind.HandoffNotDetected:
                         notDetected.Text = ev.Text;
                         break;
                     case InstallEventKind.HandoffEnded:
                         handoff.Visible = false;
+                        totalBar.Style = ProgressBarStyle.Blocks;
                         break;
                     case InstallEventKind.CriticalStarted:
                         cancel.Enabled = false;
@@ -459,6 +463,7 @@ namespace DreamWeave.Launcher.UI
 
                 cancel.Enabled = false;
                 handoff.Visible = false;
+                totalBar.Style = ProgressBarStyle.Blocks;
                 _acFolder = result.AcFolder;
                 if (result.Error == LauncherError.None)
                 {

@@ -114,6 +114,19 @@ namespace DreamWeave.Launcher.Core.Install
         private static extern bool CloseHandle(IntPtr hObject);
     }
 
+    /// <summary>What <see cref="InstallerProcessWatch.Check"/> found.</summary>
+    public enum InstallerActivity
+    {
+        /// <summary>Nothing of the installer is running.</summary>
+        None = 0,
+
+        /// <summary>Only InstallShield helpers outside the tracked tree are running (they can linger after the wizard closes).</summary>
+        HelpersOnly = 1,
+
+        /// <summary>The started process or one of its descendants (or a staged-name match) is running, or the list could not be read.</summary>
+        Tree = 2,
+    }
+
     /// <summary>
     /// Answers "is the game installer still running?" for the installer the launcher started.
     /// <para>
@@ -125,7 +138,7 @@ namespace DreamWeave.Launcher.Core.Install
     /// <list type="bullet">
     /// <item>Roots: the started process id (when Windows returned one) and any process whose image
     /// name is the staged installer's file name (when it did not).</item>
-    /// <item>On every <see cref="IsRunning"/> call every process whose parent is tracked is adopted,
+    /// <item>On every <see cref="Check"/> call every process whose parent is tracked is adopted,
     /// to a fixed point, BEFORE tracked ids that are gone are dropped, so the child of a parent that
     /// exited between two polls is still adopted (its parent id still names the dead parent).</item>
     /// <item>Any process named like an InstallShield helper counts as running, whoever started it.</item>
@@ -163,12 +176,22 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
-        /// <summary>What the last <see cref="IsRunning"/> call saw, for the log (process names only).</summary>
+        /// <summary>What the last <see cref="Check"/> call saw, for the log (process names only).</summary>
         public string LastReason { get; private set; } = string.Empty;
+
+        /// <summary>Image names of the helper-only processes the last <see cref="Check"/> saw (outside the tracked tree).</summary>
+        public IReadOnlyList<string> LastHelpers { get; private set; } = new string[0];
 
         /// <summary>True while any tracked process or any InstallShield helper is running.</summary>
         public bool IsRunning()
         {
+            return Check() != InstallerActivity.None;
+        }
+
+        /// <summary>Takes a snapshot and says what of the installer is still running.</summary>
+        public InstallerActivity Check()
+        {
+            LastHelpers = new string[0];
             IReadOnlyList<ProcessEntry> all;
             try
             {
@@ -176,8 +199,9 @@ namespace DreamWeave.Launcher.Core.Install
             }
             catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException || ex is ExternalException)
             {
+                // Unknown is treated like the tree: nothing may proceed on a guess.
                 LastReason = "process list unavailable";
-                return true;
+                return InstallerActivity.Tree;
             }
 
             var alive = new HashSet<int>(all.Select(p => p.Pid));
@@ -205,9 +229,16 @@ namespace DreamWeave.Launcher.Core.Install
 
             _tracked.RemoveWhere(pid => !alive.Contains(pid));
 
-            var running = all.Where(p => _tracked.Contains(p.Pid) || IsHelper(p.ExeName)).Select(p => p.ExeName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            LastReason = string.Join(", ", running);
-            return running.Count > 0;
+            List<string> tree = all.Where(p => _tracked.Contains(p.Pid)).Select(p => p.ExeName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            List<string> helpers = all.Where(p => !_tracked.Contains(p.Pid) && IsHelper(p.ExeName)).Select(p => p.ExeName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            LastHelpers = helpers;
+            LastReason = string.Join(", ", tree.Concat(helpers).Distinct(StringComparer.OrdinalIgnoreCase));
+            if (tree.Count > 0)
+            {
+                return InstallerActivity.Tree;
+            }
+
+            return helpers.Count > 0 ? InstallerActivity.HelpersOnly : InstallerActivity.None;
         }
 
         /// <summary>True when <paramref name="exeName"/> is a known InstallShield helper.</summary>
