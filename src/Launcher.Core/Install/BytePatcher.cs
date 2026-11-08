@@ -17,6 +17,11 @@ namespace DreamWeave.Launcher.Core.Install
     /// <c>&lt;target&gt;.dwtmp</c>, that file is hashed again from disk, and only then does it
     /// atomically replace the target.
     /// </para>
+    /// <para>
+    /// When the game folder is not writable, the patched (or reverted) bytes are still built and
+    /// verified HERE, unelevated (reading the game folder needs no elevation), then staged as
+    /// <c>ready\&lt;target&gt;</c> for <see cref="VerifiedPlacementRunner"/>; patch logic never runs elevated.
+    /// </para>
     /// </summary>
     public sealed class BytePatcher
     {
@@ -27,9 +32,9 @@ namespace DreamWeave.Launcher.Core.Install
         private readonly Downloads.IDiskSpace _disk;
 
         /// <summary>
-        /// Creates a patcher. <paramref name="paths"/> locates the elevated task file when the game
-        /// folder is not writable; pass null where no hand-off is possible (the elevated helper
-        /// itself), and an unwritable folder is then AccessDenied.
+        /// Creates a patcher. <paramref name="paths"/> locates the staging folder for an elevated
+        /// placement when the game folder is not writable; pass null where no hand-off is possible,
+        /// and an unwritable folder is then AccessDenied.
         /// </summary>
         /// <param name="paths">Launcher paths, or null for no hand-off.</param>
         /// <param name="diskSpace">Free-space query; <see cref="Downloads.SystemDiskSpace"/> when null.</param>
@@ -73,9 +78,12 @@ namespace DreamWeave.Launcher.Core.Install
 
             string full = AcPathSafety.ResolveForWrite(acFolder, c.Target);
             FileStream guard;
-            if (!AcWriter.TryOpenGuard(full, what, out guard))
+            bool guarded = AcWriter.TryOpenGuard(full, what, out guard);
+            if (!guarded)
             {
-                return NeedsElevation(c, acFolder, forward);
+                // Not even a read guard: the result can still be built from a plain read (the
+                // elevated helper takes its own guard before it places anything).
+                guard = OpenForRead(full, what);
             }
 
             if (guard == null)
@@ -113,7 +121,7 @@ namespace DreamWeave.Launcher.Core.Install
                 string current = Hasher.ComputeSha256Hex(data);
                 if (Hasher.FixedTimeEquals(current, toHash))
                 {
-                    return new BytePatchResult(InstallOutcome.NothingToDo, null, null);
+                    return new BytePatchResult(InstallOutcome.NothingToDo, null);
                 }
 
                 if (!Hasher.FixedTimeEquals(current, fromHash))
@@ -151,10 +159,10 @@ namespace DreamWeave.Launcher.Core.Install
                     throw new LauncherException(LauncherError.PatchOutputMismatch, "The patched " + what + " would not match the published result, so it was left unchanged.");
                 }
 
-                if (!AcWriter.CanCreateIn(Path.GetDirectoryName(full)))
+                if (!guarded || !AcWriter.CanCreateIn(Path.GetDirectoryName(full)))
                 {
                     guard.Dispose();
-                    return NeedsElevation(c, acFolder, forward);
+                    return NeedsElevation(c, acFolder, data);
                 }
 
                 AcWriter.RequireFreeSpace(_disk, Path.GetDirectoryName(full), data.Length, "in the game folder");
@@ -196,20 +204,68 @@ namespace DreamWeave.Launcher.Core.Install
                     throw;
                 }
 
-                return new BytePatchResult(InstallOutcome.Completed, null, null);
+                return new BytePatchResult(InstallOutcome.Completed, null);
             }
         }
 
-        private BytePatchResult NeedsElevation(ManifestComponent c, string acFolder, bool forward)
+        /// <summary>Opens the target for reading only, sharing everything; null when it does not exist.</summary>
+        private static FileStream OpenForRead(string full, string what)
+        {
+            try
+            {
+                return new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.None);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException || ex is DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                throw new LauncherException(LauncherError.AccessDenied, "Windows denied access to " + what + ".", ex);
+            }
+            catch (IOException ex)
+            {
+                throw LauncherException.FromIo(ex, "reading " + what);
+            }
+        }
+
+        /// <summary>
+        /// Stages the already patched (or reverted) and verified bytes as
+        /// <c>ready\&lt;target&gt;</c> and asks for an elevated placement. Nothing patch-specific
+        /// runs elevated: the helper only checks those bytes against the manifest and places them.
+        /// </summary>
+        private BytePatchResult NeedsElevation(ManifestComponent c, string acFolder, byte[] data)
         {
             if (_paths == null)
             {
                 throw new LauncherException(LauncherError.AccessDenied, "Windows denied access to " + c.Target + ".");
             }
 
-            var task = new ElevatedTask { AppRoot = _paths.Root, AcFolder = acFolder };
-            task.Items.Add(new ElevatedTaskItem { ComponentId = c.Id, Operation = forward ? ElevatedOperations.PatchApply : ElevatedOperations.PatchRevert });
-            return new BytePatchResult(InstallOutcome.ElevationRequired, task, task.Save(_paths));
+            if (!VerifiedPlacementRunner.IsSafeComponentId(c.Id))
+            {
+                throw new LauncherException(LauncherError.ElevatedTaskInvalid, "Component '" + c.Id + "' cannot be placed with administrator rights because its id is not a plain lowercase name.");
+            }
+
+            var placement = new PlacementRequest(_paths.Root, acFolder, c.Id);
+            string ready = placement.ReadyFolder;
+
+            // The helper refuses any file it does not expect: start from an empty ready folder
+            // (links removed first, so the delete never reaches through one).
+            VerifiedPlacementRunner.RemoveLinks(ready);
+            AcWriter.TryDeleteFolder(ready);
+            string staged = AcPathSafety.Resolve(ready, c.Target);
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(staged));
+                AtomicFile.WriteAllBytes(staged, data);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                AcWriter.TryDeleteFolder(ready);
+                throw LauncherException.FromIo(ex, "staging the patched " + c.Target);
+            }
+
+            return new BytePatchResult(InstallOutcome.ElevationRequired, placement);
         }
     }
 }

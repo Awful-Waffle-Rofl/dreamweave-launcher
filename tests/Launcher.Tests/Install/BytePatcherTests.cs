@@ -258,10 +258,16 @@ namespace DreamWeave.Launcher.Tests.Install
         }
 
         [TestMethod]
-        public void UnwritableFolder_ReturnsElevationTask()
+        [DataRow(true)]
+        [DataRow(false)]
+        public void UnwritableFolder_StagesTheComputedResult_ForPlacement(bool apply)
         {
-            using (var f = new Fixture(Original()))
+            using (var f = new Fixture(apply ? Original() : Patched()))
             {
+                // A stale file from an earlier attempt must not survive into the ready folder.
+                string ready = VerifiedPlacementRunner.ReadyFolder(f.Paths, "palette-leak-fix");
+                Directory.CreateDirectory(ready);
+                File.WriteAllBytes(Path.Combine(ready, "stale.bin"), new byte[] { 1 });
                 BytePatchResult r;
                 string reason;
                 using (DenyWrite deny = DenyWrite.TryApply(f.Ac, out reason))
@@ -271,15 +277,39 @@ namespace DreamWeave.Launcher.Tests.Install
                         Assert.Inconclusive(reason);
                     }
 
-                    r = f.Patcher.Apply(Component(), f.Ac);
+                    r = apply ? f.Patcher.Apply(Component(), f.Ac) : f.Patcher.Revert(Component(), f.Ac);
                 }
 
                 Assert.AreEqual(InstallOutcome.ElevationRequired, r.Outcome);
-                Assert.AreEqual(ElevatedOperations.PatchApply, r.Task.Items[0].Operation);
-                Assert.IsTrue(File.Exists(r.TaskPath));
-                CollectionAssert.AreEqual(Original(), File.ReadAllBytes(f.Exe));
+                Assert.AreEqual("palette-leak-fix", r.Placement.ComponentId);
+                Assert.AreEqual(f.Ac, r.Placement.AcFolder);
+                Assert.AreEqual(ready, r.Placement.ReadyFolder);
+                CollectionAssert.AreEqual(apply ? Original() : Patched(), File.ReadAllBytes(f.Exe), "the game folder is untouched");
+                CollectionAssert.AreEqual(new[] { Path.Combine(ready, "acclient.exe") }, Directory.GetFiles(ready, "*", SearchOption.AllDirectories));
+                CollectionAssert.AreEqual(apply ? Patched() : Original(), File.ReadAllBytes(Path.Combine(ready, "acclient.exe")), "the patch is computed unelevated");
                 r.CleanUp();
-                Assert.IsFalse(File.Exists(r.TaskPath), "CleanUp removes the task file");
+                Assert.IsFalse(Directory.Exists(ready), "CleanUp removes the ready folder");
+            }
+        }
+
+        [TestMethod]
+        public void UnwritableFolder_WrongInput_IsRefusedBeforeAnythingIsStaged()
+        {
+            using (var f = new Fixture(InstallData.Bytes("some other client build")))
+            {
+                string reason;
+                using (DenyWrite deny = DenyWrite.TryApply(f.Ac, out reason))
+                {
+                    if (deny == null)
+                    {
+                        Assert.Inconclusive(reason);
+                    }
+
+                    var ex = Assert.ThrowsExactly<LauncherException>(() => f.Patcher.Apply(Component(), f.Ac));
+                    Assert.AreEqual(LauncherError.PatchInputMismatch, ex.Code);
+                }
+
+                Assert.IsTrue(InstallData.NoFilesUnder(f.Paths.StagingDir));
             }
         }
 

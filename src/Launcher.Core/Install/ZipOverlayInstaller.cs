@@ -21,12 +21,18 @@ namespace DreamWeave.Launcher.Core.Install
     /// <item>Stage: the archive is scanned (any entry with an unsafe name, such as a zip-slip
     /// <c>..</c> path, refuses the whole archive; entries the manifest does not list are reported
     /// in <see cref="ZipOverlayResult.UnexpectedEntries"/> and never extracted). Only entries whose
-    /// normalized name equals a manifest <c>files[].path</c> are streamed, each to its own file in
-    /// <see cref="AppPaths.StagingDir"/>, and checked for size and SHA-256. A staged file stays open
-    /// with write sharing denied from verification until it has been copied.</item>
+    /// normalized name equals a manifest <c>files[].path</c> are streamed, each to the same relative
+    /// path under the component's fixed ready folder (<see cref="VerifiedPlacementRunner.ReadyFolder"/>),
+    /// and checked for size and SHA-256. A file already there from an earlier, failed elevated
+    /// placement is reused when it still verifies. A staged file stays open with write sharing
+    /// denied from verification until it has been copied.</item>
     /// <item>Write: only after every file is staged and verified, the targets are guarded again
-    /// and each is replaced atomically (see <see cref="AcWriter"/>).</item>
+    /// and each is replaced atomically (see <see cref="AcWriter"/>). When the folder is not
+    /// writable, the ready folder is trimmed to exactly the files to write and the result carries
+    /// a <see cref="PlacementRequest"/> for the elevated helper instead.</item>
     /// </list>
+    /// The ready folder is deleted after a direct install and after any failure here; after a
+    /// hand-off it is kept until the caller has seen the placement succeed.
     /// Run from a background thread: it reads and writes over a gigabyte.
     /// </summary>
     public sealed class ZipOverlayInstaller
@@ -88,7 +94,7 @@ namespace DreamWeave.Launcher.Core.Install
 
             if (toWrite.Count == 0)
             {
-                return new ZipOverlayResult(InstallOutcome.NothingToDo, new string[0], skipped, new string[0], null, null, null);
+                return new ZipOverlayResult(InstallOutcome.NothingToDo, new string[0], skipped, new string[0], null);
             }
 
             // 2. Probe early, so a running client fails fast instead of after a long extraction.
@@ -103,8 +109,8 @@ namespace DreamWeave.Launcher.Core.Install
             // On one volume both exist together, so the volume must hold the sum.
             AcWriter.RequireFreeSpaceCombined(_disk, _paths.StagingDir, toWrite.Sum(f => f.Size), "the unpacked game files", acFolder, toWrite.Max(f => f.Size), "the game folder");
 
-            // 3. Stage, inside this component's own staging folder.
-            string stagingFolder = Path.Combine(Downloads.DownloadRequest.ComponentFolder(_paths.StagingDir, component.Id), "extract-" + Guid.NewGuid().ToString("N"));
+            // 3. Stage, inside this component's own fixed ready folder.
+            string stagingFolder = Path.Combine(Downloads.DownloadRequest.ComponentFolder(_paths.StagingDir, component.Id), VerifiedPlacementRunner.ReadyFolderName);
             var staged = new List<KeyValuePair<ManifestFile, FileStream>>();
             var unexpected = new List<string>();
             bool handedOff = false;
@@ -119,6 +125,8 @@ namespace DreamWeave.Launcher.Core.Install
                     throw LauncherException.FromIo(ex, "creating the staging folder");
                 }
 
+                // The ready folder can outlive a failed placement: never stage or tidy through a link in it.
+                VerifiedPlacementRunner.RemoveLinks(stagingFolder);
                 Stage(component, zipPath, toWrite, stagingFolder, staged, unexpected, progress, cancellationToken);
 
                 // 4. Write (or hand off).
@@ -128,26 +136,24 @@ namespace DreamWeave.Launcher.Core.Install
                     var items = staged.Select(s => new KeyValuePair<ManifestFile, Stream>(s.Key, s.Value)).ToList();
                     if (OverlayFiles.TryWriteAll(acFolder, items, written, cancellationToken))
                     {
-                        return new ZipOverlayResult(InstallOutcome.Completed, written, skipped, unexpected, null, null, null);
+                        return new ZipOverlayResult(InstallOutcome.Completed, written, skipped, unexpected, null);
                     }
                 }
 
-                var task = new ElevatedTask { AppRoot = _paths.Root, AcFolder = acFolder };
-                var item = new ElevatedTaskItem { ComponentId = component.Id, Operation = ElevatedOperations.Overlay };
-                foreach (KeyValuePair<ManifestFile, FileStream> s in staged)
+                if (!VerifiedPlacementRunner.IsSafeComponentId(component.Id))
                 {
-                    item.Files.Add(new ElevatedTaskFile { Path = s.Key.Path, Staged = s.Value.Name });
+                    throw new LauncherException(LauncherError.ElevatedTaskInvalid, "Component '" + component.Id + "' cannot be placed with administrator rights because its id is not a plain lowercase name.");
                 }
 
-                task.Items.Add(item);
+                // The elevated helper refuses ANY file it does not expect, so leave exactly the files to write.
+                RemoveUnlisted(stagingFolder, toWrite);
                 foreach (KeyValuePair<ManifestFile, FileStream> s in staged)
                 {
                     s.Value.Dispose();
                 }
 
-                string taskPath = task.Save(_paths);
                 handedOff = true;
-                return new ZipOverlayResult(InstallOutcome.ElevationRequired, new string[0], skipped, unexpected, task, taskPath, stagingFolder);
+                return new ZipOverlayResult(InstallOutcome.ElevationRequired, new string[0], skipped, unexpected, new PlacementRequest(_paths.Root, acFolder, component.Id));
             }
             finally
             {
@@ -190,7 +196,6 @@ namespace DreamWeave.Launcher.Core.Install
                 using (archive)
                 {
                     Dictionary<string, ZipArchiveEntry> found = MapEntries(component, archive, unexpected);
-                    int index = 0;
                     foreach (ManifestFile f in toWrite)
                     {
                         ThrowIfCancelled(cancellationToken);
@@ -200,7 +205,7 @@ namespace DreamWeave.Launcher.Core.Install
                             throw new LauncherException(LauncherError.ArchiveInvalid, "The downloaded archive does not contain " + f.Path + ".");
                         }
 
-                        staged.Add(new KeyValuePair<ManifestFile, FileStream>(f, Extract(entry, f, Path.Combine(stagingFolder, (index++).ToString(System.Globalization.CultureInfo.InvariantCulture) + ".part"), progress, cancellationToken)));
+                        staged.Add(new KeyValuePair<ManifestFile, FileStream>(f, Extract(entry, f, AcPathSafety.Resolve(stagingFolder, f.Path), progress, cancellationToken)));
                     }
                 }
             }
@@ -275,9 +280,17 @@ namespace DreamWeave.Launcher.Core.Install
                 throw new LauncherException(LauncherError.SizeMismatch, f.Path + " in the downloaded archive is " + entry.Length + " bytes; expected " + f.Size + ".");
             }
 
+            FileStream reused = TryReuseStaged(stagedPath, f, progress, cancellationToken);
+            if (reused != null)
+            {
+                return reused;
+            }
+
             FileStream fs;
             try
             {
+                Directory.CreateDirectory(Path.GetDirectoryName(stagedPath));
+
                 // Write sharing denied from here until the copy into the game folder is done.
                 fs = new FileStream(stagedPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read, 81920, FileOptions.SequentialScan);
             }
@@ -353,6 +366,77 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
+        /// <summary>
+        /// A copy left in the ready folder by an earlier hand-off whose placement failed: opened
+        /// with write sharing denied and verified through that handle. Returns it when it still
+        /// matches the manifest; otherwise deletes it and returns null (extract again).
+        /// </summary>
+        private static FileStream TryReuseStaged(string stagedPath, ManifestFile f, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+        {
+            if (!File.Exists(stagedPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                var fs = new FileStream(stagedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.SequentialScan);
+                bool keep = false;
+                try
+                {
+                    if (fs.Length == f.Size)
+                    {
+                        string hash = Hasher.ComputeSha256Hex(fs, f.Size, progress, cancellationToken, "verify:" + f.Path);
+                        keep = Hasher.FixedTimeEquals(hash, f.Sha256);
+                    }
+
+                    if (keep)
+                    {
+                        fs.Position = 0;
+                        return fs;
+                    }
+                }
+                catch (OperationCanceledException ex)
+                {
+                    throw new LauncherException(LauncherError.Cancelled, "Cancelled.", ex);
+                }
+                finally
+                {
+                    if (!keep)
+                    {
+                        fs.Dispose();
+                    }
+                }
+
+                File.Delete(stagedPath);
+                return null;
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                throw LauncherException.FromIo(ex, "staging " + f.Path);
+            }
+        }
+
+        /// <summary>Deletes every file under <paramref name="readyFolder"/> that is not one of <paramref name="keep"/>.</summary>
+        private static void RemoveUnlisted(string readyFolder, List<ManifestFile> keep)
+        {
+            var wanted = new HashSet<string>(keep.Select(f => Path.GetFullPath(AcPathSafety.Resolve(readyFolder, f.Path))), StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (string file in Directory.GetFiles(readyFolder, "*", SearchOption.AllDirectories))
+                {
+                    if (!wanted.Contains(Path.GetFullPath(file)))
+                    {
+                        File.Delete(file);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                throw LauncherException.FromIo(ex, "tidying the staged files");
+            }
+        }
+
         internal static string Canonical(string path)
         {
             return (path ?? string.Empty).Replace('\\', '/');
@@ -375,7 +459,7 @@ namespace DreamWeave.Launcher.Core.Install
         }
     }
 
-    /// <summary>Overlay logic shared by <see cref="ZipOverlayInstaller"/> and <see cref="ElevatedTaskRunner"/>.</summary>
+    /// <summary>Overlay logic shared by <see cref="ZipOverlayInstaller"/> and <see cref="VerifiedPlacementRunner"/>.</summary>
     internal static class OverlayFiles
     {
         /// <summary>

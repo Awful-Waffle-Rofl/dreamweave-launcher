@@ -18,20 +18,34 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void ElevatedCopy_WithTask_SkipsMutex()
+        public void PlaceVerified_WithItsThreeArguments_SkipsMutex()
         {
-            StartupArgs a = StartupArgs.Parse(new[] { "--elevated-copy", @"C:\data\staging\elevated-task-1.json" });
-            Assert.AreEqual(StartupMode.ElevatedCopy, a.Mode);
-            Assert.AreEqual(@"C:\data\staging\elevated-task-1.json", a.TaskPath);
+            StartupArgs a = StartupArgs.Parse(new[] { "--place-verified", @"C:\Users\p\AppData\Local", @"C:\Turbine\Asheron's Call", "eor-dats" });
+            Assert.AreEqual(StartupMode.PlaceVerified, a.Mode);
+            Assert.AreEqual(@"C:\Users\p\AppData\Local", a.AppRoot);
+            Assert.AreEqual(@"C:\Turbine\Asheron's Call", a.AcFolder);
+            Assert.AreEqual("eor-dats", a.ComponentId);
             Assert.IsFalse(a.UsesMutex, "the elevated helper must never wait on the mutex its parent holds");
             Assert.IsFalse(a.HandsOverToRunningInstance);
         }
 
         [TestMethod]
-        public void ElevatedCopy_WithoutTask_IsInvalid()
+        public void PlaceVerified_WithoutExactlyThreeArguments_IsInvalid()
         {
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--place-verified" }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--place-verified", @"C:\a", @"C:\ac" }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--place-verified", @"C:\a", " ", "eor-dats" }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--place-verified", @"C:\a", @"C:\ac", "eor-dats", "extra" }).Mode);
+        }
+
+        [TestMethod]
+        public void RetiredElevatedCopy_IsInvalid()
+        {
+            StartupArgs a = StartupArgs.Parse(new[] { "--elevated-copy", @"C:\data\staging\elevated-task-1.json" });
+            Assert.AreEqual(StartupMode.Invalid, a.Mode);
+            Assert.IsFalse(a.UsesMutex);
             Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--elevated-copy" }).Mode);
-            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--elevated-copy", " " }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--elevated-copy", @"C:\a", @"C:\ac", "eor-dats" }).Mode, "the old switch is not an alias of the new one");
         }
 
         [TestMethod]

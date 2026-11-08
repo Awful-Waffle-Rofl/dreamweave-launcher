@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
@@ -119,17 +120,18 @@ namespace DreamWeave.Launcher.App
     }
 
     /// <summary>
-    /// Runs the launcher's own <c>--elevated-copy &lt;task&gt;</c> mode with verb <c>runas</c>, waits for it,
-    /// maps its exit code back to a <see cref="LauncherError"/>, and always calls the result's clean-up.
+    /// Runs the launcher's own <c>--place-verified "&lt;appRoot&gt;" "&lt;acFolder&gt;" &lt;componentId&gt;</c>
+    /// mode with verb <c>runas</c>, waits for it, and maps its exit code back to a <see cref="LauncherError"/>.
+    /// It never cleans up: the caller deletes the staged files only after the placement succeeded.
     /// </summary>
-    internal sealed class ElevatedCopyRunner
+    internal sealed class ElevatedPlacementRunner
     {
         private const int ErrorCancelled = 1223;
         private readonly IProcessLauncher _processes;
         private readonly string _exePath;
 
         /// <summary>Creates a runner that starts <paramref name="exePath"/> (the running launcher exe).</summary>
-        public ElevatedCopyRunner(IProcessLauncher processes, string exePath)
+        public ElevatedPlacementRunner(IProcessLauncher processes, string exePath)
         {
             _processes = processes ?? throw new ArgumentNullException(nameof(processes));
             if (string.IsNullOrEmpty(exePath))
@@ -140,10 +142,11 @@ namespace DreamWeave.Launcher.App
             _exePath = exePath;
         }
 
-        /// <summary>The start info used for <paramref name="taskPath"/>.</summary>
-        internal ProcessStartInfo BuildStartInfo(string taskPath)
+        /// <summary>The start info used for <paramref name="request"/> (call only after <see cref="IsWellFormed"/>).</summary>
+        internal ProcessStartInfo BuildStartInfo(PlacementRequest request)
         {
-            return new ProcessStartInfo(_exePath, StartupArgs.ElevatedCopySwitch + " \"" + taskPath + "\"")
+            string args = StartupArgs.PlaceVerifiedSwitch + " " + Quote(request.AppRoot) + " " + Quote(request.AcFolder) + " " + request.ComponentId;
+            return new ProcessStartInfo(_exePath, args)
             {
                 UseShellExecute = true,
                 Verb = "runas",
@@ -152,50 +155,68 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>
-        /// Runs the helper for <paramref name="taskPath"/> (blocking: background threads only) and then
-        /// <paramref name="cleanUp"/>, whatever happened. Returns <see cref="LauncherError.None"/> on success.
+        /// True when every part of <paramref name="request"/> survives the command line exactly:
+        /// both paths non-empty with no quote or control character, and a safe component id.
         /// </summary>
-        public LauncherError Run(string taskPath, Action cleanUp)
+        internal static bool IsWellFormed(PlacementRequest request)
         {
-            if (string.IsNullOrEmpty(taskPath))
+            return request != null
+                && IsQuotable(request.AppRoot)
+                && IsQuotable(request.AcFolder)
+                && VerifiedPlacementRunner.IsSafeComponentId(request.ComponentId);
+        }
+
+        /// <summary>
+        /// Runs the helper for <paramref name="request"/> (blocking: background threads only).
+        /// Returns <see cref="LauncherError.None"/> on success.
+        /// </summary>
+        public LauncherError Run(PlacementRequest request)
+        {
+            if (request == null)
             {
-                throw new ArgumentException("A task file is required.", nameof(taskPath));
+                throw new ArgumentNullException(nameof(request));
             }
 
+            if (!IsWellFormed(request))
+            {
+                return LauncherError.ElevatedTaskInvalid;
+            }
+
+            int exit;
             try
             {
-                if (taskPath.IndexOf('"') >= 0)
-                {
-                    return LauncherError.ElevatedTaskInvalid;
-                }
-
-                int exit;
-                try
-                {
-                    exit = _processes.Run(BuildStartInfo(taskPath));
-                }
-                catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
-                {
-                    return LauncherError.ElevationDeclined;
-                }
-                catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException || ex is IOException)
-                {
-                    return LauncherError.Unknown;
-                }
-
-                return ExitCodeToError(exit);
+                exit = _processes.Run(BuildStartInfo(request));
             }
-            finally
+            catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
             {
-                try
-                {
-                    cleanUp?.Invoke();
-                }
-                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-                {
-                    // Clean-up is best effort; leftovers sit in the staging folder.
-                }
+                return LauncherError.ElevationDeclined;
             }
+            catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException || ex is IOException)
+            {
+                return LauncherError.Unknown;
+            }
+
+            return ExitCodeToError(exit);
+        }
+
+        private static bool IsQuotable(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) && value.All(ch => ch != '"' && !char.IsControl(ch));
+        }
+
+        /// <summary>
+        /// Wraps <paramref name="value"/> in quotes for the Windows argument parser. Trailing
+        /// backslashes are doubled so the closing quote is not escaped (<c>C:\</c> stays <c>C:\</c>).
+        /// </summary>
+        internal static string Quote(string value)
+        {
+            int trailing = 0;
+            while (trailing < value.Length && value[value.Length - 1 - trailing] == '\\')
+            {
+                trailing++;
+            }
+
+            return "\"" + value + new string('\\', trailing) + "\"";
         }
 
         /// <summary>Maps a helper exit code to its <see cref="LauncherError"/>; an undefined value is Unknown.</summary>

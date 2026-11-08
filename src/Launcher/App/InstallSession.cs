@@ -251,8 +251,8 @@ namespace DreamWeave.Launcher.App
         /// <summary>Saves a detected game folder to state (blocking; called on a pool thread).</summary>
         public Action<string> SaveFolder { get; set; } = f => { };
 
-        /// <summary>Runs the elevated copy for a task file, then the clean-up; returns its error code.</summary>
-        public Func<string, Action, LauncherError> RunElevated { get; set; }
+        /// <summary>Runs the elevated verified placement for a request; returns its error code. Never cleans up.</summary>
+        public Func<PlacementRequest, LauncherError> RunElevated { get; set; }
 
         /// <summary>Starts verified installers (the real one by default; tests pass a fake process starter).</summary>
         public InstallerRunner Installers { get; set; } = new InstallerRunner();
@@ -292,7 +292,7 @@ namespace DreamWeave.Launcher.App
                 Telemetry = s.TelemetrySink,
                 ReadSavedFolder = () => s.State.Read(st => st.AcFolder),
                 SaveFolder = folder => s.State.Update(st => st.AcFolder = folder),
-                RunElevated = (task, cleanUp) => s.Elevated.Run(task, cleanUp),
+                RunElevated = request => s.Elevated.Run(request),
                 InstallLog = line => new FileDownloadLog(s.Paths.LogFile).Note("install", line),
             };
         }
@@ -1076,8 +1076,11 @@ namespace DreamWeave.Launcher.App
                 if (result.Outcome == InstallOutcome.ElevationRequired)
                 {
                     events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.AskingPermission));
-                    await RunElevatedAsync(result.TaskPath, result.CleanUp).ConfigureAwait(false);
+                    await RunElevatedAsync(result.Placement).ConfigureAwait(false);
                     await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
+
+                    // Only after the placement is borne out; after a failure the verified files stay for a retry.
+                    result.CleanUp();
                 }
 
                 // Kept until the final check passes, so a repair does not download it again.
@@ -1112,8 +1115,9 @@ namespace DreamWeave.Launcher.App
                 if (result.Outcome == InstallOutcome.ElevationRequired)
                 {
                     events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.AskingPermission));
-                    await RunElevatedAsync(result.TaskPath, result.CleanUp).ConfigureAwait(false);
+                    await RunElevatedAsync(result.Placement).ConfigureAwait(false);
                     await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
+                    result.CleanUp();
                 }
 
                 return result.Outcome != InstallOutcome.NothingToDo;
@@ -1125,14 +1129,14 @@ namespace DreamWeave.Launcher.App
             }
         }
 
-        private async Task RunElevatedAsync(string taskPath, Action cleanUp)
+        private async Task RunElevatedAsync(PlacementRequest request)
         {
             if (_deps.RunElevated == null)
             {
                 throw new LauncherException(LauncherError.ElevationRequired, ErrorMessages.For(LauncherError.ElevationRequired));
             }
 
-            LauncherError code = await Task.Run(() => _deps.RunElevated(taskPath, cleanUp)).ConfigureAwait(false);
+            LauncherError code = await Task.Run(() => _deps.RunElevated(request)).ConfigureAwait(false);
             if (code != LauncherError.None)
             {
                 throw new LauncherException(code, ErrorMessages.For(code));

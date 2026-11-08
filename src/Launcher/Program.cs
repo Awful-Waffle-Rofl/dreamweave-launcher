@@ -20,12 +20,12 @@ namespace DreamWeave.Launcher
             StartupArgs parsed = StartupArgs.Parse(args);
             switch (parsed.Mode)
             {
-                case StartupMode.ElevatedCopy:
+                case StartupMode.PlaceVerified:
                     // No UI, no mutex (the parent holds it and is waiting on this process). The exit code
-                    // is the LauncherError value; ElevatedTaskRunner never throws.
-                    return ElevatedTaskRunner.Run(parsed.TaskPath);
+                    // is the LauncherError value; VerifiedPlacementRunner never throws.
+                    return VerifiedPlacementRunner.Run(parsed.AppRoot, parsed.AcFolder, parsed.ComponentId);
                 case StartupMode.Invalid:
-                    // Unknown switch, or --elevated-copy without a task: fail, never fall through to a mode
+                    // Unknown switch, or --place-verified without its arguments: fail, never fall through to a mode
                     // whose exit code 0 could be read as success.
                     return (int)LauncherError.Unknown;
             }
