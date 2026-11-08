@@ -41,6 +41,9 @@ namespace DreamWeave.Launcher.App
         /// <summary>How long a hand-over (<c>--updated</c>, <c>--cleanup --handover</c>) waits for the previous launcher's mutex.</summary>
         public static readonly TimeSpan HandoverWait = TimeSpan.FromSeconds(30);
 
+        /// <summary>How long <c>--cleanup --silent</c> waits for the previous launcher to release the single-instance mutex.</summary>
+        public static readonly TimeSpan SilentWait = TimeSpan.FromSeconds(15);
+
         private StartupArgs(StartupMode mode, string taskPath, bool handover = false, bool silent = false)
         {
             Mode = mode;
@@ -60,9 +63,10 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>
         /// How long to wait for the mutex: zero for a normal start (hand over to the open window) and for a
-        /// plain <c>--cleanup</c> (an open window is reported at once); <see cref="HandoverWait"/> for a hand-over.
+        /// plain <c>--cleanup</c> (an open window is reported at once); <see cref="SilentWait"/> for <c>--cleanup --silent</c>;
+        /// <see cref="HandoverWait"/> for a hand-over.
         /// </summary>
-        public TimeSpan MutexWait => IsHandover ? HandoverWait : TimeSpan.Zero;
+        public TimeSpan MutexWait => IsSilent ? SilentWait : IsHandover ? HandoverWait : TimeSpan.Zero;
 
         /// <summary>The selected mode.</summary>
         public StartupMode Mode { get; }

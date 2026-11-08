@@ -22,12 +22,19 @@ namespace DreamWeave.Launcher.Tests
             "IShellLinkW",
         };
 
-        // A registry WRITE API. Reads (OpenSubKey(path, false), GetValue) are fine.
+        // A registry WRITE API anywhere in src/. Reads (OpenSubKey(path, false), OpenSubKey(path), GetValue) are
+        // fine. This is deliberately NOT tied to the Uninstall key string: a write through a constant
+        // (CreateSubKey(SetupConstants.SetupUninstallKeyPath)) must fail too.
         private static readonly Regex RegistryWrite = new Regex(
-            @"\bSetValue\s*\(|\bCreateSubKey\s*\(|\bDeleteSubKey(Tree)?\s*\(|\bDeleteValue\s*\(|\bRegSetValueEx|\bRegCreateKeyEx|\bRegDeleteKey|OpenSubKey\s*\([^)]*,\s*(true|writable\s*:\s*true)",
+            @"\bSetValue\s*\(|\bCreateSubKey\s*\(|\bDeleteSubKey(Tree)?\s*\(|\bDeleteValue\s*\(|\bRegSetValueEx|\bRegCreateKeyEx|\bRegDeleteKey|OpenSubKey\s*\([^)]*,(?>\s*)(?!false\b)",
             RegexOptions.Compiled);
 
-        private static readonly Regex UninstallKey = new Regex(@"CurrentVersion\\+Uninstall", RegexOptions.Compiled);
+        // Files (relative to src/, forward slashes) that may write the registry. Empty on purpose: the setup
+        // program owns every registry write. Adding a name here needs a reason in review.
+        private static readonly string[] RegistryWriteAllowlist = new string[0];
+
+        // A command interpreter reached by a name other than the banned "cmd.exe" literal.
+        private static readonly Regex Shell = new Regex(@"ComSpec|""cmd""", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         [TestMethod]
         public void Source_HasNoSelfInstallMechanisms()
@@ -52,15 +59,24 @@ namespace DreamWeave.Launcher.Tests
                     "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; key.SetValue(\"a\", \"b\");",
                     "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; Registry.CurrentUser.CreateSubKey(k);",
                     "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; Registry.CurrentUser.OpenSubKey(k, true);",
+                    "Registry.CurrentUser.CreateSubKey(SetupConstants.SetupUninstallKeyPath);",
+                    "key.SetValue(\"Run\", path);",
+                    "key.DeleteValue(\"Run\");",
+                    "key.DeleteSubKeyTree(name);",
+                    "Registry.CurrentUser.OpenSubKey(k, writable: true);",
+                    "RegSetValueEx(h, n, 0, 1, b, 4);",
+                    "RegCreateKeyEx(h, n, 0, null, 0, 0, IntPtr.Zero, out k, out d);",
+                    "var s = Environment.GetEnvironmentVariable(\"ComSpec\");",
+                    "Process.Start(\"cmd\", \"/c calc\");",
                 };
                 for (int i = 0; i < samples.Length; i++)
                 {
                     File.WriteAllText(Path.Combine(temp, "Sample" + i + ".cs"), samples[i]);
                 }
 
-                Assert.AreEqual(samples.Length, Scan(temp).Count, "every sample line must be flagged");
+                Assert.AreEqual(samples.Length, Scan(temp).Count, "every sample line must be flagged: " + string.Join(" | ", Scan(temp)));
 
-                File.WriteAllText(Path.Combine(temp, "Clean.cs"), "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; Registry.CurrentUser.OpenSubKey(k, false).GetValue(\"UninstallString\");");
+                File.WriteAllText(Path.Combine(temp, "Clean.cs"), "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; Registry.CurrentUser.OpenSubKey(k, false).GetValue(\"UninstallString\"); hive.OpenSubKey(p); x.GetStringValue(a, b);");
                 Assert.AreEqual(samples.Length, Scan(temp).Count, "a read of the Uninstall key is allowed");
             }
             finally
@@ -89,9 +105,15 @@ namespace DreamWeave.Launcher.Tests
                     }
                 }
 
-                if (UninstallKey.IsMatch(text) && RegistryWrite.IsMatch(text))
+                string relative = file.Substring(root.Length).TrimStart(Path.DirectorySeparatorChar).Replace(Path.DirectorySeparatorChar, '/');
+                if (RegistryWrite.IsMatch(text) && Array.IndexOf(RegistryWriteAllowlist, relative) < 0)
                 {
-                    reasons.Add("writes near CurrentVersion\\Uninstall");
+                    reasons.Add("uses a registry write API");
+                }
+
+                if (Shell.IsMatch(text))
+                {
+                    reasons.Add("starts a command interpreter (ComSpec / \"cmd\")");
                 }
 
                 if (reasons.Count > 0)

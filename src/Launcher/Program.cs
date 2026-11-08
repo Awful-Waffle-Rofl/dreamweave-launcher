@@ -6,7 +6,6 @@ using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Cleanup;
-using DreamWeave.Launcher.Core.Downloads;
 using DreamWeave.Launcher.Core.Update;
 using DreamWeave.Launcher.UI;
 
@@ -35,6 +34,12 @@ namespace DreamWeave.Launcher
             SetupGuard.Hold();
             try
             {
+                if (parsed.IsSilent)
+                {
+                    // No window, no AC client removal, always exit 0: nothing in here may throw or show UI.
+                    return SilentCleanup.Run(AppPaths.CreateDefault, CleanupEnvironment.CreateDefault, SingleInstance.Acquire);
+                }
+
                 return RunWithUi(parsed);
             }
             finally
@@ -63,12 +68,6 @@ namespace DreamWeave.Launcher
                         return 0;
                     }
 
-                    if (parsed.IsSilent)
-                    {
-                        // The launcher is open: never delete its data from under it, and never show a window.
-                        return 0;
-                    }
-
                     MessageBox.Show(UiText.AlreadyRunningBusy, LauncherInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return (int)LauncherError.StateLocked;
                 }
@@ -85,14 +84,6 @@ namespace DreamWeave.Launcher
         private static int RunCleanup(StartupArgs parsed)
         {
             AppPaths paths = AppPaths.CreateDefault();
-            if (parsed.IsSilent)
-            {
-                // No window, no AC client removal. Always exit 0 so the setup's uninstall never fails on us.
-                CleanupResult silent = new LauncherCleanup(CleanupEnvironment.CreateDefault(paths)).RunSilent();
-                LogSilentOutcome(paths, silent);
-                return 0;
-            }
-
             // 0 when the player cancels at the confirmation; once cleanup starts, Unknown until a result arrives.
             int exit = 0;
             var form = new UninstallForm(removeClient =>
@@ -110,32 +101,6 @@ namespace DreamWeave.Launcher
             });
             Application.Run(form);
             return exit;
-        }
-
-        /// <summary>
-        /// Notes a silent cleanup that did not finish in launcher.log, but only if the log still exists
-        /// (a complete cleanup deletes it with the data folder). Counts and codes only: no account names.
-        /// </summary>
-        private static void LogSilentOutcome(AppPaths paths, CleanupResult result)
-        {
-            if (result != null && result.Complete)
-            {
-                return;
-            }
-
-            try
-            {
-                if (File.Exists(paths.LogFile))
-                {
-                    new FileDownloadLog(paths.LogFile).Note("cleanup", result == null
-                        ? "silent cleanup refused: unexpected folder"
-                        : "silent cleanup incomplete: " + result.LeftoverFolders.Count + " folder(s) left, passwords left over: " + result.CredentialsLeftOver);
-                }
-            }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-            {
-                // Logging never changes the exit code.
-            }
         }
 
         private static int RunInteractive(StartupArgs parsed, SingleInstance instance)

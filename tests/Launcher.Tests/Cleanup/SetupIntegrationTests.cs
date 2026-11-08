@@ -39,7 +39,7 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         public void SetupUninstallKey_IsTheInnoIs1KeyUnderHkcu()
         {
             string expected = string.Join(@"\", "Software", "Microsoft", "Windows", "CurrentVersion", "Uninstall", Guid.Parse(SetupConstants.SetupAppId).ToString("B").ToUpperInvariant() + "_is1");
-            Assert.AreEqual(expected, SetupConstants.SetupUninstallKeyPath);
+            Assert.AreEqual(SetupConstants.SetupUninstallKeyPath, expected);
         }
 
         [TestMethod]

@@ -53,6 +53,7 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual(StartupMode.Cleanup, a.Mode);
             Assert.IsTrue(a.IsSilent);
             Assert.IsFalse(a.IsHandover);
+            Assert.AreEqual(TimeSpan.FromSeconds(15), a.MutexWait, "the old launcher may still be shutting down");
         }
 
         [TestMethod]

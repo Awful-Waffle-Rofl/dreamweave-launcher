@@ -279,39 +279,19 @@ namespace DreamWeave.Launcher.UI
         }
 
         /// <summary>
-        /// Hands uninstall over to the setup program when it is registered (HKCU, Inno Setup's
-        /// <c>{AppId}_is1</c> key, read only), otherwise (a development or portable run) to this exe started
-        /// with <c>--cleanup --handover</c>. Only once that start succeeded does it flush and stop telemetry,
-        /// release the mutexes and close. The new process waits for the single-instance mutex (cleanup) or
-        /// for the setup guard mutex to go (setup uninstaller) before it touches anything, so its removal
-        /// of the data folder starts only after this process has made its last write there.
+        /// Hands uninstall over to the setup program when its registered command (HKCU, Inno Setup's
+        /// <c>{AppId}_is1</c> key, read only) passes <see cref="SetupUninstallLocator.TryResolve"/>, otherwise
+        /// (a development or portable run, or a command that does not check out) to this exe started with
+        /// <c>--cleanup --handover</c>. Only once a start succeeded does it flush and stop telemetry, release
+        /// the mutexes and close.
         /// </summary>
         private void StartUninstall()
         {
             string setupUninstall = SetupUninstallLocator.FindUninstallString(new UserRegistryReader());
-            ProcessStartInfo start;
-            if (setupUninstall != null)
-            {
-                string program, arguments;
-                LauncherCleanup.SplitCommandLine(setupUninstall, out program, out arguments);
-                start = new ProcessStartInfo(program, arguments) { UseShellExecute = true };
-            }
-            else
-            {
-                start = new ProcessStartInfo(_services.RunningExePath, SetupConstants.CleanupSwitch + " " + StartupArgs.HandoverSwitch)
-                {
-                    UseShellExecute = false,
-                    WorkingDirectory = Path.GetDirectoryName(_services.RunningExePath),
-                };
-            }
 
             // The setup uninstaller refuses to run while the guard mutex exists, so let go of it first.
             SetupGuard.Release();
-            try
-            {
-                _services.Processes.Start(start);
-            }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is IOException)
+            if (!UninstallHandover.TryStart(_services.Processes, _services.FileSystem, setupUninstall, _services.RunningExePath))
             {
                 // Nothing was started: this launcher keeps running with its services intact.
                 SetupGuard.Hold();
@@ -325,7 +305,9 @@ namespace DreamWeave.Launcher.UI
             }
             finally
             {
-                // The uninstaller is already waiting: hand it over even if the flush failed.
+                // The started process is already waiting on us (the setup uninstaller retries its AppMutex
+                // check; --cleanup --handover waits up to 30 s for the single-instance mutex): release it
+                // even if the flush failed.
                 _instance?.Release();
                 _window.Close();
             }
