@@ -28,13 +28,13 @@ namespace DreamWeave.Launcher.UI
         {
             SetStyle(ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
-            Margin = new Padding(0, 0, 0, 8);
+            Spacing.SetMargin(this, new Padding(0, 0, 0, 8));
             TabStop = false;
             _name = new Label { Text = name, AutoSize = false, Font = Theme.Slot, ForeColor = Theme.Gold, BackColor = Color.Transparent, UseMnemonic = false, TextAlign = ContentAlignment.MiddleLeft };
             _account = UiKit.Input(UiText.AccountLabel, false, 50);
             _password = UiKit.Input(UiText.PasswordLabel, true, 64);
             _play = UiKit.Button(UiText.Play);
-            _play.Margin = new Padding(0);
+            Spacing.SetMargin(_play, Padding.Empty);
             _error = UiKit.Text(string.Empty);
             _error.ForeColor = Theme.Err;
             Controls.Add(_name);
@@ -87,7 +87,17 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowError()
         {
-            _error.Text = _launch ?? _validation ?? string.Empty;
+            string text = _launch ?? _validation ?? string.Empty;
+            if (_error.Text == text)
+            {
+                return;
+            }
+
+            _error.Text = text;
+
+            // The row's own height changed: lay out the stack that holds it, so the row grows and the card regrows.
+            PerformLayout();
+            Parent?.PerformLayout(this, "Error");
         }
 
         private void OnEdited()
@@ -98,7 +108,7 @@ namespace DreamWeave.Launcher.UI
 
         private int BoxHeight => _account.GetPreferredSize(new Size(Width, 0)).Height;
 
-        private int FieldsHeight => (2 * BoxHeight) + LogicalToDeviceUnits(4);
+        private int FieldsHeight => Math.Max(BoxHeight, _play.GetPreferredSize(new Size(Width, 0)).Height);
 
         private int ErrorHeight(int width)
         {
@@ -115,22 +125,21 @@ namespace DreamWeave.Launcher.UI
         protected override void OnLayout(LayoutEventArgs levent)
         {
             base.OnLayout(levent);
-            int nameW = LogicalToDeviceUnits(52);
-            int gap = LogicalToDeviceUnits(8);
+            int nameW = LogicalToDeviceUnits(46);
+            int gap = LogicalToDeviceUnits(6);
             Size play = _play.GetPreferredSize(new Size(Width, 0));
             int fields = FieldsHeight;
             int boxH = BoxHeight;
-            int boxX = nameW;
-            int boxW = Math.Max(1, Width - nameW - gap - play.Width - gap);
+            int boxY = (fields - boxH) / 2;
+            int boxW = Math.Max(1, (Width - nameW - gap - gap - gap - play.Width) / 2);
             _name.SetBounds(0, 0, nameW, fields);
-            _account.SetBounds(boxX, 0, boxW, boxH);
-            _password.SetBounds(boxX, boxH + LogicalToDeviceUnits(4), boxW, boxH);
+            _account.SetBounds(nameW + gap, boxY, boxW, boxH);
+            _password.SetBounds(nameW + gap + boxW + gap, boxY, boxW, boxH);
             _play.SetBounds(Width - play.Width, (fields - play.Height) / 2, play.Width, play.Height);
             int eh = ErrorHeight(Width);
             _error.SetBounds(0, fields + LogicalToDeviceUnits(2), Width, Math.Max(0, eh - LogicalToDeviceUnits(2)));
         }
     }
-
     /// <summary>The log-in-and-play screen. All decisions are the <see cref="LauncherPresenter"/>'s.</summary>
     internal sealed class LauncherScreen : Page
     {
@@ -146,6 +155,17 @@ namespace DreamWeave.Launcher.UI
         private readonly FlatButton _later;
         private bool _laterClicked;
         private bool _loading = true;
+
+        /// <summary>The three client rows (read by layout tests).</summary>
+        internal IReadOnlyList<SlotRow> Rows => _rows;
+
+        /// <summary>The Remember passwords box (read by layout tests).</summary>
+        internal ThemedCheckBox RememberBox => _remember;
+
+        /// <summary>True once the saved row names have been filled in.</summary>
+        internal bool Loaded => !_loading;
+
+        public override IButtonControl DefaultButton => _playAll;
 
         public LauncherScreen(LauncherPresenter presenter, string notice)
             : base(ScreenArt.Launcher)
@@ -304,7 +324,7 @@ namespace DreamWeave.Launcher.UI
                 return;
             }
 
-            ShowResult(result);
+            ShowResults(new[] { result });
             RefreshState();
         }
 
@@ -316,35 +336,57 @@ namespace DreamWeave.Launcher.UI
                 r.SetLaunchError(null);
             }
 
-            var progress = new Progress<SlotResult>(ShowResult);
-            Task<IReadOnlyList<SlotResult>> run = _presenter.PlayAllAsync(Inputs(), _remember.Checked, progress);
+            Task<IReadOnlyList<SlotResult>> run = _presenter.PlayAllAsync(Inputs(), _remember.Checked, null, null, null, default(System.Threading.CancellationToken));
             RefreshState();
-            await run;
+            IReadOnlyList<SlotResult> results = await run;
             if (IsDisposed)
             {
                 return;
+            }
+
+            if (results.Count == 0)
+            {
+                _status.Text = UiText.FillInFirst;
+            }
+            else
+            {
+                ShowResults(results);
             }
 
             RefreshState();
         }
 
-        private void ShowResult(SlotResult result)
+        /// <summary>Per-row errors go under their rows; one status line (and one not-saved warning) covers the batch.</summary>
+        private void ShowResults(IEnumerable<SlotResult> results)
         {
-            if (IsDisposed)
+            bool started = false;
+            bool notSaved = false;
+            string blocked = null;
+            foreach (SlotResult result in results)
             {
-                return;
+                PlayResult r = result.Result;
+                if (r.Error == LauncherError.None)
+                {
+                    started = true;
+                    notSaved |= r.PasswordNotSaved;
+                }
+                else if (r.Error == LauncherError.Cancelled)
+                {
+                    blocked = r.Message;
+                }
+                else if (!string.IsNullOrEmpty(r.Message))
+                {
+                    _rows[result.Slot].SetLaunchError(r.Message);
+                }
             }
 
-            PlayResult r = result.Result;
-            SlotRow row = _rows[result.Slot];
-            if (r.Error == LauncherError.None)
+            if (started)
             {
-                row.SetLaunchError(null);
-                _status.Text = r.Message + (r.PasswordNotSaved ? " " + ErrorMessages.For(LauncherError.CredentialStoreUnavailable) : string.Empty);
+                _status.Text = UiText.GameStarted + (notSaved ? " " + ErrorMessages.For(LauncherError.CredentialStoreUnavailable) : string.Empty);
             }
-            else if (!string.IsNullOrEmpty(r.Message))
+            else if (!string.IsNullOrEmpty(blocked))
             {
-                row.SetLaunchError(r.Message);
+                _status.Text = blocked;
             }
         }
     }

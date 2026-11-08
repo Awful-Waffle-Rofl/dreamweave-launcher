@@ -27,7 +27,6 @@ namespace DreamWeave.Launcher.UI
         private readonly MainWindow _window = new MainWindow();
         private ManifestLoadResult _load;
         private string _acFolder;
-        private bool _firstRun;
         private LauncherPresenter _presenter;
         private LauncherScreen _launcherScreen;
         private UpdateGate _gate = UpdateGate.None;
@@ -51,7 +50,6 @@ namespace DreamWeave.Launcher.UI
             try
             {
                 string seen = await _services.ReadStateAsync(s => s.LauncherVersionSeen);
-                _firstRun = seen == null;
                 if (seen != LauncherInfo.Version)
                 {
                     await _services.UpdateStateAsync(s => s.LauncherVersionSeen = LauncherInfo.Version);
@@ -150,9 +148,36 @@ namespace DreamWeave.Launcher.UI
                 Update = _gate,
             };
             _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice);
+            _window.FormClosing -= OnLauncherClosing;
+            _window.FormClosing += OnLauncherClosing;
             _launcherScreen.UpdateClicked += (s, e) => ApplyUpdate();
             _launcherScreen.SettingsClicked += (s, e) => ShowSettings();
             _window.ShowScreen(_launcherScreen);
+        }
+
+        // Closing during Play all drops the rows not yet started. A client that is mid-start is never
+        // interrupted: the close waits for it, then goes ahead.
+        private async void OnLauncherClosing(object sender, FormClosingEventArgs e)
+        {
+            LauncherPresenter presenter = _presenter;
+            if (presenter == null)
+            {
+                return;
+            }
+
+            presenter.CancelPending();
+            if (!presenter.IsStartInFlight)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            _window.FormClosing -= OnLauncherClosing;
+            await presenter.WhenNoStartInFlightAsync();
+            if (!_window.IsDisposed)
+            {
+                _window.Close();
+            }
         }
 
         private void ShowSettings()

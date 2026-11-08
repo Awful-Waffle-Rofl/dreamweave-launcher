@@ -16,7 +16,7 @@ namespace DreamWeave.Launcher.UI
             BackColor = Color.Transparent;
             ForeColor = Theme.Text2;
             Font = Theme.Body;
-            Margin = new Padding(0, 2, 0, 2);
+            Spacing.SetMargin(this, new Padding(0, 2, 0, 2));
         }
 
         public override Size GetPreferredSize(Size proposedSize)
@@ -73,10 +73,18 @@ namespace DreamWeave.Launcher.UI
         protected override void OnLayout(LayoutEventArgs levent)
         {
             base.OnLayout(levent);
-            int content = Place(ClientSize.Width, true);
+            int before = ClientSize.Width;
+            int content = Place(before, true);
             if (AutoScroll)
             {
                 AutoScrollMinSize = new Size(0, content);
+
+                // A scroll bar that just appeared narrowed the client area: lay out again at the new width
+                // so nothing runs under it and no horizontal bar is needed.
+                if (ClientSize.Width != before)
+                {
+                    Place(ClientSize.Width, true);
+                }
             }
         }
 
@@ -118,8 +126,8 @@ namespace DreamWeave.Launcher.UI
     {
         public RowBox()
         {
-            Padding = new Padding(0, 4, 0, 6);
-            Margin = new Padding(0);
+            Spacing.SetPadding(this, new Padding(0, 4, 0, 6));
+            Spacing.SetMargin(this, Padding.Empty);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -137,8 +145,8 @@ namespace DreamWeave.Launcher.UI
     {
         public TintedBox()
         {
-            Padding = new Padding(12, 8, 12, 8);
-            Margin = new Padding(0, 4, 0, 8);
+            Spacing.SetPadding(this, new Padding(12, 8, 12, 8));
+            Spacing.SetMargin(this, new Padding(0, 4, 0, 8));
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -160,7 +168,7 @@ namespace DreamWeave.Launcher.UI
             ForeColor = Theme.Text;
             Font = Theme.Title;
             Text = text ?? string.Empty;
-            Margin = new Padding(0, 0, 0, 10);
+            Spacing.SetMargin(this, new Padding(0, 0, 0, 10));
             TabStop = false;
         }
 
@@ -224,7 +232,7 @@ namespace DreamWeave.Launcher.UI
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
             UseMnemonic = false;
             UseVisualStyleBackColor = false;
-            Margin = new Padding(8, 0, 0, 0);
+            Spacing.SetMargin(this, new Padding(8, 0, 0, 0));
             Cursor = Cursors.Hand;
         }
 
@@ -341,7 +349,7 @@ namespace DreamWeave.Launcher.UI
             Font = Theme.Body;
             AutoSize = false;
             UseMnemonic = false;
-            Margin = new Padding(0, 2, 0, 2);
+            Spacing.SetMargin(this, new Padding(0, 2, 0, 2));
             Cursor = Cursors.Hand;
         }
 
@@ -440,7 +448,7 @@ namespace DreamWeave.Launcher.UI
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
-            Margin = new Padding(0, 6, 0, 6);
+            Spacing.SetMargin(this, new Padding(0, 6, 0, 6));
             TabStop = false;
             _timer.Tick += (s, e) =>
             {
@@ -576,7 +584,7 @@ namespace DreamWeave.Launcher.UI
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
             Font = Theme.Body;
-            Margin = new Padding(0);
+            Spacing.SetMargin(this, Padding.Empty);
             TabStop = false;
         }
 
@@ -896,6 +904,7 @@ namespace DreamWeave.Launcher.UI
             SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.OptimizedDoubleBuffer, true);
             BackColor = Color.Transparent;
             Body = new VStack();
+            Body.Scroll += (s, e) => Body.Invalidate(true);
             Footer = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.RightToLeft,
@@ -926,8 +935,20 @@ namespace DreamWeave.Launcher.UI
                 Controls.Add(c);
             }
 
+            // Body first, then the left control, then the buttons.
+            Body.TabIndex = 0;
+            if (c != null)
+            {
+                c.TabIndex = 1;
+            }
+
+            Footer.TabIndex = 2;
+
             PerformLayout();
         }
+
+        /// <summary>The button Enter presses (null: none).</summary>
+        public virtual IButtonControl DefaultButton => null;
 
         public VStack Body { get; }
 
@@ -952,6 +973,15 @@ namespace DreamWeave.Launcher.UI
                 if (buttons[i] != null)
                 {
                     Footer.Controls.Add(buttons[i]);
+                }
+            }
+
+            // Tab order follows the visual order, left to right.
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (buttons[i] != null)
+                {
+                    buttons[i].TabIndex = i;
                 }
             }
 
@@ -1000,6 +1030,12 @@ namespace DreamWeave.Launcher.UI
                 _left.SetBounds(0, ClientSize.Height - fh + (fh - lh) / 2, lw, lh);
             }
             Body.SetBounds(0, 0, w, Math.Max(0, ClientSize.Height - fh - (fh > 0 ? LogicalToDeviceUnits(8) : 0)));
+            // Scroll only when the content really does not fit: a stray bar would cover the right edge.
+            bool needScroll = Body.Measure(w) > Body.Height;
+            if (Body.AutoScroll != needScroll)
+            {
+                Body.AutoScroll = needScroll;
+            }
             ReportWanted();
         }
 
@@ -1027,7 +1063,7 @@ namespace DreamWeave.Launcher.UI
             Font = Theme.Body;
             _heading = heading ?? string.Empty;
             _items = items ?? new string[0];
-            Margin = new Padding(0, 6, 0, 6);
+            Spacing.SetMargin(this, new Padding(0, 6, 0, 6));
             TabStop = false;
         }
 
@@ -1091,7 +1127,7 @@ namespace DreamWeave.Launcher.UI
             _button = button;
             SetStyle(ControlStyles.SupportsTransparentBackColor, true);
             BackColor = Color.Transparent;
-            Margin = new Padding(0, 6, 0, 6);
+            Spacing.SetMargin(this, new Padding(0, 6, 0, 6));
             TabStop = false;
             Controls.Add(_box);
             Controls.Add(_button);

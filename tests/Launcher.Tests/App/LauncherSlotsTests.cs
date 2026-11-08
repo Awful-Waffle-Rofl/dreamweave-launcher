@@ -164,7 +164,7 @@ namespace DreamWeave.Launcher.Tests.App
                 false,
                 null,
                 null,
-                t =>
+                (t, c) =>
                 {
                     waits.Add(t);
                     return Task.FromResult(0);
@@ -187,7 +187,7 @@ namespace DreamWeave.Launcher.Tests.App
             int waits = 0;
             LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), new MemorySlots());
 
-            p.PlayAllAsync(Rows(string.Empty, string.Empty, "altone", "pw", string.Empty, string.Empty), false, null, null, t =>
+            p.PlayAllAsync(Rows(string.Empty, string.Empty, "altone", "pw", string.Empty, string.Empty), false, null, null, (t, c) =>
             {
                 waits++;
                 return Task.FromResult(0);
@@ -260,6 +260,70 @@ namespace DreamWeave.Launcher.Tests.App
 
             Assert.AreEqual(0, starter.Args.Count);
             Assert.AreEqual(LauncherError.Cancelled, results.Single().Result.Error);
+        }
+
+        [TestMethod]
+        public void PlayAll_SavesNamesBeforeTheFirstStart_AndBlocksOtherStartsDuringTheGap()
+        {
+            var starter = new ScriptedStarter();
+            var slots = new MemorySlots();
+            LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), slots);
+            bool checkedInGap = false;
+
+            p.PlayAllAsync(Rows("mainacct", "pw1", "altone", "pw2", string.Empty, string.Empty), false, null, null, (t, c) =>
+            {
+                CollectionAssert.AreEqual(new[] { "mainacct", "altone", string.Empty }, slots.Saved.ToArray(), "names are saved before the batch runs on");
+                Assert.IsTrue(p.IsStarting, "still starting inside the gap");
+                Assert.IsFalse(p.CanPlay, "no other start may begin inside the gap");
+                Assert.AreEqual(LauncherError.Cancelled, p.PlayAllAsync(Rows("x", "y", string.Empty, string.Empty, string.Empty, string.Empty), false, null, TimeSpan.Zero).GetAwaiter().GetResult().Single().Result.Error);
+                Assert.AreEqual(LauncherError.Cancelled, p.PlaySlotAsync(0, Rows("x", "y", string.Empty, string.Empty, string.Empty, string.Empty), false).GetAwaiter().GetResult().Result.Error);
+                checkedInGap = true;
+                return Task.FromResult(0);
+            }).GetAwaiter().GetResult();
+
+            Assert.IsTrue(checkedInGap);
+            Assert.AreEqual(2, starter.Args.Count, "only the batch rows started");
+            Assert.IsFalse(p.IsStarting);
+        }
+
+        [TestMethod]
+        public void PlayAll_CancelledDuringTheGap_DoesNotStartTheLaterRows()
+        {
+            var starter = new ScriptedStarter();
+            LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), new MemorySlots());
+
+            IReadOnlyList<SlotResult> results = p.PlayAllAsync(Rows("a1", "p1", "a2", "p2", "a3", "p3"), false, null, null, (t, c) =>
+            {
+                p.CancelPending();
+                return Task.FromResult(0);
+            }).GetAwaiter().GetResult();
+
+            Assert.AreEqual(1, starter.Args.Count, "the row that already started stays started; the rest are dropped");
+            Assert.AreEqual(1, results.Count);
+            Assert.IsFalse(p.IsStarting);
+            Assert.IsFalse(p.IsStartInFlight);
+        }
+
+        [TestMethod]
+        public void PlayAll_WithNoFilledRow_ReturnsNoResults()
+        {
+            var starter = new ScriptedStarter();
+            LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), new MemorySlots());
+            Assert.AreEqual(0, p.PlayAllAsync(Rows("a", string.Empty, string.Empty, "p", string.Empty, string.Empty), false, null, TimeSpan.Zero).GetAwaiter().GetResult().Count);
+            Assert.AreEqual(0, starter.Args.Count);
+        }
+
+        [TestMethod]
+        public void PlaySlot_IsGatedByAMandatoryUpdate()
+        {
+            var starter = new ScriptedStarter();
+            LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), new MemorySlots());
+            p.Update = UpdateGate.Evaluate(MandatoryUpdateManifest(), DreamWeave.Launcher.Core.Update.SemVersion.Parse("1.0.0", "running"));
+
+            SlotResult r = p.PlaySlotAsync(0, Rows("a", "b", string.Empty, string.Empty, string.Empty, string.Empty), false).GetAwaiter().GetResult();
+
+            Assert.AreEqual(LauncherError.Cancelled, r.Result.Error);
+            Assert.AreEqual(0, starter.Args.Count);
         }
 
         private static DreamWeave.Launcher.Core.Manifests.LauncherManifest MandatoryUpdateManifest()

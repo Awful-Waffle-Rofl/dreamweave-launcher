@@ -344,8 +344,6 @@ namespace DreamWeave.Launcher.UI
                 }
             };
 
-            string TitleOf(string id) => components.FirstOrDefault(c => c.Id == id)?.Title ?? id;
-
             void OnEvent(InstallEvent ev)
             {
                 if (stack.IsDisposed)

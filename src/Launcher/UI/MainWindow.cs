@@ -45,12 +45,12 @@ namespace DreamWeave.Launcher.UI
                 AutoSize = false,
                 Height = LogicalToDeviceUnits(FooterHeight),
                 Dock = DockStyle.Bottom,
-                Padding = new Padding(UiKit.Gutter, 0, UiKit.Gutter, 0),
                 TextAlign = ContentAlignment.MiddleLeft,
                 BackColor = Theme.Ground,
                 ForeColor = Theme.Faint,
                 UseMnemonic = false,
             };
+            Spacing.SetPadding(footer, new Padding(UiKit.Gutter, 0, UiKit.Gutter, 0));
             _header = new HeaderBar { Dock = DockStyle.Top, Height = LogicalToDeviceUnits(HeaderHeight) };
             _header.LinkClicked += WizardController.OpenUrl;
             SetLinks(null);
@@ -99,9 +99,7 @@ namespace DreamWeave.Launcher.UI
             int margin = LogicalToDeviceUnits(CardMargin);
             int pad = LogicalToDeviceUnits(CardPadding);
             int width = LogicalToDeviceUnits(CardWidth);
-            int maxHeight = Math.Max(0, _body.Height - 2 * margin);
-            int wanted = _screen.WantedHeight(Math.Max(1, width - 2 * pad - 2)) + 2 * pad + 2;
-            int height = Math.Min(wanted, maxHeight);
+            int height = WantedCardHeight();
             int x = Math.Max(0, _body.Width - margin - width);
             int y = Math.Max(0, (_body.Height - height) / 2);
             _card.Padding = new Padding(pad + 1);
@@ -157,6 +155,7 @@ namespace DreamWeave.Launcher.UI
             }
 
             _screen = screen;
+            AcceptButton = screen.DefaultButton;
             _body.Art = screen.Art;
             screen.Dock = DockStyle.Fill;
             screen.WantedHeightChanged += OnWantedHeightChanged;
@@ -165,6 +164,23 @@ namespace DreamWeave.Launcher.UI
             _card.ResumeLayout(true);
             _card.Invalidate(true);
         }
+
+        /// <summary>The height the card should have: what the page asks for, capped to the body.</summary>
+        internal int WantedCardHeight()
+        {
+            int margin = LogicalToDeviceUnits(CardMargin);
+            int pad = LogicalToDeviceUnits(CardPadding);
+            int width = LogicalToDeviceUnits(CardWidth);
+            int maxHeight = Math.Max(0, _body.Height - 2 * margin);
+            int wanted = _screen.WantedHeight(Math.Max(1, width - 2 * pad - 2)) + 2 * pad + 2;
+            return Math.Min(wanted, maxHeight);
+        }
+
+        /// <summary>The card (layout tests read its bounds).</summary>
+        internal ArtCard Card => _card;
+
+        /// <summary>The page currently shown, or null.</summary>
+        internal Page CurrentPage => _screen;
 
         private void OnWantedHeightChanged(object sender, EventArgs e)
         {

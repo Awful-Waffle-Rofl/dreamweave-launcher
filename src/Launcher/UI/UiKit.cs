@@ -15,7 +15,9 @@ namespace DreamWeave.Launcher.UI
         /// <summary>A themed vertical stack that fills its parent (used by the plain dialogs).</summary>
         public static VStack Stack()
         {
-            return new VStack { Dock = DockStyle.Fill, Padding = new Padding(Gutter) };
+            var s = new VStack { Dock = DockStyle.Fill };
+            Spacing.SetPadding(s, new Padding(Gutter));
+            return s;
         }
 
         /// <summary>Adds <paramref name="c"/> as the next row of <paramref name="stack"/>.</summary>
@@ -44,9 +46,18 @@ namespace DreamWeave.Launcher.UI
         public static WrapLabel Text(string text, bool bold = false, float sizeDelta = 0)
         {
             var l = new WrapLabel { Text = text ?? string.Empty };
-            if (bold || sizeDelta != 0)
+            if (sizeDelta == 0)
             {
-                l.Font = new Font(Theme.BodyFamily, 9.75f + sizeDelta, bold ? FontStyle.Bold : FontStyle.Regular);
+                if (bold)
+                {
+                    l.Font = Theme.BodyBold;
+                }
+            }
+            else
+            {
+                var f = new Font(Theme.BodyFamily, 9.75f + sizeDelta, bold ? FontStyle.Bold : FontStyle.Regular);
+                l.Font = f;
+                l.Disposed += (s, e) => f.Dispose();
             }
 
             return l;

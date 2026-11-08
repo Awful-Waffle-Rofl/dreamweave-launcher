@@ -149,6 +149,71 @@ namespace DreamWeave.Launcher.UI
     }
 
     /// <summary>
+    /// Margins and paddings written in logical (96 DPI) pixels. They are re-applied, scaled with
+    /// <see cref="Control.LogicalToDeviceUnits(int)"/>, whenever the control gets a parent or its DPI changes,
+    /// so controls created after the window scale like the ones created with it.
+    /// </summary>
+    internal static class Spacing
+    {
+        private sealed class Logical
+        {
+            public Padding? Margin;
+            public Padding? Padding;
+        }
+
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control, Logical> Table = new System.Runtime.CompilerServices.ConditionalWeakTable<Control, Logical>();
+
+        public static void SetMargin(Control c, Padding logical)
+        {
+            Get(c).Margin = logical;
+            Apply(c);
+        }
+
+        public static void SetPadding(Control c, Padding logical)
+        {
+            Get(c).Padding = logical;
+            Apply(c);
+        }
+
+        private static Logical Get(Control c)
+        {
+            Logical l;
+            if (!Table.TryGetValue(c, out l))
+            {
+                l = new Logical();
+                Table.Add(c, l);
+                c.ParentChanged += (s, e) => Apply(c);
+                c.DpiChangedAfterParent += (s, e) => Apply(c);
+            }
+
+            return l;
+        }
+
+        private static Padding Scale(Control c, Padding p)
+        {
+            return new Padding(c.LogicalToDeviceUnits(p.Left), c.LogicalToDeviceUnits(p.Top), c.LogicalToDeviceUnits(p.Right), c.LogicalToDeviceUnits(p.Bottom));
+        }
+
+        private static void Apply(Control c)
+        {
+            Logical l;
+            if (!Table.TryGetValue(c, out l))
+            {
+                return;
+            }
+
+            if (l.Margin.HasValue)
+            {
+                c.Margin = Scale(c, l.Margin.Value);
+            }
+
+            if (l.Padding.HasValue)
+            {
+                c.Padding = Scale(c, l.Padding.Value);
+            }
+        }
+    }
+    /// <summary>
     /// The embedded art and icons. Each is decoded once on first use and released by
     /// <see cref="Release"/> when the window that used them closes.
     /// </summary>

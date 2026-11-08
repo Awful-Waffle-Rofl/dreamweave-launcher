@@ -136,6 +136,7 @@ namespace DreamWeave.Launcher.App
         public const string SlotAlt2 = "Alt 2";
         public const string RememberPasswords = "Remember passwords";
         public const string PlayAll = "Play all";
+        public const string FillInFirst = "Fill in an account and password first.";
         public const string DuplicateAccount = "This account is already used in another row.";
         public const string NewHereInfo = "New here? There is no sign-up page. Type any account name and password you like and press Play: your first login creates the account. Use the same name and password every time after that.";
 

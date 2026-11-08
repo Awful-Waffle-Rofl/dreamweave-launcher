@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Credentials;
@@ -144,6 +145,7 @@ namespace DreamWeave.Launcher.App
         private readonly string[] _filled = new string[SlotCount];
         private bool _starting;
         private bool _batch;
+        private CancellationTokenSource _batchCancel;
 
         /// <summary>Number of client rows on the launcher screen (Main, Alt 1, Alt 2).</summary>
         public const int SlotCount = 3;
@@ -471,7 +473,7 @@ namespace DreamWeave.Launcher.App
         /// that is a duplicate or fails reports its own error and the rest still start. Each finished row
         /// is also reported through <paramref name="progress"/>. Empty rows are skipped without a result.
         /// </summary>
-        public async Task<IReadOnlyList<SlotResult>> PlayAllAsync(IReadOnlyList<SlotInput> inputs, bool remember, IProgress<SlotResult> progress = null, TimeSpan? gap = null, Func<TimeSpan, Task> delay = null)
+        public async Task<IReadOnlyList<SlotResult>> PlayAllAsync(IReadOnlyList<SlotInput> inputs, bool remember, IProgress<SlotResult> progress = null, TimeSpan? gap = null, Func<TimeSpan, CancellationToken, Task> delay = null, CancellationToken cancel = default(CancellationToken))
         {
             var results = new List<SlotResult>();
             if (!CanPlay)
@@ -483,17 +485,26 @@ namespace DreamWeave.Launcher.App
             }
 
             TimeSpan pause = gap ?? LaunchGap;
-            Func<TimeSpan, Task> wait = delay ?? (t => Task.Delay(t));
+            Func<TimeSpan, CancellationToken, Task> wait = delay ?? ((t, c) => Task.Delay(t, c));
             string[] errors = ValidateSlots(inputs);
             _batch = true;
+            var linked = CancellationTokenSource.CreateLinkedTokenSource(cancel);
+            _batchCancel = linked;
             try
             {
+                // Names first: closing the window mid-batch must not lose them.
+                await SaveSlotsAsync(inputs).ConfigureAwait(false);
                 bool startedOne = false;
                 for (int i = 0; i < SlotCount && i < inputs.Count; i++)
                 {
                     if (!inputs[i].IsFilled)
                     {
                         continue;
+                    }
+
+                    if (linked.IsCancellationRequested)
+                    {
+                        break;
                     }
 
                     PlayResult result;
@@ -505,7 +516,19 @@ namespace DreamWeave.Launcher.App
                     {
                         if (startedOne && pause > TimeSpan.Zero)
                         {
-                            await wait(pause).ConfigureAwait(false);
+                            try
+                            {
+                                await wait(pause, linked.Token).ConfigureAwait(false);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                break;
+                            }
+
+                            if (linked.IsCancellationRequested)
+                            {
+                                break;
+                            }
                         }
 
                         result = await StartCoreAsync(inputs[i].Account, inputs[i].Password, remember).ConfigureAwait(false);
@@ -517,14 +540,39 @@ namespace DreamWeave.Launcher.App
                     progress?.Report(row);
                 }
 
-                await SaveSlotsAsync(inputs).ConfigureAwait(false);
             }
             finally
             {
+                _batchCancel = null;
+                linked.Dispose();
                 _batch = false;
             }
 
             return results;
+        }
+
+        /// <summary>Stops a Play all after the client currently starting (if any): later rows are not started.</summary>
+        public void CancelPending()
+        {
+            try
+            {
+                _batchCancel?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        /// <summary>True while a client start is running (a close must wait for it; it is never interrupted).</summary>
+        public bool IsStartInFlight => _starting;
+
+        /// <summary>Completes once no client start is running.</summary>
+        public async Task WhenNoStartInFlightAsync()
+        {
+            while (_starting)
+            {
+                await Task.Delay(50).ConfigureAwait(false);
+            }
         }
 
         private Task SaveSlotsAsync(IReadOnlyList<SlotInput> inputs)
