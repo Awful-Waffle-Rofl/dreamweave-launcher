@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core.Downloads;
 using DreamWeave.Launcher.Core.Manifests;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.SelfInstall;
 
 namespace DreamWeave.Launcher.Core.Update
@@ -108,13 +109,13 @@ namespace DreamWeave.Launcher.Core.Update
                 throw new LauncherException(LauncherError.ManifestInvalid, "The manifest does not publish a usable launcher download.");
             }
 
-            string staged = Path.Combine(DownloadRequest.ComponentFolder(_paths.StagingDir, ComponentId), SelfInstallLayout.ExeFileName);
+            string staged = Path.Combine(DownloadRequest.ComponentFolder(_paths.StagingDir, ComponentId), CleanupLayout.ExeFileName);
             var request = new DownloadRequest(ComponentId, Transports.Http, new Uri(info.Url, UriKind.Absolute), info.Size, info.Sha256, staged);
             DownloadResult downloaded = await _downloader.DownloadAsync(request, progress, cancellationToken).ConfigureAwait(false);
 
             FileStream heldStaged = null;
             FileStream heldNew = null;
-            string newPath = _exePath + SelfInstallLayout.NewSuffix;
+            string newPath = _exePath + CleanupLayout.NewSuffix;
             try
             {
                 heldStaged = _fs.OpenReadLocked(downloaded.Path);
@@ -172,7 +173,7 @@ namespace DreamWeave.Launcher.Core.Update
 
             try
             {
-                _processes.Start(new ProcessStartInfo(_exePath, SelfInstallLayout.UpdatedSwitch)
+                _processes.Start(new ProcessStartInfo(_exePath, CleanupLayout.UpdatedSwitch)
                 {
                     UseShellExecute = false,
                     WorkingDirectory = Path.GetDirectoryName(_exePath),
@@ -201,8 +202,8 @@ namespace DreamWeave.Launcher.Core.Update
             }
 
             string exe = Path.GetFullPath(currentExePath);
-            string oldPath = exe + SelfInstallLayout.OldSuffix;
-            TryDelete(fileSystem, exe + SelfInstallLayout.NewSuffix);
+            string oldPath = exe + CleanupLayout.OldSuffix;
+            TryDelete(fileSystem, exe + CleanupLayout.NewSuffix);
             Stopwatch clock = Stopwatch.StartNew();
             while (true)
             {

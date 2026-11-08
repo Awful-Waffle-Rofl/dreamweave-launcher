@@ -19,7 +19,6 @@ namespace DreamWeave.Launcher.Core
             }
 
             Root = Path.GetFullPath(root);
-            InstallDir = Path.Combine(Root, "Programs", "DreamWeave Launcher");
             DataDir = Path.Combine(Root, "DreamWeave");
             StagingDir = Path.Combine(DataDir, "staging");
             StateFile = Path.Combine(DataDir, "state.json");
@@ -37,9 +36,6 @@ namespace DreamWeave.Launcher.Core
 
         /// <summary>The root everything else derives from.</summary>
         public string Root { get; }
-
-        /// <summary>Where the launcher exe is installed: <c>Root\Programs\DreamWeave Launcher</c>.</summary>
-        public string InstallDir { get; }
 
         /// <summary>Launcher data (state, manifest cache, staging): <c>Root\DreamWeave</c>.</summary>
         public string DataDir { get; }

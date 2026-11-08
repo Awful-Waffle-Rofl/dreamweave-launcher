@@ -1,13 +1,11 @@
 using System;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Install;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.Update;
 using DreamWeave.Launcher.UI;
 
@@ -32,6 +30,26 @@ namespace DreamWeave.Launcher
                     return (int)LauncherError.Unknown;
             }
 
+            // Held for the whole run (separate from the single-instance lock) so the setup program can detect us.
+            SetupGuard.Hold();
+            try
+            {
+                if (parsed.IsSilent)
+                {
+                    // No window, no AC client removal, always exit 0: nothing in here may throw or show UI.
+                    return SilentCleanup.Run(AppPaths.CreateDefault, CleanupEnvironment.CreateDefault, SingleInstance.Acquire);
+                }
+
+                return RunWithUi(parsed);
+            }
+            finally
+            {
+                SetupGuard.Release();
+            }
+        }
+
+        private static int RunWithUi(StartupArgs parsed)
+        {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -54,34 +72,29 @@ namespace DreamWeave.Launcher
                     return (int)LauncherError.StateLocked;
                 }
 
-                return parsed.Mode == StartupMode.Uninstall ? RunUninstall() : RunInteractive(parsed, instance);
+                return parsed.Mode == StartupMode.Cleanup ? RunCleanup(parsed) : RunInteractive(parsed, instance);
             }
         }
 
         /// <summary>
-        /// <c>--uninstall</c>. Deliberately builds NO <see cref="AppServices"/>: opening the state store or
-        /// the telemetry client would write to the data folder that is about to be deleted.
+        /// <c>--cleanup</c>. Deliberately builds NO <see cref="AppServices"/>: opening the state store or
+        /// the telemetry client would write to the data folder that is about to be deleted. Never touches
+        /// shortcuts, the registry or the install folder (the setup program owns those).
         /// </summary>
-        private static int RunUninstall()
+        private static int RunCleanup(StartupArgs parsed)
         {
             AppPaths paths = AppPaths.CreateDefault();
-            string running = ExePaths.Running();
-
-            // 0 when the player cancels at the confirmation; once uninstall starts, Unknown until a result arrives.
+            // 0 when the player cancels at the confirmation; once cleanup starts, Unknown until a result arrives.
             int exit = 0;
             var form = new UninstallForm(removeClient =>
             {
                 exit = (int)LauncherError.Unknown;
-                var options = new UninstallOptions
-                {
-                    CurrentExePath = ExePaths.UninstallCurrentExePath(running, paths),
-                    RemoveAcClient = removeClient,
-                };
+                var options = new CleanupOptions { RemoveAcClient = removeClient };
 
                 // Off the UI thread: the AC client's uninstaller is waited on.
                 return Task.Run(() =>
                 {
-                    UninstallResult result = new SelfUninstaller(SelfInstallEnvironment.CreateDefault(paths)).Uninstall(options);
+                    CleanupResult result = new LauncherCleanup(CleanupEnvironment.CreateDefault(paths)).Run(options);
                     exit = (int)result.Code;
                     return result;
                 });
@@ -121,58 +134,12 @@ namespace DreamWeave.Launcher
 
             try
             {
-                if (parsed.Mode == StartupMode.Normal && !ExePaths.IsInstalledCopy(running, paths) && OfferSelfInstall(services, running, instance))
-                {
-                    return 0;
-                }
-
                 new AppController(services, instance).Run();
                 return 0;
             }
             finally
             {
                 services.Shutdown();
-            }
-        }
-
-        /// <summary>
-        /// Offers to install the running (downloaded) exe for the current user. On success the installed
-        /// copy is started and true is returned, so this process exits; false means carry on from here.
-        /// </summary>
-        private static bool OfferSelfInstall(AppServices services, string running, SingleInstance instance)
-        {
-            if (MessageBox.Show(UiText.SelfInstallPrompt, LauncherInfo.ProductName, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            {
-                return false;
-            }
-
-            SelfInstallResult result;
-            try
-            {
-                result = Task.Run(() => new SelfInstaller(services.InstallEnvironment, LauncherInfo.Version).Install(running)).GetAwaiter().GetResult();
-            }
-            catch (LauncherException)
-            {
-                MessageBox.Show(UiText.SelfInstallFailed, LauncherInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
-            }
-
-            try
-            {
-                // The installed copy takes the mutex itself; release it first so it does not hand straight back to us.
-                services.Shutdown();
-                instance.Release();
-                services.InstallEnvironment.Processes.Start(new ProcessStartInfo(result.ExePath)
-                {
-                    UseShellExecute = false,
-                    WorkingDirectory = Path.GetDirectoryName(result.ExePath),
-                });
-                return true;
-            }
-            catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException || ex is IOException)
-            {
-                MessageBox.Show(UiText.SelfInstallStartFailed, LauncherInfo.ProductName, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return true;
             }
         }
     }

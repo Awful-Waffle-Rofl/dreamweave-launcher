@@ -35,26 +35,57 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void Uninstall_FromAppsAndFeatures_DoesNotWait()
+        public void Cleanup_FromSetup_DoesNotWait_AndShowsTheWindow()
         {
-            StartupArgs a = StartupArgs.Parse(new[] { "--uninstall" });
-            Assert.AreEqual(StartupMode.Uninstall, a.Mode);
+            StartupArgs a = StartupArgs.Parse(new[] { "--cleanup" });
+            Assert.AreEqual(StartupMode.Cleanup, a.Mode);
             Assert.IsTrue(a.UsesMutex);
             Assert.IsFalse(a.HandsOverToRunningInstance);
             Assert.IsFalse(a.IsHandover);
+            Assert.IsFalse(a.IsSilent);
             Assert.AreEqual(TimeSpan.Zero, a.MutexWait, "an open launcher window is reported at once");
         }
 
         [TestMethod]
-        public void Uninstall_FromSettings_WaitsForTheHandover()
+        public void Cleanup_Silent_HasNoWindowFlagSet()
         {
-            StartupArgs a = StartupArgs.Parse(new[] { "--uninstall", "--handover" });
-            Assert.AreEqual(StartupMode.Uninstall, a.Mode);
+            StartupArgs a = StartupArgs.Parse(new[] { "--cleanup", "--silent" });
+            Assert.AreEqual(StartupMode.Cleanup, a.Mode);
+            Assert.IsTrue(a.IsSilent);
+            Assert.IsFalse(a.IsHandover);
+            Assert.AreEqual(TimeSpan.FromSeconds(15), a.MutexWait, "the old launcher may still be shutting down");
+        }
+
+        [TestMethod]
+        public void Cleanup_FromSettings_WaitsForTheHandover()
+        {
+            StartupArgs a = StartupArgs.Parse(new[] { "--cleanup", "--handover" });
+            Assert.AreEqual(StartupMode.Cleanup, a.Mode);
             Assert.IsTrue(a.IsHandover);
+            Assert.IsFalse(a.IsSilent);
             Assert.AreEqual(StartupArgs.HandoverWait, a.MutexWait);
             Assert.AreEqual(TimeSpan.FromSeconds(30), StartupArgs.HandoverWait);
         }
 
+        [TestMethod]
+        public void Cleanup_WithAnUnknownExtraArgument_IsInvalid()
+        {
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--cleanup", "--bogus" }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--cleanup", "--silent", "--bogus" }).Mode);
+        }
+
+        [TestMethod]
+        public void Silent_WithoutCleanup_IsInvalid()
+        {
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--silent" }).Mode);
+        }
+
+        [TestMethod]
+        public void RetiredUninstallSwitch_IsInvalid()
+        {
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--uninstall" }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--uninstall", "--handover" }).Mode);
+        }
         [TestMethod]
         public void Updated_WaitsForMutex_DoesNotHandOver()
         {
@@ -75,7 +106,7 @@ namespace DreamWeave.Launcher.Tests.App
         public void UnknownOrMiscasedSwitch_IsInvalid()
         {
             Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--bogus" }).Mode);
-            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--UNINSTALL" }).Mode);
+            Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--CLEANUP" }).Mode);
             Assert.IsFalse(StartupArgs.Parse(new[] { "--bogus" }).UsesMutex);
         }
     }

@@ -210,7 +210,7 @@ namespace DreamWeave.Launcher.UI
         public IReadOnlyList<ComponentStatus> VerifyFoundProblems { get; private set; }
     }
 
-    /// <summary>The <c>--uninstall</c> window: confirm (with the optional client checkbox), then run, then report.</summary>
+    /// <summary>The <c>--cleanup</c> window: confirm (with the optional client checkbox), then run, then report.</summary>
     internal sealed class UninstallForm : Form
     {
         protected override void OnFormClosed(FormClosedEventArgs e)
@@ -219,10 +219,10 @@ namespace DreamWeave.Launcher.UI
             Assets.Release();
         }
 
-        /// <summary>How long the result stays on screen before the window closes itself (the self-delete helper waits about 60 s).</summary>
+        /// <summary>How long the result stays on screen before the window closes itself (the window is not kept open indefinitely).</summary>
         internal static readonly TimeSpan AutoCloseAfter = TimeSpan.FromSeconds(20);
 
-        public UninstallForm(Func<bool, Task<Core.SelfInstall.UninstallResult>> uninstall)
+        public UninstallForm(Func<bool, Task<Core.Cleanup.CleanupResult>> uninstall)
         {
             AutoScaleMode = AutoScaleMode.Dpi;
             Text = UiText.UninstallTitle;
@@ -253,7 +253,7 @@ namespace DreamWeave.Launcher.UI
                 alsoClient.Enabled = false;
                 ControlBox = false;
                 body.Text = UiText.UninstallRunning;
-                Core.SelfInstall.UninstallResult result = null;
+                Core.Cleanup.CleanupResult result = null;
                 try
                 {
                     result = await uninstall(alsoClient.Checked);
@@ -275,7 +275,7 @@ namespace DreamWeave.Launcher.UI
                 ControlBox = true;
                 if (UninstallReport.CloseImmediately(result))
                 {
-                    // Exit at once: the self-delete helper waits only about a minute for this process to end.
+                    // Nothing to tell the player: exit at once.
                     Close();
                     return;
                 }
@@ -286,7 +286,7 @@ namespace DreamWeave.Launcher.UI
                 cancel.Text = UiText.Close;
                 cancel.Enabled = true;
 
-                // Close on its own after a while, well inside the self-delete helper's one-minute window.
+                // Close on its own after a while so the setup program is not left waiting on this window.
                 var timer = new System.Windows.Forms.Timer { Interval = (int)AutoCloseAfter.TotalMilliseconds };
                 timer.Tick += (s2, e2) =>
                 {

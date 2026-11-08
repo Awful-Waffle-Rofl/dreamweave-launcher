@@ -6,7 +6,7 @@ using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.Update;
 using DreamWeave.Launcher.Tests.Detection;
 using DreamWeave.Launcher.Tests.Install;
@@ -36,16 +36,16 @@ namespace DreamWeave.Launcher.Tests.App
     [TestClass]
     public class UninstallReportTests
     {
-        private static UninstallResult Result(string[] failures, string[] leftovers, bool credentialsLeft, AcClientUninstallOutcome ac = AcClientUninstallOutcome.NotRequested)
+        private static CleanupResult Result(string[] failures, string[] leftovers, bool credentialsLeft, AcClientUninstallOutcome ac = AcClientUninstallOutcome.NotRequested)
         {
-            return new UninstallResult(failures, true, ac, null, 0, leftovers, credentialsLeft);
+            return new CleanupResult(failures, ac, null, 0, leftovers, credentialsLeft);
         }
 
         [TestMethod]
         public void Incomplete_ShowsCodeHeaderFoldersAndCredentialLine_NeverRawFailureText()
         {
             string data = @"C:\Users\p\AppData\Local\DreamWeave";
-            UninstallResult r = Result(
+            CleanupResult r = Result(
                 new[]
                 {
                     data + @"\state.json: The process cannot access the file because it is being used by another process.",
@@ -69,7 +69,7 @@ namespace DreamWeave.Launcher.Tests.App
         public void Complete_ClosesAtOnce_UnlessTheClientNeedsMentioning()
         {
             Assert.IsTrue(UninstallReport.CloseImmediately(Result(new string[0], new string[0], false)));
-            UninstallResult notFound = Result(new string[0], new string[0], false, AcClientUninstallOutcome.NotFound);
+            CleanupResult notFound = Result(new string[0], new string[0], false, AcClientUninstallOutcome.NotFound);
             Assert.IsFalse(UninstallReport.CloseImmediately(notFound));
             CollectionAssert.AreEqual(new[] { UiText.UninstallDone, UiText.UninstallClientNotFound }, UninstallReport.Lines(notFound).ToArray());
             Assert.AreEqual(ErrorMessages.For(LauncherError.Unknown), UninstallReport.Lines(null).Single());
