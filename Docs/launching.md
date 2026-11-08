@@ -5,8 +5,9 @@ signed manifest's `launch.argTemplate` (`LaunchArgsBuilder`).
 
 ## What the launcher does
 
-- Arguments come from the template, default `-a "{user}" -v "{pass}" -h {host}:{port} -rodat on`.
-  `-rodat on` lets a new client share dat files with clients that are already running.
+- Arguments come from the template, default `-a "{user}" -v "{pass}" -h {host}:{port} -rodat off`.
+  `-rodat off` is what lets several clients run against the same game folder at once, and it is what
+  multi-boxing players already use.
 - The client is started with `UseShellExecute = false` and its working directory set to the game
   folder. The launcher never requests elevation and never touches `acclient.exe` processes it did
   not start.
