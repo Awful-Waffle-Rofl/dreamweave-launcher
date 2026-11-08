@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
 using System.Threading;
@@ -48,7 +49,12 @@ namespace DreamWeave.Launcher.Core.Downloads
         // Part paths whose last attempt was abandoned while its library read was still running.
         // Instance state (not per call), so a cancel during a stall followed by an immediate new
         // DownloadAsync still treats the held part as transient. Cleared once an attempt deletes the part.
-        private readonly ConcurrentDictionary<string, bool> _possiblyHeld = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, object> _possiblyHeld = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        // Orders an abandoned read's late clean-up against a newer attempt taking the path over: the
+        // clean-up checks its token and deletes under this lock, and a new attempt clears the entry under
+        // it BEFORE it creates its own part, so the late delete can never remove a newer attempt's file.
+        private readonly object _heldGate = new object();
 
         /// <summary>Production constructor (MegaApiClient).</summary>
         public MegaTransport()
@@ -130,8 +136,13 @@ namespace DreamWeave.Launcher.Core.Downloads
                 PartFiles.Delete(request.PartPath, "clearing an old partial download");
             }
 
-            bool ignored;
-            _possiblyHeld.TryRemove(Path.GetFullPath(request.PartPath), out ignored);
+            lock (_heldGate)
+            {
+                // This attempt now owns the path: any pending clean-up from an abandoned read no longer matches.
+                object previousToken;
+                _possiblyHeld.TryRemove(Path.GetFullPath(request.PartPath), out previousToken);
+            }
+
             using (IMegaClient client = _clientFactory())
             {
                 await WithCancellation(WithApiTimeout(client.LoginAnonymousAsync(), _options.ApiTimeout), cancellationToken).ConfigureAwait(false);
@@ -186,17 +197,37 @@ namespace DreamWeave.Launcher.Core.Downloads
                             {
                                 string heldKey = Path.GetFullPath(request.PartPath);
                                 string heldPart = request.PartPath;
-                                _possiblyHeld[heldKey] = true;
+                                var token = new object();
+                                lock (_heldGate)
+                                {
+                                    _possiblyHeld[heldKey] = token;
+                                }
 
-                                // When the abandoned read finally lets go, remove the part it leaves behind, unless
-                                // a newer attempt has already taken the path over (it clears the flag).
+                                // When the abandoned read finally lets go, remove the part it leaves behind, but only
+                                // while this attempt's token is still the entry: a newer attempt replaces it first.
                                 download.ContinueWith(
                                     _ =>
                                     {
-                                        bool ownedByNobody;
-                                        if (_possiblyHeld.TryRemove(heldKey, out ownedByNobody))
+                                        lock (_heldGate)
                                         {
-                                            PartFiles.TryDelete(heldPart);
+                                            object current;
+                                            if (!_possiblyHeld.TryGetValue(heldKey, out current) || !ReferenceEquals(current, token))
+                                            {
+                                                return;
+                                            }
+
+                                            try
+                                            {
+                                                File.Delete(heldPart);
+                                            }
+                                            catch (IOException)
+                                            {
+                                            }
+                                            catch (UnauthorizedAccessException)
+                                            {
+                                            }
+
+                                            ((ICollection<KeyValuePair<string, object>>)_possiblyHeld).Remove(new KeyValuePair<string, object>(heldKey, token));
                                         }
                                     },
                                     TaskScheduler.Default);

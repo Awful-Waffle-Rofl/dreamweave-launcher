@@ -72,6 +72,86 @@ namespace DreamWeave.Launcher.Tests.Downloads
             }
         }
 
+        /// <summary>Writes a small file in one go and closes it at once, like a fast retry would.</summary>
+        private sealed class QuickWriteMegaClient : IMegaClient
+        {
+            private readonly byte[] _content;
+
+            public QuickWriteMegaClient(byte[] content)
+            {
+                _content = content;
+            }
+
+            public Task LoginAnonymousAsync() => Task.CompletedTask;
+
+            public Task<MegaFile> GetFileFromLinkAsync(Uri link) => Task.FromResult(new MegaFile("f", _content.Length, null));
+
+            public Task DownloadFileAsync(MegaFile file, string path, IProgress<double> percent, CancellationToken cancellationToken)
+            {
+                return Task.Run(() =>
+                {
+                    using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                    {
+                        fs.Write(_content, 0, _content.Length);
+                    }
+
+                    percent.Report(100);
+                });
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
+        [TestMethod]
+        [Timeout(180000)]
+        public void LateCleanupOfAnAbandonedRead_NeverDeletesTheNextAttemptsPart()
+        {
+            // The abandoned read lets go just as the retry starts; the retry writes its part and closes it at
+            // once. The late clean-up of the old read must not take the new file with it.
+            byte[] content = DownloadFixtures.Content(50 * 1024);
+            int losses = 0;
+            for (int iteration = 0; iteration < 40; iteration++)
+            {
+                using (var dir = new TempDir())
+                using (var release = new ManualResetEventSlim(false))
+                {
+                    var options = new MegaTransportOptions
+                    {
+                        InactivityTimeout = TimeSpan.FromMilliseconds(80),
+                        FirstProgressTimeout = TimeSpan.FromSeconds(30),
+                        AbandonGrace = TimeSpan.FromMilliseconds(20),
+                        Retry = new RetryPolicy
+                        {
+                            MaxRetries = 6,
+                            Delay = (d, ct) =>
+                            {
+                                release.Set();
+                                return Task.CompletedTask;
+                            },
+                        },
+                    };
+                    int made = 0;
+                    var transport = new MegaTransport(
+                        () => Interlocked.Increment(ref made) == 1 ? (IMegaClient)new StallingMegaClient(content, release, TimeSpan.Zero) : new QuickWriteMegaClient(content),
+                        options);
+                    string dest = Path.Combine(dir.Path, "ac-client", "x.exe");
+                    Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                    var request = new DownloadRequest("ac-client", Transports.Mega, new Uri("https://mega.nz/file/abc#key"), content.Length, Hasher.ComputeSha256Hex(content), dest);
+                    transport.DownloadToPartAsync(request, new TransferProgress("ac-client", content.Length, null), CancellationToken.None).GetAwaiter().GetResult();
+
+                    Thread.Sleep(60); // let any late clean-up run
+                    if (!File.Exists(request.PartPath) || new FileInfo(request.PartPath).Length != content.Length)
+                    {
+                        losses++;
+                    }
+                }
+            }
+
+            Assert.AreEqual(0, losses, "the late clean-up removed the next attempt's part in " + losses + " of 40 runs");
+        }
+
         private sealed class Rig : IDisposable
         {
             private readonly TempDir _dir = new TempDir();
