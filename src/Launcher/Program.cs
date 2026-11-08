@@ -84,8 +84,8 @@ namespace DreamWeave.Launcher
         private static int RunCleanup(StartupArgs parsed)
         {
             AppPaths paths = AppPaths.CreateDefault();
-            // 0 when the player cancels at the confirmation; once cleanup starts, Unknown until a result arrives.
-            int exit = 0;
+            // CancelExitCode when the player cancels at the confirmation; once cleanup starts, Unknown until a result arrives.
+            int exit = parsed.CancelExitCode;
             var form = new UninstallForm(removeClient =>
             {
                 exit = (int)LauncherError.Unknown;

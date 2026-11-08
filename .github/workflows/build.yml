@@ -44,6 +44,39 @@ jobs:
           $extra = Get-ChildItem $dir -File | Where-Object { $allowed -notcontains $_.Name }
           if ($extra) { Write-Error "Unexpected files next to the exe: $($extra.Name -join ', ')"; exit 1 }
 
+      # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
+      - name: Build setup installer
+        shell: pwsh
+        run: ./tools/release/build-setup.ps1 -ExePath $env:EXE_PATH -OutDir setup-out
+
+      # Exercises the release version assertion on every PR: the tag is derived from <Version>, then a wrong tag must fail.
+      - name: Assert version (right tag passes, wrong tag fails)
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1
+          if (-not $found) { throw 'No setup exe found in setup-out' }
+          [xml]$props = Get-Content -LiteralPath Directory.Build.props -Raw
+          $ver = $props.SelectSingleNode('//Version').InnerText.Trim()
+          # Child processes, so each exit code is the script's own (a script that ends without `exit` leaves $LASTEXITCODE unset).
+          pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag "v$ver" -ExePath $env:EXE_PATH -SetupPath $found.FullName
+          if ($LASTEXITCODE -ne 0) { throw "assert-version failed for the right tag (exit $LASTEXITCODE)" }
+          # Only the setup's version can be wrong here: a props file and tag that agree on 9.9.9, so the exe and
+          # props checks cannot be what fails. It must fail, and with the setup version message.
+          $tmpProps = Join-Path $env:RUNNER_TEMP 'wrong-version.props'
+          (Get-Content -LiteralPath Directory.Build.props -Raw) -replace '<Version>[^<]*</Version>', '<Version>9.9.9</Version>' | Set-Content -LiteralPath $tmpProps
+          $out = pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag 'v9.9.9' -SetupPath $found.FullName -PropsPath $tmpProps 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -eq 0) { throw 'assert-version accepted a setup with the wrong version' }
+          if ($out -notmatch 'Setup product version') { throw "assert-version failed for the wrong reason: $out" }
+          # The wrong tag was meant to fail: do not let its exit code become the step's.
+          $global:LASTEXITCODE = 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DreamWeaveLauncher-Setup
+          path: setup-out/DreamWeaveLauncher-Setup-*.exe
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v4
         with:
           name: DreamWeaveLauncher
