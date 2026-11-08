@@ -155,7 +155,7 @@ namespace DreamWeave.Launcher.App
         public const string SlotAlt2 = "Alt 2";
         public const string RememberPasswords = "Remember passwords";
         public const string LaunchWithDecal = "Launch with Decal";
-        public const string DecalGetItLink = "Get Decal";
+        public const string TryRynthLink = "Try Rynth, The Latest Launcher & Tool Suite";
         public const string DecalNotLoaded = "The game started, but Decal could not be loaded, so it is running without Decal this time.";
         public const string PlayAll = "Play all";
         public const string FillInFirst = "Fill in an account and password first.";
