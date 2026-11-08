@@ -93,26 +93,58 @@ begin
       mbCriticalError, MB_OK);
 end;
 
-procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+// Runs the launcher's cleanup and returns its exit code, or -1 when it could not be started.
+// A failure never stops the uninstall.
+function RunLauncherCleanup(Params: String): Integer;
 var
-  Exe, Params: String;
   ResultCode: Integer;
+begin
+  Result := -1;
+  try
+    if Exec(ExpandConstant('{app}\DreamWeaveLauncher.exe'), Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
+    begin
+      Result := ResultCode;
+      if ResultCode <> 0 then
+        Log('Launcher cleanup (' + Params + ') exited with code ' + IntToStr(ResultCode));
+    end
+    else
+      Log('Launcher cleanup did not start: ' + SysErrorMessage(ResultCode));
+  except
+    Log('Launcher cleanup raised an exception: ' + GetExceptionMessage);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
   begin
     // Removes saved passwords and launcher data. The launcher shows its own window unless this is a
-    // silent uninstall; the uninstaller waits for it. A failure never stops the uninstall.
-    Exe := ExpandConstant('{app}\DreamWeaveLauncher.exe');
-    Params := '--cleanup';
+    // silent uninstall; the uninstaller waits for it.
     if UninstallSilent() then
-      Params := Params + ' --silent';
-    try
-      if not Exec(Exe, Params, '', SW_SHOW, ewWaitUntilTerminated, ResultCode) then
-        Log('Launcher cleanup did not start: ' + SysErrorMessage(ResultCode))
-      else if ResultCode <> 0 then
-        Log('Launcher cleanup exited with code ' + IntToStr(ResultCode));
-    except
-      Log('Launcher cleanup raised an exception: ' + GetExceptionMessage);
+      RunLauncherCleanup('--cleanup --silent')
+    else if RunLauncherCleanup('--cleanup') = 120 then
+      // 120 = the player cancelled the launcher's window. The uninstall goes ahead anyway, so remove the
+      // saved passwords and data without a window rather than leave them behind.
+      RunLauncherCleanup('--cleanup --silent');
+  end;
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  Dir, DataDir: String;
+begin
+  Result := True;
+  if CurPageID = wpSelectDir then
+  begin
+    // The launcher's cleanup deletes this folder, which would delete the uninstaller mid-run.
+    Dir := Lowercase(RemoveBackslash(WizardDirValue));
+    DataDir := Lowercase(RemoveBackslash(ExpandConstant('{localappdata}\DreamWeave')));
+    if (Dir = DataDir) or (Pos(DataDir + '\', Dir) = 1) then
+    begin
+      // DRAFT: player-facing wording, pending orchestrator review.
+      MsgBox('Please choose a different folder. The launcher keeps its own data in ' + DataDir + ', and this folder would be erased when the launcher is uninstalled.',
+        mbError, MB_OK);
+      Result := False;
     end;
   end;
 end;

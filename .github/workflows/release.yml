@@ -50,13 +50,17 @@ jobs:
       - name: Assert tag equals assembly and setup version
         shell: pwsh
         run: |
-          $setup = (Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1).FullName
+          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1
+          if (-not $found) { throw 'No setup exe found in setup-out' }
+          $setup = $found.FullName
           ./tools/release/assert-version.ps1 -Tag $env:TAG -ExePath $env:EXE_PATH -SetupPath $setup
 
       - name: Package release assets
         shell: pwsh
         run: |
-          $setup = (Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1).FullName
+          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1
+          if (-not $found) { throw 'No setup exe found in setup-out' }
+          $setup = $found.FullName
           ./tools/release/package-release.ps1 -SetupPath $setup -OutDir release-assets
 
       # Code signing is not done in v1: the launcher ships UNSIGNED. Signing is planned through

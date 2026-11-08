@@ -70,6 +70,13 @@ namespace DreamWeave.Launcher.App
         /// </summary>
         public TimeSpan MutexWait => IsSilent ? SilentWait : IsHandover ? HandoverWait : TimeSpan.Zero;
 
+        /// <summary>
+        /// Exit code when <c>--cleanup</c> ends without having cleaned anything because the player cancelled:
+        /// <see cref="SetupConstants.CleanupCancelledExitCode"/> for the setup's uninstaller (so it can run the
+        /// silent cleanup instead), 0 for a hand-over from Settings, where cancelling just returns to the player.
+        /// </summary>
+        public int CancelExitCode => IsHandover ? 0 : SetupConstants.CleanupCancelledExitCode;
+
         /// <summary>The selected mode.</summary>
         public StartupMode Mode { get; }
 

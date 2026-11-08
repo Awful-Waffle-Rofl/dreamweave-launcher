@@ -63,11 +63,62 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         public void UninstallCleanup_UsesTheSwitchLiterals()
         {
             string iss = Iss();
-            StringAssert.Contains(iss, "Params := '" + SetupConstants.CleanupSwitch + "';");
-            StringAssert.Contains(iss, "Params := Params + ' " + SetupConstants.SilentSwitch + "';");
-            StringAssert.Contains(iss, "UninstallSilent()");
+            StringAssert.Contains(iss, "RunLauncherCleanup('" + SetupConstants.CleanupSwitch + " " + SetupConstants.SilentSwitch + "')");
+            StringAssert.Contains(iss, "RunLauncherCleanup('" + SetupConstants.CleanupSwitch + "')");
             StringAssert.Contains(iss, "usUninstall");
             StringAssert.Contains(iss, "ewWaitUntilTerminated");
+        }
+
+        [TestMethod]
+        public void UninstallCleanup_SilentUninstallRunsTheSilentForm_InteractiveRunsThePlainFormFirst()
+        {
+            // "if UninstallSilent() then <silent run> else if <plain run> = 120 then <silent run>": inverting the test fails this.
+            string iss = Iss();
+            Assert.IsTrue(
+                Regex.IsMatch(iss, @"if UninstallSilent\(\) then\s+RunLauncherCleanup\('--cleanup --silent'\)\s+else if RunLauncherCleanup\('--cleanup'\) = " + SetupConstants.CleanupCancelledExitCode + @" then\s+(//[^\r\n]*\s+)*RunLauncherCleanup\('--cleanup --silent'\);"),
+                "the uninstall step must run --cleanup --silent when silent, else --cleanup and, on the cancelled exit code, --cleanup --silent");
+            Assert.IsFalse(iss.Contains("not UninstallSilent"));
+        }
+
+        [TestMethod]
+        public void CancelExitCode_IsDistinctAndOnlyForTheUninstallersPlainCleanup()
+        {
+            Assert.AreEqual(SetupConstants.CleanupCancelledExitCode, DreamWeave.Launcher.App.StartupArgs.Parse(new[] { "--cleanup" }).CancelExitCode);
+            Assert.AreEqual(0, DreamWeave.Launcher.App.StartupArgs.Parse(new[] { "--cleanup", "--handover" }).CancelExitCode, "Settings hand-over: cancelling just returns");
+            foreach (LauncherError e in Enum.GetValues(typeof(LauncherError)))
+            {
+                Assert.AreNotEqual(SetupConstants.CleanupCancelledExitCode, (int)e, "the cancelled code must not collide with " + e);
+            }
+        }
+
+        [TestMethod]
+        public void DotNetGate_Is48OrNewer_AndBlocksSetup()
+        {
+            string iss = Iss();
+            StringAssert.Contains(iss, "Net48Release = 528040;");
+            StringAssert.Contains(iss, "Result := IsNet48Installed();");
+            StringAssert.Contains(iss, "Result := Release >= Net48Release;");
+        }
+
+        [TestMethod]
+        public void SetupStaysUninstallable()
+        {
+            string iss = Iss();
+            Assert.IsNull(Directive(iss, "CreateUninstallRegKey"), "CreateUninstallRegKey would remove the Settings > Apps entry the launcher reads");
+            string uninstallable = Directive(iss, "Uninstallable");
+            Assert.IsTrue(uninstallable == null || uninstallable == "yes", "Uninstallable must be absent or yes");
+        }
+
+        [TestMethod]
+        public void DirPage_RejectsTheLauncherDataFolder()
+        {
+            string iss = Iss();
+            StringAssert.Contains(iss, "function NextButtonClick(CurPageID: Integer): Boolean;");
+            StringAssert.Contains(iss, "CurPageID = wpSelectDir");
+            StringAssert.Contains(iss, "Lowercase(RemoveBackslash(WizardDirValue))");
+            StringAssert.Contains(iss, @"ExpandConstant('{localappdata}\DreamWeave')");
+            StringAssert.Contains(iss, @"(Dir = DataDir) or (Pos(DataDir + '\', Dir) = 1)");
+            StringAssert.Contains(iss, "Result := False;");
         }
 
         [TestMethod]

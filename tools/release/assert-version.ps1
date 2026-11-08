@@ -37,7 +37,8 @@ if ($ExePath) {
 }
 
 if ($SetupPath) {
-    $setupVersion = (Get-Item -LiteralPath $SetupPath).VersionInfo.ProductVersion
+    # Inno pads the product version with trailing spaces.
+    $setupVersion = ([string](Get-Item -LiteralPath $SetupPath).VersionInfo.ProductVersion).Trim()
     if ($setupVersion -ne $tagVersion) {
         Write-Error "Setup product version '$setupVersion' does not match expected $tagVersion"
         exit 1

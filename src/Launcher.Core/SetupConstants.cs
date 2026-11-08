@@ -21,6 +21,13 @@ namespace DreamWeave.Launcher.Core
         /// <summary>With <see cref="CleanupSwitch"/>: no window, never touches the Asheron's Call client, always exits 0.</summary>
         public const string SilentSwitch = "--silent";
 
+        /// <summary>
+        /// Exit code of a plain <c>--cleanup</c> (no <c>--handover</c>, as the setup's uninstaller runs it) when the
+        /// player cancels at the confirmation. The uninstaller then runs <c>--cleanup --silent</c> instead, because
+        /// the uninstall goes ahead regardless and must not leave saved passwords and data behind.
+        /// </summary>
+        public const int CleanupCancelledExitCode = 120;
+
         /// <summary>Folder name the setup installs into.</summary>
         public const string InstallFolderName = "DreamWeave Launcher";
 
