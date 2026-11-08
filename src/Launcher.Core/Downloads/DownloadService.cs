@@ -184,7 +184,8 @@ namespace DreamWeave.Launcher.Core.Downloads
             catch (Exception ex)
             {
                 bool cancelled = cancellationToken.IsCancellationRequested || (ex is LauncherException le && le.Code == LauncherError.Cancelled);
-                Log(request, sourceIndex, cancelled ? DownloadAttemptOutcome.Cancelled : DownloadAttemptOutcome.Failed, Math.Max(0, PartFiles.LengthOrMissing(request.PartPath)), clock.Elapsed, ex);
+                long onDisk = Math.Max(0, PartFiles.LengthOrMissing(request.PartPath));
+                Log(request, sourceIndex, cancelled ? DownloadAttemptOutcome.Cancelled : DownloadAttemptOutcome.Failed, Math.Max(request.BytesReceived, onDisk), clock.Elapsed, ex);
                 throw;
             }
         }
@@ -241,6 +242,10 @@ namespace DreamWeave.Launcher.Core.Downloads
                 {
                     DiscardPart(request);
                     throw;
+                }
+                finally
+                {
+                    request.BytesReceived = Math.Max(request.BytesReceived, tracker.BytesDone);
                 }
 
                 tracker.Complete();

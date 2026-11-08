@@ -815,8 +815,13 @@ namespace DreamWeave.Launcher.App
                     return UiText.FallbackReasonQuota;
                 case LauncherError.ManifestInvalid:
                     return UiText.FallbackReasonUnusable;
+                case LauncherError.NetworkUnavailable:
+                    return UiText.FallbackReasonNetwork;
+                case LauncherError.SourceHttpError:
+                    return UiText.FallbackReasonUnavailable;
                 default:
-                    return string.IsNullOrWhiteSpace(failure.Detail) ? ErrorMessages.For(failure.Code) : failure.Detail;
+                    // Never the failure's Detail: that is technical text, and launcher.log already records it.
+                    return UiText.FallbackReasonUnknown;
             }
         }
 

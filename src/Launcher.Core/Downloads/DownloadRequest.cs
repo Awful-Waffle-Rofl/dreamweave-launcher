@@ -95,6 +95,13 @@ namespace DreamWeave.Launcher.Core.Downloads
         public string ServedFromHost { get; set; }
 
         /// <summary>
+        /// Bytes the last attempt at this source received before it ended, set by the transport (and by
+        /// <see cref="DownloadService"/> from its progress tracker). Logged for a failed attempt, whose
+        /// part file may already be deleted.
+        /// </summary>
+        public long BytesReceived { get; set; }
+
+        /// <summary>
         /// Distinguishes this source's in-progress files from every other source's (empty for the primary,
         /// <c>.s1</c>, <c>.s2</c> ... for mirrors), so a read of one source that is still running can never
         /// hold the file another source writes.

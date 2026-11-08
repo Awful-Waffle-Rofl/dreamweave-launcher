@@ -2,7 +2,9 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Http;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -76,9 +78,19 @@ namespace DreamWeave.Launcher.Core.Downloads
         private readonly IHttpStreamClient _http;
         private readonly MegaTransportOptions _options;
 
-        /// <summary>Production constructor: mega's real API and a real HTTP client.</summary>
+        /// <summary>Production constructor: mega's real API and a real HTTP client, with default options.</summary>
         public MegaTransport()
-            : this(new MegaApi(), new HttpStreamClient())
+            : this(new MegaTransportOptions())
+        {
+        }
+
+        /// <summary>
+        /// Production wiring with <paramref name="options"/>. The HTTP client's header timeout is
+        /// <see cref="MegaTransportOptions.FirstProgressTimeout"/>, so a storage server that never answers is
+        /// governed by the same first-byte window as one that answers and then sends nothing.
+        /// </summary>
+        public MegaTransport(MegaTransportOptions options)
+            : this(new MegaApi(), CreateHttpClient(options ?? new MegaTransportOptions()), options)
         {
         }
 
@@ -96,6 +108,14 @@ namespace DreamWeave.Launcher.Core.Downloads
 
         /// <inheritdoc />
         public string Name => Transports.Mega;
+
+        /// <summary>The HTTP client this transport fetches ranges with (tests check the production wiring).</summary>
+        internal IHttpStreamClient Http => _http;
+
+        internal static HttpStreamClient CreateHttpClient(MegaTransportOptions options)
+        {
+            return new HttpStreamClient(new HttpClientHandler { AutomaticDecompression = DecompressionMethods.None, AllowAutoRedirect = false }, true, options.FirstProgressTimeout);
+        }
 
         /// <inheritdoc />
         public long GetResumableBytes(DownloadRequest request)
@@ -235,7 +255,9 @@ namespace DreamWeave.Launcher.Core.Downloads
             private long _received;
             private long _lastActivityTicks;
             private long _next = -1;
+            private int _backingOff;
             private Exception _failure;
+            private readonly ConcurrentDictionary<RangeState, byte> _ranges = new ConcurrentDictionary<RangeState, byte>();
 
             public Job(MegaTransport owner, DownloadRequest request, MegaDownloadTicket ticket, MegaLink link, TransferProgress progress, CancellationToken outer)
             {
@@ -258,6 +280,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                 }
                 finally
                 {
+                    _request.BytesReceived = Interlocked.Read(ref _received);
                     _cts.Dispose();
                 }
             }
@@ -294,8 +317,28 @@ namespace DreamWeave.Launcher.Core.Downloads
                             started = _started;
                         }
 
+                        long now = _clock.ElapsedTicks;
+                        if (Volatile.Read(ref _backingOff) > 0)
+                        {
+                            // A connection waiting out a chunk back-off (possibly a server's Retry-After) is not silence.
+                            Interlocked.Exchange(ref _lastActivityTicks, now);
+                        }
+
                         TimeSpan limit = started ? _o.InactivityTimeout : _o.FirstProgressTimeout;
-                        double idleSeconds = (_clock.ElapsedTicks - Interlocked.Read(ref _lastActivityTicks)) / (double)Stopwatch.Frequency;
+                        double idleSeconds = Seconds(now - Interlocked.Read(ref _lastActivityTicks));
+                        if (idleSeconds <= _o.InactivityTimeout.TotalSeconds)
+                        {
+                            // Others are still delivering: a single range that has gone silent is cut and retried
+                            // from its cursor instead of letting it hold the whole download until the global stall.
+                            foreach (RangeState range in _ranges.Keys)
+                            {
+                                if (Seconds(now - Interlocked.Read(ref range.LastTicks)) > _o.InactivityTimeout.TotalSeconds)
+                                {
+                                    range.Stall();
+                                }
+                            }
+                        }
+
                         if (_outer.IsCancellationRequested || idleSeconds > limit.TotalSeconds)
                         {
                             stalled = !_outer.IsCancellationRequested;
@@ -331,6 +374,22 @@ namespace DreamWeave.Launcher.Core.Downloads
                 Exception failure = Volatile.Read(ref _failure);
                 if (failure != null)
                 {
+                    bool everStarted;
+                    lock (_gate)
+                    {
+                        everStarted = _started;
+                    }
+
+                    bool transient;
+                    LauncherException mapped = MegaErrorMapper.Map(failure, out transient);
+                    if (!everStarted && transient)
+                    {
+                        // Nothing ever arrived (for example every range timed out waiting for headers): the
+                        // same as a first-byte stall, so a waiting mirror is used at once. The mapper hands
+                        // back this same object (TransientDownloadException.Final), so the mark reaches it.
+                        mapped.Data[NeverStartedKey] = true;
+                    }
+
                     ExceptionDispatchInfo.Capture(failure).Throw();
                 }
 
@@ -436,14 +495,50 @@ namespace DreamWeave.Launcher.Core.Downloads
                         retryAfter = (ex as TransientDownloadException)?.RetryAfter;
                     }
 
-                    await _o.ChunkRetry.WaitAsync(retriesUsed, retryAfter, _cts.Token).ConfigureAwait(false);
+                    Interlocked.Increment(ref _backingOff);
+                    try
+                    {
+                        await _o.ChunkRetry.WaitAsync(retriesUsed, retryAfter, _cts.Token).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _lastActivityTicks, _clock.ElapsedTicks);
+                        Interlocked.Decrement(ref _backingOff);
+                    }
+
                     retriesUsed++;
                 }
             }
 
             private async Task FetchRangeAsync(MegaCtr ctr, byte[] buffer, Cursor cursor, long end)
             {
-                using (HttpStreamResponse response = await _owner._http.GetAsync(_ticket.Url, cursor.Position, end, null, _cts.Token).ConfigureAwait(false))
+                using (var range = new RangeState(_cts.Token, _clock.ElapsedTicks))
+                {
+                    _ranges[range] = 0;
+                    try
+                    {
+                        await FetchRangeCoreAsync(ctr, buffer, cursor, end, range).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (range.Stalled && !_cts.IsCancellationRequested)
+                    {
+                        throw new TransientDownloadException(new LauncherException(LauncherError.NetworkUnavailable, "A connection to mega.nz stopped sending data.", ex));
+                    }
+                    finally
+                    {
+                        byte ignored;
+                        _ranges.TryRemove(range, out ignored);
+                    }
+                }
+            }
+
+            private static double Seconds(long ticks)
+            {
+                return ticks / (double)Stopwatch.Frequency;
+            }
+
+            private async Task FetchRangeCoreAsync(MegaCtr ctr, byte[] buffer, Cursor cursor, long end, RangeState range)
+            {
+                using (HttpStreamResponse response = await _owner._http.GetAsync(_ticket.Url, cursor.Position, end, null, range.Token).ConfigureAwait(false))
                 {
                     if (response.StatusCode == 206)
                     {
@@ -472,7 +567,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                     }
 
                     // Disposing the response is what unblocks a read that is waiting on a silent connection.
-                    using (_cts.Token.Register(response.Dispose))
+                    using (range.Token.Register(response.Dispose))
                     using (Stream body = await response.OpenBodyAsync().ConfigureAwait(false))
                     {
                         while (cursor.Position <= end)
@@ -481,7 +576,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                             int n;
                             try
                             {
-                                n = await body.ReadAsync(buffer, 0, want, _cts.Token).ConfigureAwait(false);
+                                n = await body.ReadAsync(buffer, 0, want, range.Token).ConfigureAwait(false);
                             }
                             catch (IOException ex)
                             {
@@ -493,7 +588,9 @@ namespace DreamWeave.Launcher.Core.Downloads
                                 return;
                             }
 
-                            Interlocked.Exchange(ref _lastActivityTicks, _clock.ElapsedTicks);
+                            long at = _clock.ElapsedTicks;
+                            Interlocked.Exchange(ref _lastActivityTicks, at);
+                            Interlocked.Exchange(ref range.LastTicks, at);
                             ctr.Transform(buffer, 0, n, cursor.Position);
                             lock (_gate)
                             {
@@ -518,6 +615,44 @@ namespace DreamWeave.Launcher.Core.Downloads
             private sealed class Cursor
             {
                 public long Position;
+            }
+
+            /// <summary>One open range request: its own cancellation (linked to the attempt's) and when it last received a byte.</summary>
+            private sealed class RangeState : IDisposable
+            {
+                private readonly CancellationTokenSource _cts;
+                private int _stalled;
+
+                public RangeState(CancellationToken attempt, long startTicks)
+                {
+                    _cts = CancellationTokenSource.CreateLinkedTokenSource(attempt);
+                    LastTicks = startTicks;
+                }
+
+                public long LastTicks;
+
+                public CancellationToken Token => _cts.Token;
+
+                public bool Stalled => Volatile.Read(ref _stalled) != 0;
+
+                public void Stall()
+                {
+                    if (Interlocked.Exchange(ref _stalled, 1) == 0)
+                    {
+                        try
+                        {
+                            _cts.Cancel();
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                        }
+                    }
+                }
+
+                public void Dispose()
+                {
+                    _cts.Dispose();
+                }
             }
         }
     }

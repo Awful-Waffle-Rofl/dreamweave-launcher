@@ -166,7 +166,7 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual(LauncherError.None, r.Error);
             InstallEvent changed = events.All.Last(e => e.Kind == InstallEventKind.SourceChanged);
             Assert.AreEqual("ac-client", changed.ComponentId);
-            Assert.AreEqual("Trying another source: Original Turbine installer, from the Internet Archive" + Environment.NewLine + "The previous source did not work: mega.nz stopped sending data.", changed.Text);
+            Assert.AreEqual("Trying another source: Original Turbine installer, from the Internet Archive" + Environment.NewLine + "The previous source did not work: it could not be reached or stopped sending data.", changed.Text);
         }
 
         [TestMethod]
@@ -195,7 +195,13 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual("The previous source did not work: the file it sent was damaged or incomplete.", Reason(LauncherError.SizeMismatch));
             Assert.AreEqual("The previous source did not work: its free download limit has been reached for your connection.", Reason(LauncherError.SourceQuotaExceeded));
             Assert.AreEqual("The previous source did not work: this launcher cannot use that source.", Reason(LauncherError.ManifestInvalid));
-            Assert.AreEqual("The previous source did not work: technical detail 123 bytes", Reason(LauncherError.NetworkUnavailable));
+            Assert.AreEqual("The previous source did not work: it could not be reached or stopped sending data.", Reason(LauncherError.NetworkUnavailable));
+            Assert.AreEqual("The previous source did not work: the file is no longer available there.", Reason(LauncherError.SourceHttpError));
+            Assert.AreEqual("The previous source did not work: it failed.", Reason(LauncherError.Unknown));
+            foreach (LauncherError code in Enum.GetValues(typeof(LauncherError)).Cast<LauncherError>())
+            {
+                StringAssert.DoesNotMatch(Reason(code), new System.Text.RegularExpressions.Regex("technical detail"), "the raw Detail reached the UI for " + code);
+            }
         }
 
         [TestMethod]

@@ -8,10 +8,10 @@ namespace DreamWeave.Launcher.Tests.App
     public class UiTextSourceTests
     {
         [TestMethod]
-        public void WelcomeSources_NamesMegaAsTheSource_AndTheArchiveAsTheBackup()
+        public void WelcomeSources_NamesMegaAsTheSource_AndTheArchiveAsTheInstallersBackup()
         {
             Assert.AreEqual(
-                "It downloads the original game installer and the final game data files from community uploads on mega.nz, with the Internet Archive as a backup source. Nothing is downloaded until you choose it on the next screens.",
+                "It downloads the original game installer and the final game data files from community uploads on mega.nz. The installer also has a backup copy on the Internet Archive. Nothing is downloaded until you choose it on the next screens.",
                 UiText.WelcomeSources);
         }
 

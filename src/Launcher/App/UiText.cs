@@ -13,7 +13,7 @@ namespace DreamWeave.Launcher.App
         public const string WelcomeIntro = "DreamWeave Launcher sets up Asheron's Call on this PC and connects you to the DreamWeave server.";
 
         // FIXED W2
-        public const string WelcomeSources = "It downloads the original game installer and the final game data files from community uploads on mega.nz, with the Internet Archive as a backup source. Nothing is downloaded until you choose it on the next screens.";
+        public const string WelcomeSources = "It downloads the original game installer and the final game data files from community uploads on mega.nz. The installer also has a backup copy on the Internet Archive. Nothing is downloaded until you choose it on the next screens.";
 
         // FIXED T1
         public const string TelemetryOptIn = "Send anonymous setup diagnostics (step, result and error code only - no account names, passwords or file paths). Off by default.";
@@ -83,6 +83,8 @@ namespace DreamWeave.Launcher.App
         public const string FallbackReasonDamaged = "the file it sent was damaged or incomplete.";
         public const string FallbackReasonQuota = "its free download limit has been reached for your connection.";
         public const string FallbackReasonUnusable = "this launcher cannot use that source.";
+        public const string FallbackReasonNetwork = "it could not be reached or stopped sending data.";
+        public const string FallbackReasonUnavailable = "the file is no longer available there.";
         public const string FallbackReasonUnknown = "it failed.";
         public const string StatusDone = "Done";
         public const string StatusNeedsRepair = "Needs repair";

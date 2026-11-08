@@ -241,17 +241,26 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 _owner.Completed.Enqueue(From);
             }
 
-            public Task StatusAsync(int status)
+            public CancellationToken Stopping => _owner.Stopping;
+
+            public Task StatusAsync(int status, string retryAfter = null)
             {
                 Handled = true;
-                return Serve.StatusAsync(Context, status);
+                return Serve.StatusAsync(Context, status, retryAfter);
             }
         }
 
         /// <summary>Counts responses that are open at the same time, as the transport sees them (request sent to response disposed).</summary>
         private sealed class CountingClient : DreamWeave.Launcher.Core.Net.IHttpStreamClient
         {
-            private readonly DreamWeave.Launcher.Core.Net.IHttpStreamClient _inner = DownloadFixtures.Client();
+            private readonly DreamWeave.Launcher.Core.Net.IHttpStreamClient _inner;
+
+            public CountingClient(TimeSpan? headerTimeout = null)
+            {
+                _inner = headerTimeout.HasValue
+                    ? new DreamWeave.Launcher.Core.Net.HttpStreamClient(new HttpClientHandler { AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.None }, true, headerTimeout.Value)
+                    : (DreamWeave.Launcher.Core.Net.IHttpStreamClient)DownloadFixtures.Client();
+            }
             private int _open;
             private int _max;
 
@@ -302,8 +311,9 @@ namespace DreamWeave.Launcher.Tests.Downloads
         {
             private readonly TempDir _dir = new TempDir();
 
-            public Rig(MegaFixture fixture, RangeServer storage, MegaTransportOptions options = null, FakeHttpServer mirror = null)
+            public Rig(MegaFixture fixture, RangeServer storage, MegaTransportOptions options = null, FakeHttpServer mirror = null, TimeSpan? headerTimeout = null)
             {
+                Http = new CountingClient(headerTimeout);
                 Fixture = fixture;
                 Api = new FakeApi { Url = storage?.Url ?? new Uri("http://localhost:1/none"), Size = fixture.Plain.Length };
                 Options = options ?? Fast();
@@ -332,7 +342,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
 
             public MegaTransport Transport { get; }
 
-            public CountingClient Http { get; } = new CountingClient();
+            public CountingClient Http { get; }
 
             public DownloadService Service { get; }
 
@@ -612,6 +622,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 Assert.IsTrue(mirror.Requests.Count >= 1, "the mirror was not used");
                 DownloadAttemptRecord[] records = rig.Log.Records.ToArray();
                 Assert.AreEqual(LauncherError.HashMismatch, ((LauncherException)records[0].Error).Code);
+                Assert.AreEqual((long)Size, records[0].Bytes, "the failed mega attempt logged 0 bytes although its part was deleted");
                 Assert.AreEqual(DownloadAttemptOutcome.Succeeded, records[1].Outcome);
             }
         }
@@ -669,6 +680,119 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 Assert.AreEqual("mega.nz", record.Host);
                 Assert.AreEqual("localhost", record.StorageHost);
                 StringAssert.Contains(new FileDownloadLog(Path.Combine(rig.Staging, "x.log")).Format(record), " storage=localhost ");
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
+        public void HeadersThatNeverArrive_WithAMirror_FailOverAfterOneAttempt()
+        {
+            var f = new MegaFixture(Size);
+            using (var storage = new RangeServer(f.Encrypted, async c =>
+            {
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, c.Stopping).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }))
+            using (var mirror = new FakeHttpServer((ctx, i) => Serve.FileAsync(ctx, f.Plain)))
+            using (var rig = new Rig(f, storage, Fast(inactivity: TimeSpan.FromSeconds(10), first: TimeSpan.FromSeconds(20)), mirror, headerTimeout: TimeSpan.FromMilliseconds(200)))
+            {
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                Assert.AreEqual(1, rig.Api.Calls, "a primary that never sent a byte must not be retried while a mirror is waiting");
+                Assert.IsTrue(mirror.Requests.Count >= 1, "the mirror was not used");
+                CollectionAssert.AreEqual(f.Plain, File.ReadAllBytes(rig.Dest));
+            }
+        }
+
+        [TestMethod]
+        public void TheProductionHttpClient_WaitsForHeadersAsLongAsTheFirstByteWindow()
+        {
+            var t = new MegaTransport(new MegaTransportOptions { FirstProgressTimeout = TimeSpan.FromMinutes(7) });
+            Assert.AreEqual(TimeSpan.FromMinutes(7), ((DreamWeave.Launcher.Core.Net.HttpStreamClient)t.Http).HeaderTimeout);
+            Assert.AreEqual(new MegaTransportOptions().FirstProgressTimeout, ((DreamWeave.Launcher.Core.Net.HttpStreamClient)new MegaTransport().Http).HeaderTimeout);
+        }
+
+        private const int SmallChunk = 16 * 1024;
+
+        private static MegaTransportOptions SmallChunks()
+        {
+            MegaTransportOptions o = Fast(inactivity: TimeSpan.FromMilliseconds(300), first: TimeSpan.FromSeconds(10));
+            o.ChunkSize = SmallChunk;
+            return o;
+        }
+
+        private static int RequestsInChunk(RangeServer s, long chunkStart) => RangeStarts(s).Count(x => x >= chunkStart && x < chunkStart + SmallChunk);
+
+        [TestMethod]
+        [Timeout(30000)]
+        public void OneHungRange_AmongHealthyOnes_IsCutAndRetriedFromItsCursor_WithoutRestarting()
+        {
+            var f = new MegaFixture(Size);
+            int hung = 0;
+            using (var storage = new RangeServer(f.Encrypted, c => c.From == 2 * SmallChunk && Interlocked.Exchange(ref hung, 1) == 0 ? c.SendAsync(stallAfter: 4096) : c.SendAsync(pacePerWriteMs: 30)))
+            using (var rig = new Rig(f, storage, SmallChunks()))
+            {
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                CollectionAssert.AreEqual(f.Plain, File.ReadAllBytes(rig.Dest));
+                Assert.AreEqual(1, rig.Api.Calls, "one hung range restarted the whole download");
+                Assert.AreEqual(2, RequestsInChunk(storage, 2 * SmallChunk), "exactly one extra request for the hung chunk");
+                Assert.IsTrue(RangeStarts(storage).Contains(2 * SmallChunk + 4096), "the retry did not continue from the cursor");
+                Assert.AreEqual(Size / SmallChunk + 1, storage.Requests.Count);
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
+        public void OneSlowButLivingRange_WhileOthersProgress_IsNeitherCutNorAStall()
+        {
+            var f = new MegaFixture(Size);
+            using (var storage = new RangeServer(f.Encrypted, c => c.SendAsync(pacePerWriteMs: c.From == 0 ? 150 : 30)))
+            using (var rig = new Rig(f, storage, SmallChunks()))
+            {
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                Assert.AreEqual(1, rig.Api.Calls);
+                Assert.AreEqual(Size / SmallChunk, storage.Requests.Count, "a slow range that is still sending was cut");
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
+        public void AChunkBackOff_IsNotCountedAsInactivity()
+        {
+            var f = new MegaFixture(Size);
+            int refused = 0;
+            using (var storage = new RangeServer(f.Encrypted, c =>
+            {
+                if (c.From == 0 && Interlocked.Exchange(ref refused, 1) == 0)
+                {
+                    return c.StatusAsync(503, "1");
+                }
+
+                return c.SendAsync();
+            }))
+            using (var rig = new Rig(f, storage, Fast(inactivity: TimeSpan.FromMilliseconds(300), first: TimeSpan.FromSeconds(10))))
+            {
+                var waits = new List<TimeSpan>();
+                rig.Options.ChunkRetry = new RetryPolicy
+                {
+                    MaxRetries = 3,
+                    Delay = (d, ct) =>
+                    {
+                        lock (waits)
+                        {
+                            waits.Add(d);
+                        }
+
+                        return Task.Delay(TimeSpan.FromMilliseconds(900), ct);
+                    },
+                };
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                Assert.AreEqual(1, rig.Api.Calls, "the back-off was taken for a stall");
+                CollectionAssert.AreEqual(new[] { TimeSpan.FromSeconds(1) }, waits, "the server's Retry-After was not honoured");
             }
         }
 
