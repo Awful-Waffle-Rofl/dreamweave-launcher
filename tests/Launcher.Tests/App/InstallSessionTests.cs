@@ -59,6 +59,8 @@ namespace DreamWeave.Launcher.Tests.App
                 SaveFolder = f => _saved = f,
                 Installers = new InstallerRunner(_starter),
                 PollInterval = TimeSpan.FromMilliseconds(20),
+                SettleInterval = TimeSpan.FromMilliseconds(5),
+                VerifyRetryDelay = TimeSpan.Zero,
             };
         }
 

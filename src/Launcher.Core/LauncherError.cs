@@ -132,5 +132,8 @@ namespace DreamWeave.Launcher.Core
 
         /// <summary>Uninstall finished but could not remove everything; the result lists what was left behind.</summary>
         UninstallIncomplete = 107,
+
+        /// <summary>Installed game files no longer match after the install finished (another installer was probably still writing them).</summary>
+        GameFilesChanged = 108,
     }
 }

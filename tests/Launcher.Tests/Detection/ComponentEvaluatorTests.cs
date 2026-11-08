@@ -115,6 +115,14 @@ namespace DreamWeave.Launcher.Tests.Detection
                 DetectionData.Overlay("eor-dats", 5000, DetectionData.File("a.dat", DatA), DetectionData.File("b.dat", DatB), DetectionData.File("acclient.exe", ExeOriginal)),
                 DetectionData.Patch("palette-leak-fix", "ACClient.EXE", exeIn, exeOut));
             Assert.AreEqual(ComponentState.Satisfied, Find(Run(Healthy(ExePatched), m), "eor-dats").State);
+
+            // Slash style differs between the file entry and the patch target.
+            var fs = Healthy(ExePatched);
+            fs.SetFile(F("sub\\x.dat"), ExePatched);
+            var nested = DetectionData.Manifest(
+                DetectionData.Overlay("eor-dats", 5000, DetectionData.File("sub/x.dat", ExeOriginal)),
+                DetectionData.Patch("palette-leak-fix", "SUB\\X.dat", exeIn, exeOut));
+            Assert.AreEqual(ComponentState.Satisfied, Find(Run(fs, nested), "eor-dats").State);
         }
 
         [TestMethod]

@@ -46,6 +46,21 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void CopyDetails_ListsOnlyGameRelativeFileStates()
+        {
+            string text = ErrorDetails.Build(
+                LauncherError.GameFilesChanged,
+                "1.0.0",
+                "eor-dats",
+                DateTime.UtcNow,
+                new[] { "client_portal.dat: Mismatch", "sub/x.dat: Missing", @"C:\Users\SomePlayer\x.dat: Mismatch", "/home/p/x.dat: Missing", "client_portal.dat: ran out of coffee", null });
+            StringAssert.Contains(text, "File: client_portal.dat: Mismatch");
+            StringAssert.Contains(text, "File: sub/x.dat: Missing");
+            Assert.IsFalse(text.Contains("SomePlayer"), "an absolute path leaked");
+            Assert.IsFalse(text.Contains("/home"), "a POSIX path leaked");
+            Assert.IsFalse(text.Contains("coffee"), "free text leaked");
+        }
+        [TestMethod]
         public void CopyDetails_NeverCarriesAPathOrAccountName()
         {
             string[] hostile =

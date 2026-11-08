@@ -449,7 +449,7 @@ namespace DreamWeave.Launcher.UI
                     failedLabel.Text = TitleOf(result.ComponentId) + " - " + UiText.StepFailed;
                 }
 
-                errors.ShowError(result.Error, TelemetryStepFor(result.ComponentId));
+                errors.ShowError(result.Error, TelemetryStepFor(result.ComponentId), result.FileDetails);
             }
 
             finished.Click += (s, e) => session.CheckInstallNow();

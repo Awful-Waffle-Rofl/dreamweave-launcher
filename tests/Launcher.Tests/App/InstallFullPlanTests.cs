@@ -13,6 +13,7 @@ using DreamWeave.Launcher.Core.Downloads;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
 using DreamWeave.Launcher.Core.State;
+using DreamWeave.Launcher.Core.Telemetry;
 using DreamWeave.Launcher.Tests.Detection;
 using DreamWeave.Launcher.Tests.Install;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -29,7 +30,7 @@ namespace DreamWeave.Launcher.Tests.App
     {
         private static readonly byte[] InstallerBytes = { 1, 2, 3, 4, 5 };
         private static readonly byte[] Exe = Enumerable.Range(0, 64).Select(i => (byte)(i + 1)).ToArray();
-        private static readonly byte[] StockDat = InstallData.Bytes("stock retail dat");
+        private static readonly byte[] StockDat = InstallData.Bytes("stock retail dat, 40 bytes of it, roughly.");
         private static readonly byte[] EorDat = InstallData.Bytes("end of retail dat, different and longer");
 
         private static byte[] PatchedExe()
@@ -61,20 +62,47 @@ namespace DreamWeave.Launcher.Tests.App
             return InstallData.Manifest(installer, overlay, patch);
         }
 
+        private sealed class Telemetry : ITelemetrySink
+        {
+            public ConcurrentQueue<string> Lines { get; } = new ConcurrentQueue<string>();
+
+            public void Record(string step, TelemetryOutcome outcome, LauncherError error = LauncherError.None, TimeSpan? duration = null)
+            {
+                Lines.Enqueue(step + ":" + outcome + ":" + error);
+            }
+
+            public void RecordComponent(string componentId, TelemetryOutcome outcome, LauncherError error = LauncherError.None, TimeSpan? duration = null)
+            {
+                Lines.Enqueue(componentId + ":" + outcome + ":" + error);
+            }
+
+            public string[] For(string id) => Lines.Where(l => l.StartsWith(id + ":", StringComparison.Ordinal)).ToArray();
+        }
+
         private sealed class Starter : IProcessStarter
         {
             private readonly string _folder;
+            private readonly Action<string> _afterExe;
 
-            public Starter(string folder)
+            public Starter(string folder, Action<string> afterExe)
             {
                 _folder = folder;
+                _afterExe = afterExe;
             }
 
             public IStartedProcess Start(ProcessStartInfo startInfo)
             {
-                // The retail setup: final exe (same bytes as the overlay's) plus the stock dats.
+                // The retail setup: the final exe first, then the stock dats.
                 File.WriteAllBytes(Path.Combine(_folder, "acclient.exe"), Exe);
-                File.WriteAllBytes(Path.Combine(_folder, "client_portal.dat"), StockDat);
+                if (_afterExe != null)
+                {
+                    _afterExe(_folder);
+                }
+                else
+                {
+                    File.WriteAllBytes(Path.Combine(_folder, "client_portal.dat"), StockDat);
+                }
+
                 return new Done();
             }
 
@@ -108,16 +136,14 @@ namespace DreamWeave.Launcher.Tests.App
             }
         }
 
-        private sealed class LateWriterEvents : IProgress<InstallEvent>
+        private sealed class Hooked : IProgress<InstallEvent>
         {
             private readonly ConcurrentQueue<InstallEvent> _events = new ConcurrentQueue<InstallEvent>();
-            private readonly string _folder;
-            private bool _pending;
+            private readonly Action<InstallEvent> _hook;
 
-            public LateWriterEvents(string folder, bool lateWrite)
+            public Hooked(Action<InstallEvent> hook)
             {
-                _folder = folder;
-                _pending = lateWrite;
+                _hook = hook;
             }
 
             public InstallEvent[] All => _events.ToArray();
@@ -125,84 +151,301 @@ namespace DreamWeave.Launcher.Tests.App
             public void Report(InstallEvent value)
             {
                 _events.Enqueue(value);
-                if (_pending && value.Kind == InstallEventKind.StepDone && value.ComponentId == "eor-dats")
-                {
-                    _pending = false;
-                    File.WriteAllBytes(Path.Combine(_folder, "client_portal.dat"), StockDat);
-                }
+                _hook?.Invoke(value);
             }
         }
 
-        [TestMethod]
-        public void FullSelectedPlan_RunsEveryStepInOrder_AndEndsSatisfied()
+        private sealed class Rig : IDisposable
         {
-            RunFullPlan(false);
-        }
+            private readonly TempDir _dir = new TempDir();
 
-        [TestMethod]
-        public void InstallerStillWritingStockDats_AfterTheOverlay_IsRepairedBeforeDone()
-        {
-            // Detection fires as soon as the retail exe lands, while the retail setup is still copying
-            // its stock dats. Those late writes land after the game data step and undo it.
-            RunFullPlan(true);
-        }
-
-        private static void RunFullPlan(bool lateWrite)
-        {
-            using (var dir = new TempDir())
+            public Rig(Action<string> afterExe = null)
             {
-                string ac = Path.Combine(dir.Path, "ac");
-                Directory.CreateDirectory(ac);
-                string zip = InstallData.Zip(Path.Combine(dir.Path, "dats.zip"), InstallData.Entry("client_portal.dat", EorDat), InstallData.Entry("acclient.exe", Exe));
-                LauncherManifest m = Manifest();
-                // The overlay's own size/hash describe the archive.
-                var state = new StateStore(Path.Combine(dir.Path, "state.json"));
+                Ac = Path.Combine(_dir.Path, "ac");
+                Directory.CreateDirectory(Ac);
+                string zip = InstallData.Zip(Path.Combine(_dir.Path, "dats.zip"), InstallData.Entry("client_portal.dat", EorDat), InstallData.Entry("acclient.exe", Exe));
+                Manifest = InstallFullPlanTests.Manifest();
+                var state = new StateStore(Path.Combine(_dir.Path, "state.json"));
                 var fs = new RealAcFileSystem();
-                var evaluator = new ComponentEvaluator(new FileVerifier(fs, state));
-                string saved = null;
-                var deps = new InstallDependencies
+                Evaluator = new ComponentEvaluator(new FileVerifier(fs, state));
+                Fs = fs;
+                Deps = new InstallDependencies
                 {
-                    Paths = new AppPaths(Path.Combine(dir.Path, "root")),
+                    Paths = new AppPaths(Path.Combine(_dir.Path, "root")),
                     Downloads = new Downloader(zip),
                     Disk = new FixedDiskSpace(long.MaxValue / 4),
-                    Locator = new AcInstallLocator(new FakeRegistry(), fs, ac),
-                    Evaluator = evaluator,
-                    ReadSavedFolder = () => saved,
-                    SaveFolder = f => saved = f,
-                    Installers = new InstallerRunner(new Starter(ac)),
+                    Locator = new AcInstallLocator(new FakeRegistry(), fs, Ac),
+                    Evaluator = Evaluator,
+                    Telemetry = Telemetry,
+                    ReadSavedFolder = () => Saved,
+                    SaveFolder = f => Saved = f,
+                    Installers = new InstallerRunner(new Starter(Ac, afterExe)),
                     PollInterval = TimeSpan.FromMilliseconds(20),
+                    SettleInterval = TimeSpan.FromMilliseconds(30),
+                    VerifyRetryDelay = TimeSpan.Zero,
                 };
+            }
 
-                // What the Components screen would select on a fresh machine.
-                var first = evaluator.EvaluateAll(m, null);
-                var selection = new ComponentSelection(m, first);
+            public string Ac { get; }
+
+            public string StatePath => Path.Combine(_dir.Path, "state.json");
+
+            public LauncherManifest Manifest { get; }
+
+            public ComponentEvaluator Evaluator { get; }
+
+            public RealAcFileSystem Fs { get; }
+
+            public InstallDependencies Deps { get; }
+
+            public Telemetry Telemetry { get; } = new Telemetry();
+
+            public string Saved { get; set; }
+
+            public List<ManifestComponent> FullPlan()
+            {
+                // What the Components screen selects on a fresh machine with the palette fix ticked.
+                var selection = new ComponentSelection(Manifest, Evaluator.EvaluateAll(Manifest, null));
                 selection.SetChecked("palette-leak-fix", true);
                 List<ManifestComponent> plan = selection.Selected.Select(r => r.Component).ToList();
                 CollectionAssert.AreEqual(new[] { "ac-client", "eor-dats", "palette-leak-fix" }, plan.Select(c => c.Id).ToArray(), "the selection must contain every step");
+                return plan;
+            }
 
-                var events = new LateWriterEvents(ac, lateWrite);
-                var session = new InstallSession(deps, m, null);
-                InstallRunResult r = session.RunAsync(plan, events, CancellationToken.None).GetAwaiter().GetResult();
+            public InstallRunResult Run(Hooked events, CancellationToken ct = default(CancellationToken))
+            {
+                return new InstallSession(Deps, Manifest, null).RunAsync(FullPlan(), events, ct).GetAwaiter().GetResult();
+            }
 
-                Assert.AreEqual(LauncherError.None, r.Error, r.ComponentId);
-                var started = events.All.Where(e => e.Kind == InstallEventKind.StepStarted).Select(e => e.ComponentId).ToArray();
-                CollectionAssert.AreEqual(new[] { "ac-client", "eor-dats", "palette-leak-fix" }, started);
-                var done = events.All.Where(e => e.Kind == InstallEventKind.StepDone || e.Kind == InstallEventKind.StepSkipped).ToArray();
-                Assert.AreEqual(3, done.Length);
-                Assert.AreEqual(InstallEventKind.StepDone, done.Single(e => e.ComponentId == "eor-dats").Kind, "the game data step must do work, not be skipped");
-
-                CollectionAssert.AreEqual(EorDat, File.ReadAllBytes(Path.Combine(ac, "client_portal.dat")), "stock dat must have been replaced");
-                CollectionAssert.AreEqual(PatchedExe(), File.ReadAllBytes(Path.Combine(ac, "acclient.exe")));
-
-                // The next start: a fresh store over the same state file, as the launcher would open it.
-                var next = new ComponentEvaluator(new FileVerifier(fs, new StateStore(Path.Combine(dir.Path, "state.json"))));
-                var after = next.EvaluateAll(m, ac);
+            public void AssertAllSatisfied()
+            {
+                var next = new ComponentEvaluator(new FileVerifier(Fs, new StateStore(StatePath)));
+                var after = next.EvaluateAll(Manifest, Ac);
                 foreach (ComponentStatus s in after)
                 {
                     Assert.AreEqual(ComponentState.Satisfied, s.State, s.Id + ": " + s.Message);
                 }
 
-                Assert.AreEqual(StartRoute.Launcher, RouteDecider.Decide(m, after));
+                Assert.AreEqual(StartRoute.Launcher, RouteDecider.Decide(Manifest, after));
+            }
+
+            public string Dat => Path.Combine(Ac, "client_portal.dat");
+
+            public void Dispose() => _dir.Dispose();
+        }
+
+        private static string[] Started(Hooked e) => e.All.Where(x => x.Kind == InstallEventKind.StepStarted).Select(x => x.ComponentId).ToArray();
+
+        [TestMethod]
+        public void FullSelectedPlan_RunsEveryStepInOrder_AndEndsSatisfied()
+        {
+            using (var rig = new Rig())
+            {
+                var events = new Hooked(null);
+                InstallRunResult r = rig.Run(events);
+
+                Assert.AreEqual(LauncherError.None, r.Error, r.ComponentId);
+                CollectionAssert.AreEqual(new[] { "ac-client", "eor-dats", "palette-leak-fix" }, Started(events));
+                var done = events.All.Where(e => e.Kind == InstallEventKind.StepDone || e.Kind == InstallEventKind.StepSkipped).ToArray();
+                Assert.AreEqual(3, done.Length);
+                Assert.AreEqual(InstallEventKind.StepDone, done.Single(e => e.ComponentId == "eor-dats").Kind, "the game data step must do work, not be skipped");
+                CollectionAssert.AreEqual(EorDat, File.ReadAllBytes(rig.Dat), "stock dat must have been replaced");
+                CollectionAssert.AreEqual(PatchedExe(), File.ReadAllBytes(Path.Combine(rig.Ac, "acclient.exe")));
+                rig.AssertAllSatisfied();
+                Assert.AreEqual(0, Directory.GetFiles(Path.Combine(rig.Deps.Paths.StagingDir, "eor-dats"), "*.zip").Length, "the staged archive is removed once the plan has verified");
+            }
+        }
+
+        [TestMethod]
+        public void LateStockWrite_AfterTheOverlay_IsRepairedOnceAndRecorded()
+        {
+            using (var rig = new Rig())
+            {
+                bool pending = true;
+                var events = new Hooked(e =>
+                {
+                    if (pending && e.Kind == InstallEventKind.StepDone && e.ComponentId == "eor-dats")
+                    {
+                        pending = false;
+                        File.WriteAllBytes(rig.Dat, StockDat);
+                    }
+                });
+                InstallRunResult r = rig.Run(events);
+
+                Assert.AreEqual(LauncherError.None, r.Error);
+                CollectionAssert.AreEqual(EorDat, File.ReadAllBytes(rig.Dat));
+                rig.AssertAllSatisfied();
+                Assert.AreEqual(2, Started(events).Count(id => id == "eor-dats"), "a re-run reports StepStarted");
+                CollectionAssert.AreEqual(
+                    new[] { "eor-dats:Started:None", "eor-dats:Succeeded:None", "eor-dats:Started:None", "eor-dats:Succeeded:None" },
+                    rig.Telemetry.For("eor-dats"),
+                    "a re-run records Started and then its outcome");
+                Assert.IsTrue(events.All.Any(x => x.Kind == InstallEventKind.StepStatus && x.Text == UiText.VerifyingGameFiles), "the final check has its own text");
+                Assert.IsTrue(events.All.Any(x => x.Kind == InstallEventKind.StepProgress && x.ComponentId == "eor-dats"), "hashing during the final check reports progress");
+            }
+        }
+
+        [TestMethod]
+        public void PersistentLateWriter_FailsAsGameFilesChanged_WithTheFilesListed()
+        {
+            using (var rig = new Rig())
+            {
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepDone && e.ComponentId == "eor-dats")
+                    {
+                        File.WriteAllBytes(rig.Dat, StockDat);
+                    }
+                });
+                InstallRunResult r = rig.Run(events);
+
+                Assert.AreEqual(LauncherError.GameFilesChanged, r.Error);
+                Assert.AreEqual("eor-dats", r.ComponentId);
+                CollectionAssert.Contains(r.FileDetails.ToList(), "client_portal.dat: Mismatch");
+                Assert.IsTrue(rig.Telemetry.For("eor-dats").Last().EndsWith(":Failed:GameFilesChanged", StringComparison.Ordinal));
+                Assert.IsTrue(File.Exists(Directory.GetFiles(Path.Combine(rig.Deps.Paths.StagingDir, "eor-dats"), "*.zip").FirstOrDefault() ?? string.Empty), "the archive is kept for the retry");
+
+                string copy = ErrorDetails.Build(r.Error, "1.0.0", "eor-dats", DateTime.UtcNow, r.FileDetails);
+                StringAssert.Contains(copy, "File: client_portal.dat: Mismatch");
+                StringAssert.Contains(copy, "GameFilesChanged (108)");
+            }
+        }
+
+        [TestMethod]
+        public void UnreadableFile_AtTheFinalCheck_IsRetriedOnceThenFailsAsGameFilesChanged()
+        {
+            using (var rig = new Rig())
+            {
+                FileStream hold = null;
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepDone && e.ComponentId == "palette-leak-fix" && hold == null)
+                    {
+                        hold = new FileStream(rig.Dat, FileMode.Open, FileAccess.Read, FileShare.None);
+                    }
+                });
+                try
+                {
+                    InstallRunResult r = rig.Run(events);
+                    Assert.AreEqual(LauncherError.GameFilesChanged, r.Error);
+                    Assert.AreEqual("eor-dats", r.ComponentId);
+                    Assert.IsTrue(r.FileDetails.Any(d => d.StartsWith("client_portal.dat: ", StringComparison.Ordinal)));
+                }
+                finally
+                {
+                    hold?.Dispose();
+                }
+            }
+        }
+
+        [TestMethod]
+        public void CancelDuringTheFinalCheck_ReturnsCancelled_AndRecordsIt()
+        {
+            using (var rig = new Rig())
+            using (var cts = new CancellationTokenSource())
+            {
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepDone && e.ComponentId == "palette-leak-fix")
+                    {
+                        cts.Cancel();
+                    }
+                });
+                InstallRunResult r = rig.Run(events, cts.Token);
+
+                Assert.AreEqual(LauncherError.Cancelled, r.Error);
+                Assert.IsTrue(rig.Telemetry.Lines.Contains("eor-dats:Cancelled:Cancelled"), string.Join(",", rig.Telemetry.Lines));
+            }
+        }
+
+        [TestMethod]
+        public void OverlayWaits_UntilTheInstallersChunkedDatWritesStop()
+        {
+            // The retail setup keeps copying client_portal.dat (chunk by chunk, file held open) for a
+            // while after acclient.exe has appeared; the overlay must not start until that stops.
+            long writerDone = 0;
+            using (var rig = new Rig(folder =>
+            {
+                var fs = new FileStream(Path.Combine(folder, "client_portal.dat"), FileMode.Create, FileAccess.Write, FileShare.Read);
+                fs.Write(StockDat, 0, 8);
+                fs.Flush(true);
+                Task.Run(() =>
+                {
+                    for (int at = 8; at < StockDat.Length; at += 8)
+                    {
+                        Thread.Sleep(80);
+                        fs.Write(StockDat, at, Math.Min(8, StockDat.Length - at));
+                        fs.Flush(true);
+                    }
+
+                    fs.Dispose();
+                    Interlocked.Exchange(ref writerDone, 1);
+                });
+            }))
+            {
+                long doneAtOverlayStart = -1;
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats")
+                    {
+                        doneAtOverlayStart = Interlocked.Read(ref writerDone);
+                    }
+                });
+                InstallRunResult r = rig.Run(events);
+
+                Assert.AreEqual(LauncherError.None, r.Error, r.ComponentId);
+                Assert.AreEqual(1L, doneAtOverlayStart, "the overlay started while the installer was still writing");
+                Assert.IsTrue(events.All.Any(x => x.Kind == InstallEventKind.StepStatus && x.Text == UiText.WaitingForInstallerFiles));
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void SettleWait_TimesOut_AndCarriesOn()
+        {
+            // A watched file whose stamp keeps changing never settles; after the timeout the run goes on.
+            bool stop = false;
+            using (var rig = new Rig(folder =>
+            {
+                File.WriteAllBytes(Path.Combine(folder, "client_portal.dat"), StockDat);
+                Task.Run(() =>
+                {
+                    string exe = Path.Combine(folder, "acclient.exe");
+                    for (int i = 1; !Volatile.Read(ref stop); i++)
+                    {
+                        try
+                        {
+                            File.SetLastWriteTimeUtc(exe, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i));
+                        }
+                        catch (IOException)
+                        {
+                        }
+
+                        Thread.Sleep(10);
+                    }
+                });
+            }))
+            {
+                rig.Deps.SettleTimeout = TimeSpan.FromMilliseconds(400);
+                Stopwatch clock = Stopwatch.StartNew();
+                long overlayStartedAtMs = -1;
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats")
+                    {
+                        overlayStartedAtMs = clock.ElapsedMilliseconds;
+                    }
+                });
+                try
+                {
+                    InstallRunResult r = rig.Run(events);
+                    Assert.AreEqual(LauncherError.None, r.Error, r.ComponentId);
+                    Assert.IsTrue(overlayStartedAtMs >= 350, "carried on before the timeout: " + overlayStartedAtMs + " ms");
+                }
+                finally
+                {
+                    Volatile.Write(ref stop, true);
+                }
             }
         }
     }
