@@ -47,18 +47,15 @@ if (-not $iscc) {
     exit 1
 }
 
-# ISCC.exe carries no file version resource (reads 0.0.0.0); its startup banner states the version:
-# "Inno Setup 6.x.y Command-Line Compiler". Run with no arguments it prints the banner and usage.
+# ISCC.exe carries no file version resource (reads 0.0.0.0) and its no-argument banner names only the
+# major ("Inno Setup 6 Command-Line Compiler"). That is enough to assert major 6; the exact version is
+# logged from the compile output below ("Compiler engine version: Inno Setup 6.x.y").
 $banner = (& $iscc 2>&1 | Out-String)
-$innoVersion = $null
-if ($banner -match 'Inno Setup\s+(\d+\.\d+(\.\d+)*)') { $innoVersion = $Matches[1] }
-if (-not $innoVersion) {
-    Write-Error "Could not read the Inno Setup version from the ISCC banner: $banner"
-    exit 1
-}
-Write-Host "Inno Setup compiler: $iscc (version $innoVersion)"
-if ($innoVersion -notmatch '^6\.') {
-    Write-Error "Inno Setup major version 6 is required, found '$innoVersion'"
+$innoMajor = $null
+if ($banner -match 'Inno Setup\s+(\d+)') { $innoMajor = $Matches[1] }
+Write-Host "Inno Setup compiler: $iscc (major version $innoMajor)"
+if ($innoMajor -ne '6') {
+    Write-Error "Inno Setup major version 6 is required, found '$innoMajor'. Banner: $banner"
     exit 1
 }
 
@@ -67,8 +64,11 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $outAbs = (Resolve-Path -LiteralPath $OutDir).Path
 $scriptAbs = (Resolve-Path -LiteralPath $ScriptPath).Path
 
-& $iscc "/Qp" "/DAppVersion=$version" "/DExeDir=$exeDir" "/O$outAbs" $scriptAbs
+$compileLog = New-Object System.Collections.Generic.List[string]
+& $iscc "/DAppVersion=$version" "/DExeDir=$exeDir" "/O$outAbs" $scriptAbs 2>&1 | ForEach-Object { $compileLog.Add([string]$_); Write-Host $_ }
 if ($LASTEXITCODE -ne 0) { Write-Error "ISCC failed with exit code $LASTEXITCODE"; exit 1 }
+$engine = $compileLog | Where-Object { $_ -match 'Inno Setup\s+\d+\.\d+' } | Select-Object -First 1
+Write-Host "Inno Setup exact version line: $engine"
 
 $setup = Join-Path $outAbs "DreamWeaveLauncher-Setup-$version.exe"
 if (-not (Test-Path -LiteralPath $setup)) { Write-Error "Expected output not found: $setup"; exit 1 }
