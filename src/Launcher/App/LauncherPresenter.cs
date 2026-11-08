@@ -164,6 +164,7 @@ namespace DreamWeave.Launcher.App
     {
         private readonly ICredentialStore _credentials;
         private readonly IGameStarter _starter;
+        private readonly IDecalGameStarter _decalStarter;
         private readonly ITelemetrySink _telemetry;
         private readonly Func<LauncherManifest> _manifest;
         private readonly Func<string> _acFolder;
@@ -183,15 +184,28 @@ namespace DreamWeave.Launcher.App
         /// <summary>Pause between two client starts in Play all, so the clients do not race on startup.</summary>
         public static readonly TimeSpan LaunchGap = TimeSpan.FromSeconds(3);
 
-        public LauncherPresenter(ICredentialStore credentials, IGameStarter starter, ITelemetrySink telemetry, Func<LauncherManifest> manifest, Func<string> acFolder, ISlotAccountStore slots = null)
+        public LauncherPresenter(ICredentialStore credentials, IGameStarter starter, ITelemetrySink telemetry, Func<LauncherManifest> manifest, Func<string> acFolder, ISlotAccountStore slots = null, IDecalGameStarter decalStarter = null)
         {
             _slots = slots;
             _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
             _starter = starter ?? throw new ArgumentNullException(nameof(starter));
+            _decalStarter = decalStarter;
             _telemetry = telemetry ?? NullTelemetrySink.Instance;
             _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
             _acFolder = acFolder ?? throw new ArgumentNullException(nameof(acFolder));
         }
+
+        /// <summary>
+        /// True when the player's Decal was detected and the helper is installed: the "Launch with Decal"
+        /// box is shown only then.
+        /// </summary>
+        public bool DecalAvailable => _decalStarter != null && _decalStarter.Available;
+
+        /// <summary>
+        /// Whether the next start loads the player's Decal. Set from (and persisted to) the launcher state
+        /// by the window; ignored unless <see cref="DecalAvailable"/>.
+        /// </summary>
+        public bool LaunchWithDecal { get; set; }
 
         /// <summary>
         /// The account whose SAVED password is currently in the password box, or null when the box
@@ -377,6 +391,11 @@ namespace DreamWeave.Launcher.App
                 return new PlayResult(LauncherError.InvalidCredentials, rule, false);
             }
 
+            if (DecalAvailable && LaunchWithDecal)
+            {
+                return await StartDecalCoreAsync(user, password, remember);
+            }
+
             _starting = true;
             Stopwatch clock = Stopwatch.StartNew();
             _telemetry.Record(TelemetrySteps.Launch, TelemetryOutcome.Started);
@@ -429,6 +448,53 @@ namespace DreamWeave.Launcher.App
             catch (LauncherException ex)
             {
                 _telemetry.Record(TelemetrySteps.Launch, TelemetryOutcome.Failed, ex.Code, clock.Elapsed);
+                return new PlayResult(ex.Code, ErrorMessages.For(ex.Code), false);
+            }
+            finally
+            {
+                _starting = false;
+            }
+        }
+
+        /// <summary>
+        /// Starts the client with the player's Decal through the helper. Never releases the single-instance
+        /// lock: once Decal has loaded, Inject.dll owns that check. A launch where Decal could not load
+        /// still counts as started (the client runs without Decal) and shows a notice on the row.
+        /// </summary>
+        private async Task<PlayResult> StartDecalCoreAsync(string user, string password, bool remember)
+        {
+            _starting = true;
+            Stopwatch clock = Stopwatch.StartNew();
+            _telemetry.Record(TelemetrySteps.LaunchDecal, TelemetryOutcome.Started);
+            try
+            {
+                LauncherManifest m = _manifest();
+                string folder = _acFolder();
+                bool injectionFailed = false;
+                bool passwordNotSaved = await Task.Run(() =>
+                {
+                    string args = LaunchArgsBuilder.Build(m.Launch?.ArgTemplate ?? LaunchInfo.DefaultArgTemplate, user, password, m.Server.Host, m.Server.Port, m.Launch?.ExtraArgs);
+                    if (string.IsNullOrWhiteSpace(folder))
+                    {
+                        throw new LauncherException(LauncherError.ClientNotFound, "No game folder.");
+                    }
+
+                    DecalStartResult started = _decalStarter.Start(folder, args);
+                    using (StartedClient client = started.Client)
+                    {
+                        bool saved = TryRemember(user, password, remember);
+                        injectionFailed = started.InjectionFailed;
+                        return !saved;
+                    }
+                }).ConfigureAwait(false);
+
+                _telemetry.Record(TelemetrySteps.LaunchDecal, TelemetryOutcome.Succeeded, injectionFailed ? LauncherError.DecalInjectFailed : LauncherError.None, clock.Elapsed);
+                string notice = injectionFailed ? UiText.DecalNotLoaded : null;
+                return new PlayResult(LauncherError.None, UiText.GameStarted, passwordNotSaved, notice);
+            }
+            catch (LauncherException ex)
+            {
+                _telemetry.Record(TelemetrySteps.LaunchDecal, TelemetryOutcome.Failed, ex.Code, clock.Elapsed);
                 return new PlayResult(ex.Code, ErrorMessages.For(ex.Code), false);
             }
             finally

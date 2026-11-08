@@ -16,7 +16,7 @@ Roles are to be confirmed in the SignPath application. Planned: the repository o
 
 ## What is signed
 
-`DreamWeaveLauncher.exe` and `Launcher.Core.dll` produced by the release workflow. Third-party DLLs (`Newtonsoft.Json.dll`) are never signed by us, and the launcher does not sign or modify any other file.
+`DreamWeaveLauncher.exe`, `Launcher.Core.dll` and `DreamWeaveDecalLaunch.exe` (the isolated x86 Decal launch helper) produced by the release workflow. Third-party DLLs (`Newtonsoft.Json.dll`) are never signed by us, and the launcher does not sign or modify any other file.
 
 ## Separate from manifest signing
 

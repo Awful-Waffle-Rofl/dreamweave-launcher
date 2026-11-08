@@ -143,16 +143,51 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowLauncher()
         {
-            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(line => new FileDownloadLog(_services.Paths.LogFile).Note("launch", line)), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State))
+            IDecalGameStarter decalStarter = BuildDecalStarter();
+            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(line => new FileDownloadLog(_services.Paths.LogFile).Note("launch", line)), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State), decalStarter)
             {
                 Update = _gate,
+                LaunchWithDecal = _services.State.Read(s => s.LaunchWithDecal),
             };
             _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice);
+            _launcherScreen.DecalChanged += (s, e) =>
+            {
+                bool on = _presenter.LaunchWithDecal;
+                _services.UpdateStateAsync(st => st.LaunchWithDecal = on).ContinueWith(
+                    t => new FileDownloadLog(_services.Paths.LogFile).Note("decal", "could not save the Launch with Decal choice type=" + (t.Exception?.GetBaseException().GetType().Name ?? "unknown")),
+                    System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted);
+            };
             _window.FormClosing -= OnLauncherClosing;
             _window.FormClosing += OnLauncherClosing;
             _launcherScreen.UpdateClicked += (s, e) => ApplyUpdate();
             _launcherScreen.SettingsClicked += (s, e) => ShowSettings();
             _window.ShowScreen(_launcherScreen);
+        }
+
+        /// <summary>
+        /// Builds the Decal start seam when the player's Decal is installed and the helper is present
+        /// beside the launcher, or null (the "Launch with Decal" option is then hidden). Reading Decal's
+        /// registry key and checking its Inject.dll is read-only; nothing about Decal is downloaded,
+        /// installed or changed.
+        /// </summary>
+        private IDecalGameStarter BuildDecalStarter()
+        {
+            try
+            {
+                DecalLocation decal = new DecalLocator(new RegistryReader(), _services.AcFileSystem).Locate();
+                if (decal == null)
+                {
+                    return null;
+                }
+
+                string helper = Path.Combine(Path.GetDirectoryName(_services.RunningExePath) ?? AppContext.BaseDirectory, "DreamWeaveDecalLaunch.exe");
+                return new DecalGameStarter(helper, decal.InjectDllPath, line => new FileDownloadLog(_services.Paths.LogFile).Note("decal", line));
+            }
+            catch (Exception)
+            {
+                // Detection is best-effort: any failure simply hides the Decal option.
+                return null;
+            }
         }
 
         // Closing during Play all drops the rows not yet started. A client that is mid-start is never

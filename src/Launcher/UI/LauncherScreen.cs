@@ -177,9 +177,14 @@ namespace DreamWeave.Launcher.UI
     /// <summary>The log-in-and-play screen. All decisions are the <see cref="LauncherPresenter"/>'s.</summary>
     internal sealed class LauncherScreen : Page
     {
+        /// <summary>The Decal download page (https only), shown as a discovery link when Decal was not detected.</summary>
+        internal const string DecalDownloadUrl = "https://www.decaldev.com/";
+
         private readonly LauncherPresenter _presenter;
         private readonly SlotRow[] _rows = new SlotRow[LauncherPresenter.SlotCount];
         private readonly ThemedCheckBox _remember;
+        private readonly ThemedCheckBox _decal;
+        private readonly LinkLabel _decalLink;
         private readonly TintedBox _info;
         private readonly WrapLabel _status;
         private readonly FlatButton _playAll;
@@ -195,6 +200,15 @@ namespace DreamWeave.Launcher.UI
 
         /// <summary>The Remember passwords box (read by layout tests).</summary>
         internal ThemedCheckBox RememberBox => _remember;
+
+        /// <summary>The "Launch with Decal" box, or null when Decal was not detected (read by tests).</summary>
+        internal ThemedCheckBox DecalBox => _decal;
+
+        /// <summary>The "Get Decal" discovery link, or null when Decal was detected (read by tests).</summary>
+        internal LinkLabel DecalLink => _decalLink;
+
+        /// <summary>Raised when the player toggles "Launch with Decal"; the handler persists the choice.</summary>
+        public event EventHandler DecalChanged;
 
         /// <summary>True once the saved row names have been filled in.</summary>
         internal bool Loaded => !_loading;
@@ -240,6 +254,23 @@ namespace DreamWeave.Launcher.UI
                 row.PlayClicked += (s, e) => OnPlaySlot(slot);
                 _rows[i] = row;
                 Add(row);
+            }
+
+            if (_presenter.DecalAvailable)
+            {
+                _decal = new ThemedCheckBox { Text = UiText.LaunchWithDecal, Checked = _presenter.LaunchWithDecal };
+                _decal.CheckedChanged += (s, e) =>
+                {
+                    _presenter.LaunchWithDecal = _decal.Checked;
+                    DecalChanged?.Invoke(this, EventArgs.Empty);
+                };
+                Add(_decal);
+            }
+            else
+            {
+                // Decal was not detected: the box is hidden and a link points to where it can be had.
+                _decalLink = UiKit.Link(UiText.DecalGetItLink, () => WizardController.OpenUrl(DecalDownloadUrl));
+                Add(_decalLink);
             }
 
             _remember = new ThemedCheckBox { Text = UiText.RememberPasswords };

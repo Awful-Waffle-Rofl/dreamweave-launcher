@@ -52,6 +52,41 @@ just started is ever opened.
 - `BuildRedacted` returns the same string with the password masked; use it for any log line. The
   launcher never logs the real command line and never puts the password in an error message.
 
+## Launch with Decal (optional)
+
+Players who already have [Decal](https://www.decaldev.com/) installed can tick "Launch with Decal" to
+start the client with Decal and its plugins loaded, the same way ThwargLauncher, Mag-ACClientLauncher
+and RynthCore do. The option appears only when Decal is detected on the PC, and is off by default. When Decal is not
+detected, a "Get Decal" link to its download page is shown in its place.
+Decal is the player's own software: the launcher never bundles, downloads, installs, modifies or
+configures it. This is a narrow owner exemption to the project's no-injection rule, for this one
+purpose.
+
+- **Detection (`DecalLocator`).** Read-only. It reads the Decal agent folder from the registry value
+  `AgentPath` under `HKLM\SOFTWARE\Decal\Agent` (the 32-bit view, so `WOW6432Node` on 64-bit Windows),
+  appends `Inject.dll`, and shows the option only when that file exists. Nothing is written.
+- **The helper (`DreamWeaveDecalLaunch.exe`).** An isolated x86 executable installed beside the
+  launcher. The main launcher imports no injection API (`VirtualAllocEx`, `WriteProcessMemory`,
+  `CreateRemoteThread`, and so on); those live only in the helper, and a test asserts the main
+  assemblies declare none of them. The helper takes the game folder and the `Inject.dll` path as its
+  two command-line arguments, and reads the acclient argument string (which contains the password)
+  **on stdin, never on its command line**. It prints the started process id on stdout. It validates
+  its inputs before starting anything: the game folder must contain `acclient.exe`, the `Inject.dll`
+  argument must be an existing absolute path named `Inject.dll`. Links are checked like this: the game
+  folder itself may be a link (a moved install), but `acclient.exe` may not be one, and the `Inject.dll`
+  path and every folder above it, below the drive root, may not be a link. The helper starts nothing but
+  `<gameFolder>\acclient.exe`.
+- **Sequence.** The helper creates acclient suspended, loads the player's `Inject.dll` into it and
+  calls that library's documented `DecalStartup` entry point, then resumes the client. If any
+  injection step fails it still resumes the client (fail-open), so the player gets a plain client
+  rather than a hung one, and the launcher shows a notice that the game started without Decal.
+- **Decal owns the single-instance check.** A Decal launch does **not** go through
+  `ClientLockReleaser`: once `DecalStartup` has run, `Inject.dll` itself handles the single-instance
+  check. The process-by-id lookup used to hand the started client back to the launcher lives only in
+  the Decal start seam and is never reachable from `ClientLockReleaser` or the client-handle API.
+- **The password** reaches the client exactly as on the normal path (the same `LaunchArgsBuilder`
+  output), but is passed to the helper on stdin so it never appears on the helper's command line.
+
 ## Printable ASCII only (account name and password)
 
 The account name may use characters 0x21-0x7E and the password 0x20-0x7E (letters, digits, standard

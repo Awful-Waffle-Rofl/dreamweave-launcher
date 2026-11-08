@@ -43,6 +43,14 @@ namespace DreamWeave.Launcher.Core.State
         public List<string> SlotAccounts { get; set; } = new List<string>();
 
         /// <summary>
+        /// Whether the player chose "Launch with Decal". Optional: a state file written before this
+        /// option has no such field and loads as false (Decal off). Only has effect when Decal is
+        /// detected on this PC.
+        /// </summary>
+        [JsonProperty("launchWithDecal")]
+        public bool LaunchWithDecal { get; set; }
+
+        /// <summary>
         /// Cache of file hashes keyed by full path (case-insensitive): a file whose size and
         /// last-write time still match its entry is not re-hashed.
         /// </summary>
