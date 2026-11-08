@@ -93,6 +93,9 @@ namespace DreamWeave.Launcher.Core
         /// <summary>The Decal launch helper could not be run, gave no usable answer, or did not finish in time; no client was started by the launcher.</summary>
         DecalHelperFailed = 77,
 
+        /// <summary>The Decal launch helper did not finish in time. The client may still open late, so the player is told to check before trying again.</summary>
+        DecalHelperTimeout = 78,
+
         /// <summary>The operation was cancelled by the player.</summary>
         Cancelled = 90,
 

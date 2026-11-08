@@ -266,9 +266,10 @@ namespace DreamWeave.Launcher.UI
                 };
                 Add(_decal);
             }
-            else
+            else if (!_presenter.DecalInstalled)
             {
                 // Decal was not detected: the box is hidden and a link points to where it can be had.
+                // (Decal installed but the helper missing shows neither: the player already has Decal.)
                 _decalLink = UiKit.Link(UiText.DecalGetItLink, () => WizardController.OpenUrl(DecalDownloadUrl));
                 Add(_decalLink);
             }

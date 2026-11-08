@@ -202,6 +202,13 @@ namespace DreamWeave.Launcher.App
         public bool DecalAvailable => _decalStarter != null && _decalStarter.Available;
 
         /// <summary>
+        /// True when Decal itself was detected, even if the helper is missing beside the launcher (a broken
+        /// install). The app builds a starter only when Decal is installed, so a non-null starter means "installed".
+        /// The "Get Decal" link is shown only when this is false.
+        /// </summary>
+        public bool DecalInstalled => _decalStarter != null;
+
+        /// <summary>
         /// Whether the next start loads the player's Decal. Set from (and persisted to) the launcher state
         /// by the window; ignored unless <see cref="DecalAvailable"/>.
         /// </summary>

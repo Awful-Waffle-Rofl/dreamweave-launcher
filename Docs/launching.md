@@ -71,10 +71,12 @@ purpose.
   assemblies declare none of them. The helper takes the game folder and the `Inject.dll` path as its
   two command-line arguments, and reads the acclient argument string (which contains the password)
   **on stdin, never on its command line**. It prints the started process id on stdout. It validates
-  its inputs before starting anything: the game folder must contain `acclient.exe`, the `Inject.dll`
-  argument must be an existing absolute path named `Inject.dll`. Links are checked like this: the game
-  folder itself may be a link (a moved install), but `acclient.exe` may not be one, and the `Inject.dll`
-  path and every folder above it, below the drive root, may not be a link. The helper starts nothing but
+  its inputs before starting anything: the game folder must contain `acclient.exe`, and the `Inject.dll`
+  argument must be an existing absolute path that equals `<AgentPath>\Inject.dll`, where `AgentPath` is
+  read from Decal's registry key (so an `Inject.dll` in any other directory is rejected). The path may
+  not contain a `..` segment. Links are checked like this: the game folder itself may be a link (a moved
+  install), but `acclient.exe` may not be one, and `Inject.dll` and every folder above it, below the
+  drive root, may not be a link. The helper starts nothing but
   `<gameFolder>\acclient.exe`.
 - **Sequence.** The helper creates acclient suspended, loads the player's `Inject.dll` into it and
   calls that library's documented `DecalStartup` entry point, then resumes the client. If any

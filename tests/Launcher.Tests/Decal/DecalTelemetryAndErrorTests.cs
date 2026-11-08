@@ -30,6 +30,17 @@ namespace DreamWeave.Launcher.Tests.Decal
         }
 
         [TestMethod]
+        public void HelperTimeoutMessage_IsDedicated_AndDoesNotSendThePlayerToVerifyFiles()
+        {
+            Assert.AreEqual(78, (int)LauncherError.DecalHelperTimeout);
+            Assert.IsTrue(ErrorMessages.Has(LauncherError.DecalHelperTimeout));
+            string text = ErrorMessages.For(LauncherError.DecalHelperTimeout);
+
+            Assert.AreEqual("Decal is taking too long to start the game. Check whether Asheron's Call opened before trying again.", text);
+            Assert.IsFalse(text.Contains("Verify files"), text);
+        }
+
+        [TestMethod]
         public void HelperFailedMessage_DoesNotClaimTheGameStarted()
         {
             string text = ErrorMessages.For(LauncherError.DecalHelperFailed);

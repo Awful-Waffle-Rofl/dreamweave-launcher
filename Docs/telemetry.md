@@ -34,7 +34,8 @@ For the `launch-decal` step the error is one of the ordinary launch codes, or on
 (the step succeeded and the game started, but Decal could not be loaded into it, so it ran without Decal), `76`
 (Decal's `Inject.dll` was not found or is not the one Decal registered; no game was started) and `77` (the Decal
 helper could not be run, gave no usable answer or did not report a known failure; no game was started by the
-launcher). A code `77` never means the game started.
+launcher). A code `77` never means the game started. Code `78` means the helper did not finish in time: no
+failure was reported, and the game may still have opened late.
 
 **Never sent:** account name, password, character names, the game folder or any file path, file names, IP
 address (the server does not store it), computer name, user name, hardware details, or anything typed by the player.

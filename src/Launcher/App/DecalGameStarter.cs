@@ -43,7 +43,7 @@ namespace DreamWeave.Launcher.App
         /// stdin, never on its command line.
         /// </summary>
         /// <exception cref="LauncherException">DecalNotFound, ClientNotFound, ReparsePointInPath, ClientRequiresElevation, AccessDenied,
-        /// LaunchFailed (including a helper that did not finish in time) or DecalHelperFailed. A client that started without Decal is
+        /// LaunchFailed, DecalHelperTimeout (the helper did not finish in time) or DecalHelperFailed. A client that started without Decal is
         /// not an exception: it is reported through <see cref="DecalStartResult.InjectionFailed"/>.</exception>
         DecalStartResult Start(string acFolder, string args);
     }
@@ -166,7 +166,7 @@ namespace DreamWeave.Launcher.App
         private HelperOutput Timeout()
         {
             Note("decal helper did not finish within " + _backstopMs + " ms");
-            throw new LauncherException(LauncherError.LaunchFailed, "The Decal helper did not finish in time.");
+            throw new LauncherException(LauncherError.DecalHelperTimeout, "The Decal helper did not finish in time.");
         }
 
         /// <summary>
