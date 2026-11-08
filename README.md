@@ -53,6 +53,10 @@ No Asheron's Call logos or artwork are used in this repository.
 - `src/Launcher` - the WinForms executable (`DreamWeaveLauncher.exe`). It ships with
   its dependency DLLs (`Launcher.Core.dll`, `Newtonsoft.Json.dll`) as ordinary files in the same folder; nothing is packed into the exe.
   `installer/shipped-files.txt` is the one list of shipped files.
+- `src/DecalLaunch` - an isolated x86 helper (`DreamWeaveDecalLaunch.exe`) that starts
+  `acclient.exe` with the player's own Decal loaded, for the optional "Launch with Decal"
+  mode. It is the only part of the project that imports any process-injection API; the main
+  launcher imports none. See `Docs/launching.md`.
 - `tools/ManifestTool` - console tool for generating keys and signing and
   verifying the download manifest (`keygen`, `sign`, `verify`).
 - `manifest/manifest.sample.json` - a sample schema-1 manifest with the real

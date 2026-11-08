@@ -24,5 +24,20 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />
+    <!-- Build the isolated x86 Decal helper before this project and never reference its assembly: only
+         its exit-code/token contract is shared, as source (DecalLaunchResult.cs), so the main launcher
+         loads nothing 32-bit at runtime. The helper's output is copied beside this exe below. -->
+    <ProjectReference Include="..\DecalLaunch\DecalLaunch.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\DecalLaunch\DecalLaunchResult.cs" Link="Decal\DecalLaunchResult.cs" />
+  </ItemGroup>
+  <!-- The setup ships DreamWeaveDecalLaunch.exe from this folder (installer/shipped-files.txt). -->
+  <Target Name="CopyDecalHelper" AfterTargets="Build">
+    <ItemGroup>
+      <DecalHelperOutput Include="$(MSBuildThisFileDirectory)..\DecalLaunch\bin\$(Configuration)\net48\DreamWeaveDecalLaunch.exe" />
+      <DecalHelperOutput Include="$(MSBuildThisFileDirectory)..\DecalLaunch\bin\$(Configuration)\net48\DreamWeaveDecalLaunch.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DecalHelperOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="Exists('%(DecalHelperOutput.Identity)')" />
+  </Target>
 </Project>

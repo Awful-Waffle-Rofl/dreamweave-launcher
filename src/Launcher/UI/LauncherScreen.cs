@@ -177,9 +177,13 @@ namespace DreamWeave.Launcher.UI
     /// <summary>The log-in-and-play screen. All decisions are the <see cref="LauncherPresenter"/>'s.</summary>
     internal sealed class LauncherScreen : Page
     {
+        /// <summary>The Decal download page (https only), shown beside the "Launch with Decal" box.</summary>
+        internal const string DecalDownloadUrl = "https://www.decaldev.com/";
+
         private readonly LauncherPresenter _presenter;
         private readonly SlotRow[] _rows = new SlotRow[LauncherPresenter.SlotCount];
         private readonly ThemedCheckBox _remember;
+        private readonly ThemedCheckBox _decal;
         private readonly TintedBox _info;
         private readonly WrapLabel _status;
         private readonly FlatButton _playAll;
@@ -195,6 +199,12 @@ namespace DreamWeave.Launcher.UI
 
         /// <summary>The Remember passwords box (read by layout tests).</summary>
         internal ThemedCheckBox RememberBox => _remember;
+
+        /// <summary>The "Launch with Decal" box, or null when Decal was not detected (read by tests).</summary>
+        internal ThemedCheckBox DecalBox => _decal;
+
+        /// <summary>Raised when the player toggles "Launch with Decal"; the handler persists the choice.</summary>
+        public event EventHandler DecalChanged;
 
         /// <summary>True once the saved row names have been filled in.</summary>
         internal bool Loaded => !_loading;
@@ -240,6 +250,28 @@ namespace DreamWeave.Launcher.UI
                 row.PlayClicked += (s, e) => OnPlaySlot(slot);
                 _rows[i] = row;
                 Add(row);
+            }
+
+            if (_presenter.DecalAvailable)
+            {
+                _decal = new ThemedCheckBox { Text = UiText.LaunchWithDecal, Checked = _presenter.LaunchWithDecal };
+                _decal.CheckedChanged += (s, e) =>
+                {
+                    _presenter.LaunchWithDecal = _decal.Checked;
+                    DecalChanged?.Invoke(this, EventArgs.Empty);
+                };
+                LinkLabel decalLink = UiKit.Link(UiText.DecalGetItLink, () => WizardController.OpenUrl(DecalDownloadUrl));
+                var decalRow = new FlowLayoutPanel
+                {
+                    FlowDirection = FlowDirection.LeftToRight,
+                    AutoSize = true,
+                    WrapContents = false,
+                    BackColor = Color.Transparent,
+                    Margin = new Padding(0),
+                };
+                decalRow.Controls.Add(_decal);
+                decalRow.Controls.Add(decalLink);
+                Add(decalRow);
             }
 
             _remember = new ThemedCheckBox { Text = UiText.RememberPasswords };

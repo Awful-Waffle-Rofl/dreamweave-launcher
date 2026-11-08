@@ -21,4 +21,10 @@
   <ItemGroup>
     <None Include="..\..\manifest\manifest.sample.json" Link="manifest.sample.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The Decal helper's input validation is tested in-process (AnyCPU) by compiling its source here;
+         the helper assembly itself is 32-bit-required and cannot be loaded into the test host. Its wire
+         contract (DecalLaunchResult) is provided by the referenced Launcher assembly, which links it. -->
+    <Compile Include="..\..\src\DecalLaunch\DecalLaunchInputs.cs" Link="Decal\DecalLaunchInputs.cs" />
+  </ItemGroup>
 </Project>

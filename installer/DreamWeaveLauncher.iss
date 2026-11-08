@@ -68,6 +68,7 @@ Source: "{#ExeDir}\DreamWeaveLauncher.exe.config"; DestDir: "{app}"; Flags: igno
 Source: "{#ExeDir}\Launcher.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\Newtonsoft.Json.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\DreamWeaveDecalLaunch.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Both shortcuts are always created: there is no page on which to untick them.

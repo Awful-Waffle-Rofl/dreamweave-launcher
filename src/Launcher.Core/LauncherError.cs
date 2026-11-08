@@ -81,6 +81,12 @@ namespace DreamWeave.Launcher.Core
         /// <summary>The Windows Credential Manager could not be used (API failure or unavailable).</summary>
         CredentialStoreUnavailable = 74,
 
+        /// <summary>The client started, but the player's Decal could not be loaded into it (it runs without Decal).</summary>
+        DecalInjectFailed = 75,
+
+        /// <summary>A Decal launch was asked for, but the player's Decal Inject.dll was not found when the client started.</summary>
+        DecalNotFound = 76,
+
         /// <summary>The operation was cancelled by the player.</summary>
         Cancelled = 90,
 

@@ -154,6 +154,9 @@ namespace DreamWeave.Launcher.App
         public const string SlotAlt1 = "Alt 1";
         public const string SlotAlt2 = "Alt 2";
         public const string RememberPasswords = "Remember passwords";
+        public const string LaunchWithDecal = "Launch with Decal"; // DRAFT
+        public const string DecalGetItLink = "Get Decal"; // DRAFT
+        public const string DecalNotLoaded = "The game started, but Decal could not be loaded, so it is running without Decal this time."; // DRAFT
         public const string PlayAll = "Play all";
         public const string FillInFirst = "Fill in an account and password first.";
         public const string DuplicateAccount = "This account is already used in another row.";

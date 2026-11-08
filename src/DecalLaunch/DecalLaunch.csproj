@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>DreamWeaveDecalLaunch</AssemblyName>
+    <RootNamespace>DreamWeave.DecalLaunch</RootNamespace>
+    <!-- Isolated x86 helper: acclient.exe is 32-bit, and 32-bit code can only inject a 32-bit process.
+         PlatformTarget=x86 forces a machine-I386, 32-bit-required PE even under an AnyCPU solution build. -->
+    <PlatformTarget>x86</PlatformTarget>
+    <Platforms>AnyCPU</Platforms>
+    <!-- Only the exe (and its pdb) ship. Keep anything else out of the output. -->
+    <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <AssemblyTitle>DreamWeave Decal Launch Helper</AssemblyTitle>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Launcher.Tests" />
+  </ItemGroup>
+</Project>

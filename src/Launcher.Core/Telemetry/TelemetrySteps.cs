@@ -20,6 +20,8 @@ namespace DreamWeave.Launcher.Core.Telemetry
         public const string PaletteLeakFix = "palette-leak-fix";
         /// <summary>Step id <c>launch</c>.</summary>
         public const string Launch = "launch";
+        /// <summary>Step id <c>launch-decal</c>: a launch that loads the player's Decal through the helper.</summary>
+        public const string LaunchDecal = "launch-decal";
         /// <summary>Step id <c>launcher-update</c>.</summary>
         public const string LauncherUpdate = "launcher-update";
         /// <summary>Step id <c>self-install</c>. RETIRED, do not emit: the launcher no longer installs itself. Kept so the step id stays valid for the telemetry contract.</summary>
@@ -29,7 +31,7 @@ namespace DreamWeave.Launcher.Core.Telemetry
 
         private static readonly HashSet<string> All = new HashSet<string>(StringComparer.Ordinal)
         {
-            Manifest, AcClient, EorDats, PaletteLeakFix, Launch, LauncherUpdate, SelfInstall, Uninstall,
+            Manifest, AcClient, EorDats, PaletteLeakFix, Launch, LaunchDecal, LauncherUpdate, SelfInstall, Uninstall,
         };
 
         /// <summary>True when <paramref name="step"/> is one of the fixed step ids.</summary>
