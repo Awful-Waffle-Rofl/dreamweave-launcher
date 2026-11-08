@@ -156,6 +156,7 @@ namespace DreamWeave.Launcher.UI
         private string _step;
         private DateTime _whenUtc;
         private IReadOnlyList<string> _files;
+        private string _transport;
 
         public ErrorPanel()
         {
@@ -171,7 +172,7 @@ namespace DreamWeave.Launcher.UI
             Button copy = UiKit.Button(UiText.CopyDetails, (s, e) =>
             {
                 UiKit.CopyToClipboard(ErrorDetails.Build(_code, LauncherInfo.Version, _step, _whenUtc, _files));
-                _message.Text = ErrorMessages.For(_code) + " " + UiText.DetailsCopied;
+                _message.Text = ErrorMessages.For(_code, _transport) + " " + UiText.DetailsCopied;
             });
             RowCount = 2;
             RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -192,13 +193,14 @@ namespace DreamWeave.Launcher.UI
         }
 
         /// <summary>Shows <paramref name="code"/> for <paramref name="step"/> (a fixed step or component id).</summary>
-        public void ShowError(LauncherError code, string step, IReadOnlyList<string> files = null)
+        public void ShowError(LauncherError code, string step, IReadOnlyList<string> files = null, string sourceTransport = null)
         {
             _files = files;
+            _transport = sourceTransport;
             _code = code;
             _step = step;
             _whenUtc = DateTime.UtcNow;
-            _message.Text = ErrorMessages.For(code);
+            _message.Text = ErrorMessages.For(code, sourceTransport);
             Visible = true;
         }
 

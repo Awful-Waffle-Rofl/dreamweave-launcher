@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
@@ -31,15 +32,15 @@ namespace DreamWeave.Launcher.Tests.Downloads
         /// <summary>Scripted transport: each call runs the next behaviour for this transport name.</summary>
         private sealed class ScriptedTransport : IDownloadTransport
         {
-            public ScriptedTransport(string name, params Func<DownloadRequest, CancellationToken, Task>[] script)
+            public ScriptedTransport(string name, params Func<DownloadRequest, TransferProgress, CancellationToken, Task>[] script)
             {
                 Name = name;
-                Script = new Queue<Func<DownloadRequest, CancellationToken, Task>>(script);
+                Script = new Queue<Func<DownloadRequest, TransferProgress, CancellationToken, Task>>(script);
             }
 
             public string Name { get; }
 
-            public Queue<Func<DownloadRequest, CancellationToken, Task>> Script { get; }
+            public Queue<Func<DownloadRequest, TransferProgress, CancellationToken, Task>> Script { get; }
 
             public List<Uri> Urls { get; } = new List<Uri>();
 
@@ -51,22 +52,22 @@ namespace DreamWeave.Launcher.Tests.Downloads
             {
                 Urls.Add(request.Url);
                 PartExistedAtStart.Add(File.Exists(request.PartPath));
-                return Script.Dequeue()(request, cancellationToken);
+                return Script.Dequeue()(request, progress, cancellationToken);
             }
         }
 
-        private static Func<DownloadRequest, CancellationToken, Task> Writes(byte[] bytes)
+        private static Func<DownloadRequest, TransferProgress, CancellationToken, Task> Writes(byte[] bytes)
         {
-            return (r, ct) =>
+            return (r, p, ct) =>
             {
                 File.WriteAllBytes(r.PartPath, bytes);
                 return Task.FromResult(0);
             };
         }
 
-        private static Func<DownloadRequest, CancellationToken, Task> Fails(LauncherError code, bool leavePartial = false)
+        private static Func<DownloadRequest, TransferProgress, CancellationToken, Task> Fails(LauncherError code, bool leavePartial = false)
         {
-            return (r, ct) =>
+            return (r, p, ct) =>
             {
                 if (leavePartial)
                 {
@@ -242,6 +243,88 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 r.Request = new DownloadRequest("ac-client", Transports.Mega, new Uri("https://mega.nz/file/PRIMARY#key"), Good.Length, Hasher.ComputeSha256Hex(Good), r.Dest);
                 Assert.AreEqual(LauncherError.SourceQuotaExceeded, r.Fail().Code);
                 Assert.AreEqual(0, r.Http.Urls.Count);
+            }
+        }
+
+        private static Func<DownloadRequest, TransferProgress, CancellationToken, Task> ReportsHalfThenFails(LauncherError code)
+        {
+            return (r, p, ct) =>
+            {
+                p.Report(r.ExpectedSize / 2);
+                throw new LauncherException(code, "scripted " + code);
+            };
+        }
+
+        [TestMethod]
+        public void UnknownTransportAtRuntime_FallsBackToTheMirror()
+        {
+            using (var r = new Rig(new ScriptedTransport("mega", Fails(LauncherError.Unknown)), new ScriptedTransport("http", Writes(Good))))
+            {
+                r.Request = new DownloadRequest("ac-client", "carrier-pigeon", new Uri("https://pigeon.example.test/x"), Good.Length, Hasher.ComputeSha256Hex(Good), r.Dest)
+                {
+                    Alternates = new[] { new DownloadSource(Transports.Http, new Uri("https://mirror.example.test/ac1install.exe"), "Mirror One") },
+                    OnFallback = label => r.Fallbacks.Add(label),
+                };
+                r.Service.DownloadAsync(r.Request, null, CancellationToken.None).GetAwaiter().GetResult();
+                CollectionAssert.AreEqual(Good, File.ReadAllBytes(r.Dest));
+                Assert.AreEqual(0, r.Mega.Urls.Count, "the unknown transport was never started");
+                CollectionAssert.AreEqual(new[] { "Mirror One" }, r.Fallbacks);
+            }
+        }
+
+        [TestMethod]
+        public void ProgressAcrossASwitch_ReachesTheEndAndStaysOnTheStep()
+        {
+            using (var r = new Rig(new ScriptedTransport("mega", ReportsHalfThenFails(LauncherError.NetworkUnavailable)), new ScriptedTransport("http", (req, pr, ct) =>
+            {
+                File.WriteAllBytes(req.PartPath, Good);
+                pr.Report(Good.Length);
+                return Task.FromResult(0);
+            })))
+            {
+                var seen = new List<ProgressReport>();
+                var progress = new SyncProgress(seen);
+                r.Service.DownloadAsync(r.Request, progress, CancellationToken.None).GetAwaiter().GetResult();
+                Assert.IsTrue(seen.Count > 0);
+                Assert.IsTrue(seen.All(x => x.StepId == "ac-client"));
+                Assert.IsTrue(seen.Any(x => x.Message == TransferProgress.DownloadingMessage && x.BytesDone == Good.Length), "the mirror's transfer reaches 100%");
+                Assert.AreEqual(Good.Length, seen.Where(x => x.Message == TransferProgress.DownloadingMessage).Last().BytesDone);
+            }
+        }
+
+        [TestMethod]
+        public void EachSourceHasItsOwnPartFile_AndNoSourcePartIsLeftAfterSuccess()
+        {
+            using (var r = new Rig(new ScriptedTransport("mega", Fails(LauncherError.NetworkUnavailable, leavePartial: true)), new ScriptedTransport("http", (req, p, ct) =>
+            {
+                File.WriteAllBytes(req.PartPath, Good);
+                File.WriteAllText(req.SidecarPath, "{}");
+                return Task.FromResult(0);
+            })))
+            {
+                r.Service.DownloadAsync(r.Request, null, CancellationToken.None).GetAwaiter().GetResult();
+                string folder = Path.GetDirectoryName(r.Dest);
+                CollectionAssert.AreEqual(new[] { "ac-client.exe" }, Directory.GetFiles(folder).Select(Path.GetFileName).ToArray());
+                Assert.AreNotEqual(r.Request.PartPath, r.Request.ForSource(r.Request.Alternates[0], 1).PartPath);
+                StringAssert.EndsWith(r.Request.ForSource(r.Request.Alternates[0], 1).PartPath, ".s1.part");
+            }
+        }
+
+        private sealed class SyncProgress : IProgress<ProgressReport>
+        {
+            private readonly List<ProgressReport> _into;
+
+            public SyncProgress(List<ProgressReport> into)
+            {
+                _into = into;
+            }
+
+            public void Report(ProgressReport value)
+            {
+                lock (_into)
+                {
+                    _into.Add(value);
+                }
             }
         }
 

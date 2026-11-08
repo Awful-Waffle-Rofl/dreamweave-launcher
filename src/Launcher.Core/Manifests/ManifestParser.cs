@@ -91,7 +91,15 @@ namespace DreamWeave.Launcher.Core.Manifests
                 c.SatisfiedWhen = (c.SatisfiedWhen ?? new List<SatisfiedWhenRule>()).Where(r => r != null).ToList();
                 c.Files = (c.Files ?? new List<ManifestFile>()).Where(f => f != null).ToList();
                 c.Patches = (c.Patches ?? new List<BytePatch>()).Where(p => p != null).ToList();
+                // A mirror of a transport this launcher does not know is skipped (a newer manifest may add
+                // transports); a known transport with a bad URL is still an error, checked in Validate.
                 c.Mirrors = (c.Mirrors ?? new List<ManifestMirror>()).Where(s => s != null).ToList();
+                foreach (ManifestMirror unknown in c.Mirrors.Where(s => s.Transport != Transports.Http && s.Transport != Transports.Mega).ToList())
+                {
+                    warnings.Add("Skipping a mirror of component '" + c.Id + "' with unknown transport '" + (unknown.Transport ?? "(none)") + "'.");
+                    c.Mirrors.Remove(unknown);
+                }
+
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
                 {
                     rule.Sha256 = rule.Sha256 ?? new List<string>();
@@ -171,9 +179,19 @@ namespace DreamWeave.Launcher.Core.Manifests
                         break;
                 }
 
+                var seenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (c.Kind != ComponentKinds.BytePatch)
+                {
+                    seenSources.Add(SourceKey(c.Transport, c.Url));
+                }
+
                 for (int i = 0; i < c.Mirrors.Count; i++)
                 {
                     RequireSource(c.Mirrors[i].Transport, c.Mirrors[i].Url, where + " mirror " + (i + 1));
+                    if (!seenSources.Add(SourceKey(c.Mirrors[i].Transport, c.Mirrors[i].Url)))
+                    {
+                        throw Invalid(where + " mirror " + (i + 1) + " repeats the primary source or an earlier mirror.");
+                    }
                 }
 
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
@@ -308,6 +326,13 @@ namespace DreamWeave.Launcher.Core.Manifests
                 default:
                     throw Invalid(what + " has unknown transport '" + transport + "'.");
             }
+        }
+
+        private static string SourceKey(string transport, string url)
+        {
+            Uri uri;
+            string normal = Uri.TryCreate(url, UriKind.Absolute, out uri) ? uri.AbsoluteUri : (url ?? string.Empty);
+            return (transport ?? string.Empty) + "|" + normal;
         }
 
         private static void RequireSha(string value, string what)

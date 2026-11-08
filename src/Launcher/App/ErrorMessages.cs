@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using DreamWeave.Launcher.Core;
+using DreamWeave.Launcher.Core.Manifests;
 
 namespace DreamWeave.Launcher.App
 {
@@ -64,6 +65,21 @@ namespace DreamWeave.Launcher.App
         {
             string text;
             return Table.TryGetValue(code, out text) ? text : Table[LauncherError.Unknown];
+        }
+
+        /// <summary>
+        /// As <see cref="For(LauncherError)"/>, but a download limit reported by a source other than mega.nz
+        /// gets the generic text instead of mega's own wording (<paramref name="sourceTransport"/> is the
+        /// transport of the last source that failed, or null when unknown).
+        /// </summary>
+        public static string For(LauncherError code, string sourceTransport)
+        {
+            if (code == LauncherError.SourceQuotaExceeded && sourceTransport != null && sourceTransport != Transports.Mega)
+            {
+                return UiText.SourceBusy;
+            }
+
+            return For(code);
         }
 
         /// <summary>True when <paramref name="code"/> has its own entry (tests use this to catch new enum members).</summary>

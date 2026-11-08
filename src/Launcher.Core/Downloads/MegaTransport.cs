@@ -11,8 +11,17 @@ namespace DreamWeave.Launcher.Core.Downloads
     /// <summary>Tunables for <see cref="MegaTransport"/>.</summary>
     public sealed class MegaTransportOptions
     {
-        /// <summary>No progress for this long cancels the attempt and retries.</summary>
+        /// <summary>Once bytes have started to arrive, no further progress for this long cancels the attempt and retries.</summary>
         public TimeSpan InactivityTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+        /// <summary>
+        /// How long to wait for the FIRST progress change after the download starts. mega.nz can take
+        /// minutes to begin a large file, so this is far longer than <see cref="InactivityTimeout"/>.
+        /// </summary>
+        public TimeSpan FirstProgressTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+        /// <summary>Login and link resolution must each answer within this time, or the attempt fails as NetworkUnavailable.</summary>
+        public TimeSpan ApiTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
         /// <summary>How long to wait for a cancelled MegaApiClient download to unwind before abandoning it.</summary>
         public TimeSpan AbandonGrace { get; set; } = TimeSpan.FromSeconds(10);
@@ -84,6 +93,12 @@ namespace DreamWeave.Launcher.Core.Downloads
 
                     bool transient;
                     LauncherException mapped = MegaErrorMapper.Map(ex, out transient);
+                    if (mapped.Code == LauncherError.HashMismatch && request.FallbackAvailable)
+                    {
+                        // Mega's own checksum failed and another source is waiting: move on instead of retrying.
+                        throw mapped;
+                    }
+
                     if (!transient || retriesUsed >= _options.Retry.MaxRetries)
                     {
                         throw mapped;
@@ -117,8 +132,8 @@ namespace DreamWeave.Launcher.Core.Downloads
             _possiblyHeld.TryRemove(Path.GetFullPath(request.PartPath), out ignored);
             using (IMegaClient client = _clientFactory())
             {
-                await WithCancellation(client.LoginAnonymousAsync(), cancellationToken).ConfigureAwait(false);
-                MegaFile file = await WithCancellation(client.GetFileFromLinkAsync(request.Url), cancellationToken).ConfigureAwait(false);
+                await WithCancellation(WithApiTimeout(client.LoginAnonymousAsync(), _options.ApiTimeout), cancellationToken).ConfigureAwait(false);
+                MegaFile file = await WithCancellation(WithApiTimeout(client.GetFileFromLinkAsync(request.Url), _options.ApiTimeout), cancellationToken).ConfigureAwait(false);
                 if (file == null || file.Size != request.ExpectedSize)
                 {
                     throw new LauncherException(
@@ -154,7 +169,9 @@ namespace DreamWeave.Launcher.Core.Downloads
                             break;
                         }
 
-                        bool stalled = TimeSpan.FromSeconds((clock.ElapsedTicks - Interlocked.Read(ref lastActivityTicks)) / (double)Stopwatch.Frequency) > _options.InactivityTimeout;
+                        // Before the first byte of progress mega may legitimately take minutes; after it, 60 s of silence is a stall.
+                        TimeSpan limit = Interlocked.Read(ref lastBytes) == 0 ? _options.FirstProgressTimeout : _options.InactivityTimeout;
+                        bool stalled = TimeSpan.FromSeconds((clock.ElapsedTicks - Interlocked.Read(ref lastActivityTicks)) / (double)Stopwatch.Frequency) > limit;
                         if (cancellationToken.IsCancellationRequested || stalled)
                         {
                             // Detach first: from here on the library's callbacks must not touch the
@@ -214,6 +231,24 @@ namespace DreamWeave.Launcher.Core.Downloads
                 }
             }
         }
+        private static async Task<T> WithApiTimeout<T>(Task<T> task, TimeSpan timeout)
+        {
+            await WithApiTimeout((Task)task, timeout).ConfigureAwait(false);
+            return await task.ConfigureAwait(false);
+        }
+
+        private static async Task WithApiTimeout(Task task, TimeSpan timeout)
+        {
+            Task first = await Task.WhenAny(task, Task.Delay(timeout)).ConfigureAwait(false);
+            if (first != task)
+            {
+                Observe(task);
+                throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz did not answer in time.");
+            }
+
+            await task.ConfigureAwait(false);
+        }
+
         private static async Task<T> WithCancellation<T>(Task<T> task, CancellationToken cancellationToken)
         {
             await WithCancellation((Task)task, cancellationToken).ConfigureAwait(false);

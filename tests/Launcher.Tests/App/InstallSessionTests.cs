@@ -125,6 +125,69 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreNotEqual(caller, _downloads.ThreadIds.First(), "the first download ran on the caller's (UI) thread");
         }
 
+        private sealed class FallbackDownloader : IDownloader
+        {
+            private readonly string _label;
+            private readonly LauncherError _fail;
+
+            public FallbackDownloader(string label, LauncherError fail = LauncherError.None)
+            {
+                _label = label;
+                _fail = fail;
+            }
+
+            public Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+            {
+                request.OnFallback?.Invoke(_label);
+                if (_fail != LauncherError.None)
+                {
+                    var ex = new LauncherException(_fail, "scripted");
+                    ex.Data["transport"] = "http";
+                    throw ex;
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(request.DestinationPath));
+                File.WriteAllBytes(request.DestinationPath, InstallerBytes);
+                return Task.FromResult(new DownloadResult(request.DestinationPath, InstallerBytes.Length, Hasher.ComputeSha256Hex(InstallerBytes), false));
+            }
+        }
+
+        [TestMethod]
+        public void FallbackFromTheDownloader_ReachesTheUiAsASourceChangedEvent()
+        {
+            InstallClient(ClientBytes);
+            _deps.Downloads = new FallbackDownloader("Original Turbine installer, from the Internet Archive");
+            var m = AppFixtures.Manifest(Installer());
+            var events = new Collector();
+            InstallRunResult r = new InstallSession(_deps, m, _acFolder).RunAsync(m.Components, events, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.AreEqual(LauncherError.None, r.Error);
+            InstallEvent changed = events.All.Single(e => e.Kind == InstallEventKind.SourceChanged);
+            Assert.AreEqual("ac-client", changed.ComponentId);
+            Assert.AreEqual("Trying another source: Original Turbine installer, from the Internet Archive", changed.Text);
+        }
+
+        [TestMethod]
+        public void FallbackWithoutALabel_NamesTheComponentInstead()
+        {
+            InstallClient(ClientBytes);
+            _deps.Downloads = new FallbackDownloader(null);
+            var m = AppFixtures.Manifest(Installer());
+            var events = new Collector();
+            new InstallSession(_deps, m, _acFolder).RunAsync(m.Components, events, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.AreEqual("Trying another source: Asheron's Call client", events.All.Single(e => e.Kind == InstallEventKind.SourceChanged).Text);
+        }
+
+        [TestMethod]
+        public void QuotaFromAnHttpSource_CarriesItsTransport_AndGetsTheGenericWording()
+        {
+            _deps.Downloads = new FallbackDownloader("x", LauncherError.SourceQuotaExceeded);
+            var m = AppFixtures.Manifest(Installer());
+            InstallRunResult r = new InstallSession(_deps, m, _acFolder).RunAsync(m.Components, new Collector(), CancellationToken.None).GetAwaiter().GetResult();
+            Assert.AreEqual(LauncherError.SourceQuotaExceeded, r.Error);
+            Assert.AreEqual("http", r.SourceTransport);
+            Assert.AreEqual(UiText.SourceBusy, ErrorMessages.For(r.Error, r.SourceTransport));
+        }
+
         [TestMethod]
         public void Handoff_CompletesWhenDetected_NotWhenTheProcessExits()
         {

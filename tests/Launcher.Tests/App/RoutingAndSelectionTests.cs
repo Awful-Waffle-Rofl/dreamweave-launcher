@@ -90,6 +90,29 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.IsTrue(on.Rows.Single(r => r.Id == "ac-client").Checked);
         }
         [TestMethod]
+        public void DefaultSelectedPatch_OnASwappedExe_StartsUnchecked_ButOnAnAbsentExeStaysChecked()
+        {
+            LauncherManifest manifest = AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: true));
+            var swapped = new ComponentSelection(manifest, new[]
+            {
+                AppFixtures.Status("ac-client", ComponentState.Satisfied),
+                AppFixtures.Status("eor-dats", ComponentState.Satisfied),
+                AppFixtures.Status("palette-leak-fix", ComponentState.NotApplicable, AppFixtures.File("acclient.exe", FileState.Mismatch)),
+            });
+            Assert.IsFalse(swapped.Rows.Single(r => r.Id == "palette-leak-fix").Checked, "the patch would be skipped on a different exe");
+
+            var absent = new ComponentSelection(manifest, new[]
+            {
+                AppFixtures.Status("ac-client", ComponentState.Missing),
+                AppFixtures.Status("eor-dats", ComponentState.Missing),
+                AppFixtures.Status("palette-leak-fix", ComponentState.NotApplicable, AppFixtures.File("acclient.exe", FileState.Missing)),
+            });
+            ComponentRow row = absent.Rows.Single(r => r.Id == "palette-leak-fix");
+            Assert.AreEqual(RowStatus.WillApply, row.RowStatus);
+            Assert.IsTrue(row.Checked, "a target that is merely absent now may be put in place by the game data step");
+        }
+
+        [TestMethod]
         public void FreshInstall_RequiredChecked_NextAllowed()
         {
             ComponentSelection s = FreshInstall();

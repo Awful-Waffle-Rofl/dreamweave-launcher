@@ -37,6 +37,11 @@ These were added under rule 2 and are safe to publish: a launcher that predates 
   component's single `size` and `sha256`: a mirror never carries its own hash, and a download whose
   hash differs is deleted and the next source is tried. An older launcher ignores `mirrors` and
   uses the primary only, so keep the primary the source most players can reach.
+  A mirror whose transport this launcher does not know is skipped with a warning, so a newer
+  manifest can add transports; a known transport with a bad URL, or a mirror that repeats the
+  primary or an earlier mirror (same transport and URL), makes the manifest invalid.
+  Each source keeps its own in-progress file, and a corrupt mega download falls back to the next
+  source at once instead of being retried.
 - **`defaultSelected`** (already present) now also sets the starting checkbox of an optional
   component: `true` starts checked, `false` or absent unchecked. Required components are unchanged.
 

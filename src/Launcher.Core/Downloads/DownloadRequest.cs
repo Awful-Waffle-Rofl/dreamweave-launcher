@@ -58,10 +58,27 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <summary>Called with the player-facing label of an alternate source just before it is tried (may run on a pool thread).</summary>
         public Action<string> OnFallback { get; set; }
 
-        /// <summary>The same file fetched from one specific source: same size, hash and destination, no alternates.</summary>
-        public DownloadRequest ForSource(DownloadSource source)
+        /// <summary>
+        /// Distinguishes this source's in-progress files from every other source's (empty for the primary,
+        /// <c>.s1</c>, <c>.s2</c> ... for mirrors), so a read of one source that is still running can never
+        /// hold the file another source writes.
+        /// </summary>
+        public string PartSuffix { get; set; } = string.Empty;
+
+        /// <summary>True while at least one more source remains after this one; a transport may then fail fast instead of retrying a corrupt download.</summary>
+        public bool FallbackAvailable { get; set; }
+
+        /// <summary>
+        /// The same file fetched from one specific source: same size, hash and destination, no alternates,
+        /// and its own part file (<paramref name="index"/> 0 is the primary).
+        /// </summary>
+        public DownloadRequest ForSource(DownloadSource source, int index = 1, bool fallbackAvailable = false)
         {
-            return new DownloadRequest(StepId, source.Transport, source.Url, ExpectedSize, ExpectedSha256, DestinationPath);
+            return new DownloadRequest(StepId, source.Transport, source.Url, ExpectedSize, ExpectedSha256, DestinationPath)
+            {
+                PartSuffix = index <= 0 ? string.Empty : ".s" + index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                FallbackAvailable = fallbackAvailable,
+            };
         }
 
         /// <summary>Progress step id stamped on every report for this download.</summary>
@@ -82,8 +99,8 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <summary>Final path of the verified file.</summary>
         public string DestinationPath { get; }
 
-        /// <summary>Path of the in-progress file: <c>&lt;DestinationPath&gt;.part</c>.</summary>
-        public string PartPath => DestinationPath + ".part";
+        /// <summary>Path of the in-progress file: <c>&lt;DestinationPath&gt;&lt;PartSuffix&gt;.part</c>.</summary>
+        public string PartPath => DestinationPath + PartSuffix + ".part";
 
         /// <summary>Path of the HTTP resume sidecar: <c>&lt;DestinationPath&gt;.part.json</c>.</summary>
         public string SidecarPath => PartPath + ".json";

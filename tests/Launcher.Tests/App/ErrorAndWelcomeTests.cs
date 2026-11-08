@@ -33,6 +33,20 @@ namespace DreamWeave.Launcher.Tests.App
     }
 
     [TestClass]
+    public class QuotaWordingTests
+    {
+        [TestMethod]
+        public void MegaQuotaText_IsShownOnlyWhenMegaWasTheLastFailingSource()
+        {
+            Assert.AreEqual(UiText.MegaQuota, ErrorMessages.For(LauncherError.SourceQuotaExceeded, "mega"));
+            Assert.AreEqual(UiText.MegaQuota, ErrorMessages.For(LauncherError.SourceQuotaExceeded, null), "unknown source keeps the old wording");
+            Assert.AreEqual(UiText.SourceBusy, ErrorMessages.For(LauncherError.SourceQuotaExceeded, "http"));
+            Assert.AreEqual(ErrorMessages.For(LauncherError.HashMismatch), ErrorMessages.For(LauncherError.HashMismatch, "http"), "other codes are unaffected");
+            Assert.IsTrue(UiText.SourceBusy.All(c => c >= 0x20 && c <= 0x7E));
+        }
+    }
+
+    [TestClass]
     public class ErrorDetailsTests
     {
         [TestMethod]

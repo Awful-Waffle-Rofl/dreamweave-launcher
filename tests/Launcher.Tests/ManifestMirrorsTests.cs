@@ -56,6 +56,51 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void MirrorWithAnUnknownTransport_IsSkippedNotFatal()
+        {
+            JObject root = Sample();
+            Installer(root)["mirrors"] = new JArray(
+                Mirror("carrier-pigeon", "https://example.test/a.exe", "Pigeon"),
+                Mirror("http", "https://example.test/b.exe", "Kept"));
+            LauncherManifest m = Parse(root);
+            ManifestComponent c = m.Components.Single(x => x.Id == "ac-client");
+            CollectionAssert.AreEqual(new[] { "Kept" }, c.Mirrors.Select(x => x.SourceLabel).ToArray());
+            Assert.IsTrue(m.Warnings.Any(w => w.Contains("carrier-pigeon")));
+        }
+
+        [TestMethod]
+        public void MirrorRepeatingThePrimary_IsRejected()
+        {
+            JObject root = Sample();
+            JObject installer = Installer(root);
+            installer["mirrors"] = new JArray(Mirror((string)installer["transport"], (string)installer["url"], "Same as primary"));
+            var ex = Assert.ThrowsExactly<LauncherException>(() => Parse(root));
+            Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code, ex.Detail);
+        }
+
+        [TestMethod]
+        public void MirrorRepeatingAnEarlierMirror_IsRejected_EvenWithADifferentSpelling()
+        {
+            JObject root = Sample();
+            Installer(root)["mirrors"] = new JArray(
+                Mirror("http", "https://example.test/a.exe", "One"),
+                Mirror("http", "HTTPS://EXAMPLE.test:443/a.exe", "Two"));
+            var ex = Assert.ThrowsExactly<LauncherException>(() => Parse(root));
+            Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code, ex.Detail);
+        }
+
+        [TestMethod]
+        public void SameUrlWithADifferentTransport_IsNotADuplicate()
+        {
+            JObject root = Sample();
+            JObject installer = Installer(root);
+            string other = (string)installer["transport"] == "mega" ? "http" : "mega";
+            string url = other == "mega" ? "https://mega.nz/file/AbCdEfGh#key" : (string)installer["url"];
+            installer["mirrors"] = new JArray(Mirror(other, url, "Other transport"));
+            Assert.AreEqual(1, Parse(root).Components.Single(x => x.Id == "ac-client").Mirrors.Count);
+        }
+
+        [TestMethod]
         [DataRow("http", "http://example.test/a.exe")]
         [DataRow("http", "ftp://example.test/a.exe")]
         [DataRow("http", "a.exe")]
@@ -64,7 +109,6 @@ namespace DreamWeave.Launcher.Tests
         [DataRow("mega", "https://example.test/file/AbCdEfGh#key")]
         [DataRow("mega", "https://mega.nz/folder/AbCdEfGh#key")]
         [DataRow("mega", "https://mega.nz/file/AbCdEfGh")]
-        [DataRow("carrier-pigeon", "https://example.test/a.exe")]
         [DataRow("http", "https://user:pw@example.test/a.exe")]
         public void BadMirror_IsRejectedAsManifestInvalid(string transport, string url)
         {

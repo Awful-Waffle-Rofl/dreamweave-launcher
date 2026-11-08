@@ -254,7 +254,10 @@ namespace DreamWeave.Launcher.App
             {
                 // The manifest's defaultSelected decides an optional component's starting state
                 // (owner ruling 2026-11-07), but never for a row that cannot run.
-                initiallyChecked = c.DefaultSelected && rs != RowStatus.Unknown && rs != RowStatus.NotApplicable;
+                // A patch whose target is a different build (NotApplicable with a mismatched file) would be
+                // skipped at run time, so it starts unchecked; a target that is merely absent stays checked.
+                bool swappedTarget = status.State == ComponentState.NotApplicable && status.Files.Any(f => f.State == FileState.Mismatch);
+                initiallyChecked = c.DefaultSelected && rs != RowStatus.Unknown && rs != RowStatus.NotApplicable && !swappedTarget;
             }
             else if (covered || rs == RowStatus.Unknown || rs == RowStatus.NotApplicable)
             {

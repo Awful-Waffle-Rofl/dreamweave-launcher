@@ -57,13 +57,17 @@ namespace DreamWeave.Launcher.App
     /// <summary>How a run ended.</summary>
     internal sealed class InstallRunResult
     {
-        public InstallRunResult(LauncherError error, string componentId, string acFolder, IReadOnlyList<string> fileDetails = null)
+        public InstallRunResult(LauncherError error, string componentId, string acFolder, IReadOnlyList<string> fileDetails = null, string sourceTransport = null)
         {
+            SourceTransport = sourceTransport;
             Error = error;
             ComponentId = componentId;
             AcFolder = acFolder;
             FileDetails = fileDetails ?? new string[0];
         }
+
+        /// <summary>Transport ("mega" or "http") of the last download source that failed, or null.</summary>
+        public string SourceTransport { get; }
 
         /// <summary>Game-relative file names with their state ("client_portal.dat: Mismatch") for a failure about installed files; empty otherwise.</summary>
         public IReadOnlyList<string> FileDetails { get; }
@@ -350,7 +354,7 @@ namespace DreamWeave.Launcher.App
                             Trace.TraceError("Install step failed unexpectedly: " + ex.GetType().FullName);
                         }
 
-                        return new InstallRunResult(code, c.Id, _acFolder);
+                        return new InstallRunResult(code, c.Id, _acFolder, null, (ex as LauncherException)?.Data["transport"] as string);
                     }
                 }
 
