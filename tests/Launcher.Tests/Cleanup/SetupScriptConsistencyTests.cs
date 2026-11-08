@@ -141,17 +141,30 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         }
 
         [TestMethod]
-        public void ReadyPage_IsSkippedByShouldSkipPage_BecauseTheDirectiveAloneIsNotEnough()
+        public void ReadyPage_IsAutoAdvancedByCurPageChanged_OnceOnly()
         {
-            // DisableReadyPage=yes is IGNORED when Setup is not silent and no earlier wizard page was shown (Inno help,
-            // topic_setup_disablereadypage.htm), and here every earlier page is disabled. Reviewed on a real interactive run:
-            // with only the directive the Ready to Install page still appeared and waited for an Install click.
+            // Both obvious ways to drop the Ready to Install page were tried and BOTH FAILED at runtime, on the CI
+            // artifact run on a hidden desktop: DisableReadyPage=yes alone (Inno ignores it when no earlier page was
+            // shown, and here every earlier page is disabled) and a ShouldSkipPage hook returning wpReady (the page
+            // still appeared and nothing installed until Install was clicked). So Next is pressed on it by script.
             string iss = Iss();
-            StringAssert.Contains(iss, "function ShouldSkipPage(PageID: Integer): Boolean;");
-            string block = CodeBlock(iss, "function ShouldSkipPage(");
-            Assert.IsTrue(Regex.IsMatch(block, @"Result := \(PageID = wpReady\);"), "ShouldSkipPage must skip exactly wpReady");
-            Assert.IsFalse(Regex.IsMatch(block, @"wp(Preparing|Installing|Welcome|SelectDir)"), "only the Ready page is skipped here");
-            // Skipping a page must not remove the data-folder guard: PrepareToInstall still exists.
+            Assert.IsFalse(iss.Contains("function ShouldSkipPage"), "a ShouldSkipPage hook did not work for wpReady");
+
+            StringAssert.Contains(iss, "BM_CLICK = $00F5;");
+            StringAssert.Contains(iss, "function PostMessage(hWnd: HWND; Msg: UINT; wParam: Longint; lParam: Longint): BOOL;");
+            StringAssert.Contains(iss, "external 'PostMessageW@user32.dll stdcall';");
+
+            StringAssert.Contains(iss, "procedure CurPageChanged(CurPageID: Integer);");
+            string block = CodeBlock(iss, "procedure CurPageChanged(");
+            StringAssert.Contains(block, "if (CurPageID = wpReady) and (not ReadyPageAdvanced) then");
+            StringAssert.Contains(block, "PostMessage(WizardForm.NextButton.Handle, BM_CLICK, 0, 0);");
+
+            // One-shot guard: set before the click, declared as a Boolean global. Without it a Back click after the
+            // data-folder refusal would return to the Ready page and auto-click forever.
+            StringAssert.Contains(iss, "ReadyPageAdvanced: Boolean;");
+            Assert.IsTrue(Regex.IsMatch(block, @"ReadyPageAdvanced := True;\s+PostMessage\("), "the guard must be set before the click");
+
+            // The data-folder guard still runs.
             StringAssert.Contains(iss, "function PrepareToInstall(var NeedsRestart: Boolean): String;");
         }
 

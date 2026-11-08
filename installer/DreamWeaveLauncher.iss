@@ -30,8 +30,9 @@ UsePreviousAppDir=yes
 ;   DisableWelcomePage      the "Welcome to the Setup Wizard" page (Inno's default is already yes)
 ;   DisableDirPage          "Select Destination Location"; /DIR= on the command line still sets the folder
 ;   DisableProgramGroupPage "Select Start Menu Folder"
-;   DisableReadyPage        "Ready to Install"; NOT enough on its own: Inno ignores it when no earlier page was shown,
-;                           so ShouldSkipPage in [Code] skips wpReady as well
+;   DisableReadyPage        "Ready to Install"; NOT enough: Inno ignores it when no earlier page was shown, and a
+;                           ShouldSkipPage hook for wpReady was tried and did not remove it either. CurPageChanged in
+;                           [Code] auto-clicks Next on it, so the page may flash briefly
 ;   DisableFinishedPage     "Setup Completed"; Setup closes as soon as the install finishes
 ;   DisableStartupPrompt    the "This will install... Do you wish to continue?" prompt (Inno's default is already yes)
 ; Nothing else may add a page: no Tasks section, no InfoBeforeFile, InfoAfterFile or LicenseFile, no custom pages.
@@ -101,6 +102,17 @@ Type: files; Name: "{app}\DreamWeaveLauncher.exe.new"
 const
   // .NET Framework 4.8 is Release 528040 or higher.
   Net48Release = 528040;
+  // The button-click message, used to press Next on the Ready to Install page.
+  BM_CLICK = $00F5;
+
+var
+  // One-shot guard: the Ready page is auto-advanced only once per run. If the data-folder refusal below stops Setup
+  // on the Preparing page, a Back click returns to the Ready page; without this guard that would auto-click again
+  // and loop. The player is left on the Ready page with a working Install button instead.
+  ReadyPageAdvanced: Boolean;
+
+function PostMessage(hWnd: HWND; Msg: UINT; wParam: Longint; lParam: Longint): BOOL;
+  external 'PostMessageW@user32.dll stdcall';
 
 function IsNet48Installed(): Boolean;
 var
@@ -159,18 +171,23 @@ begin
   end;
 end;
 
+// Auto-advances the Ready to Install page so the player never has to click Install. DisableReadyPage=yes is ignored
+// when no earlier page was shown, and skipping the page from ShouldSkipPage did not work at runtime (it still
+// appeared and waited), so Next is pressed on it instead. PostMessage queues the click; it does not run it
+// inside this callback. PrepareToInstall still runs when installation starts.
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpReady) and (not ReadyPageAdvanced) then
+  begin
+    ReadyPageAdvanced := True;
+    PostMessage(WizardForm.NextButton.Handle, BM_CLICK, 0, 0);
+  end;
+end;
+
 // Always runs, with or without a directory page, including for a command-line /DIR=. A non-empty result stops
 // Setup with that text as the error. The launcher's cleanup deletes the data folder, which would delete the
 // uninstaller mid-run, so installing under it is refused.
 // DataDirShown is for display; the lowercased copies are only for the comparison.
-// Skips the Ready to Install page. DisableReadyPage=yes is ignored when no earlier wizard page was shown (it is the
-// first page here), so without this an interactive run waits on an Install click. Skipping a page does not skip
-// PrepareToInstall, which runs when installation starts.
-function ShouldSkipPage(PageID: Integer): Boolean;
-begin
-  Result := (PageID = wpReady);
-end;
-
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Dir, DataDirShown, DataDirLower: String;
