@@ -9,7 +9,7 @@ Windows setup program (no administrator rights needed).
 ## What it is
 
 The player runs `DreamWeaveLauncher-Setup-<version>.exe` from the GitHub Releases
-page. Setup is one click: it shows no wizard pages, only a short progress window
+page. Setup is one click: it shows no wizard pages (the Ready to Install page is skipped by script, because Inno ignores `DisableReadyPage` when no earlier page was shown), only a short progress window
 (dark, with the DreamWeave logo), installs the launcher (one exe and two DLLs) under
 `%LOCALAPPDATA%\Programs`, adds a Start menu and a desktop shortcut, and then starts the
 launcher, whose own styled wizard takes over. A silent install (`/SILENT`,
@@ -72,8 +72,8 @@ dotnet test DreamWeaveLauncher.sln -c Release
 ```
 
 CI builds on Windows, checks the build output against `installer/shipped-files.txt` (exe under 3 MB, shipped files under 4 MiB in total, no other files), and builds the
-setup program with Inno Setup 6 (`tools/release/build-setup.ps1`; install Inno
-Setup 6 locally to run it).
+setup program with Inno Setup 6.6 or newer (`tools/release/build-setup.ps1`, which fails on an older
+compiler; install Inno Setup 6.6 or newer locally to run it).
 
 ## Docs
 

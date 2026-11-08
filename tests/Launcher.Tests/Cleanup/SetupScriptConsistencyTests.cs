@@ -141,6 +141,36 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         }
 
         [TestMethod]
+        public void ReadyPage_IsSkippedByShouldSkipPage_BecauseTheDirectiveAloneIsNotEnough()
+        {
+            // DisableReadyPage=yes is IGNORED when Setup is not silent and no earlier wizard page was shown (Inno help,
+            // topic_setup_disablereadypage.htm), and here every earlier page is disabled. Reviewed on a real interactive run:
+            // with only the directive the Ready to Install page still appeared and waited for an Install click.
+            string iss = Iss();
+            StringAssert.Contains(iss, "function ShouldSkipPage(PageID: Integer): Boolean;");
+            string block = CodeBlock(iss, "function ShouldSkipPage(");
+            Assert.IsTrue(Regex.IsMatch(block, @"Result := \(PageID = wpReady\);"), "ShouldSkipPage must skip exactly wpReady");
+            Assert.IsFalse(Regex.IsMatch(block, @"wp(Preparing|Installing|Welcome|SelectDir)"), "only the Ready page is skipped here");
+            // Skipping a page must not remove the data-folder guard: PrepareToInstall still exists.
+            StringAssert.Contains(iss, "function PrepareToInstall(var NeedsRestart: Boolean): String;");
+        }
+
+        [TestMethod]
+        public void NoDraftMarkersRemain()
+        {
+            Assert.IsFalse(Iss().Contains("DRAFT"), "player-facing wording is approved; no DRAFT marker");
+        }
+
+        [TestMethod]
+        public void BuildScript_RequiresInno66OrNewer()
+        {
+            string script = ReadRepoFile("tools", "release", "build-setup.ps1");
+            StringAssert.Contains(script, "Inno Setup 6.6 or newer is required");
+            StringAssert.Contains(script, "-lt 6");
+            Assert.IsTrue(Regex.IsMatch(script, @"\[int\]\$Matches\[2\] -lt 6"), "the minor version must be compared against 6");
+        }
+
+        [TestMethod]
         public void MessageBoxes_AreSuppressible()
         {
             // A plain MsgBox is not suppressed by /SUPPRESSMSGBOXES and would block a silent run.

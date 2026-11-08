@@ -30,7 +30,8 @@ UsePreviousAppDir=yes
 ;   DisableWelcomePage      the "Welcome to the Setup Wizard" page (Inno's default is already yes)
 ;   DisableDirPage          "Select Destination Location"; /DIR= on the command line still sets the folder
 ;   DisableProgramGroupPage "Select Start Menu Folder"
-;   DisableReadyPage        "Ready to Install"
+;   DisableReadyPage        "Ready to Install"; NOT enough on its own: Inno ignores it when no earlier page was shown,
+;                           so ShouldSkipPage in [Code] skips wpReady as well
 ;   DisableFinishedPage     "Setup Completed"; Setup closes as soon as the install finishes
 ;   DisableStartupPrompt    the "This will install... Do you wish to continue?" prompt (Inno's default is already yes)
 ; Nothing else may add a page: no Tasks section, no InfoBeforeFile, InfoAfterFile or LicenseFile, no custom pages.
@@ -117,7 +118,6 @@ function InitializeSetup(): Boolean;
 begin
   Result := IsNet48Installed();
   if not Result then
-    // DRAFT: player-facing wording, pending orchestrator review.
     SuppressibleMsgBox('DreamWeave Launcher needs Microsoft .NET Framework 4.8, which was not found on this PC.' + #13#10 + #13#10 +
       'Install it from Windows Update or from microsoft.com/net/download, then run this setup again.',
       mbCriticalError, MB_OK, IDOK);
@@ -163,6 +163,14 @@ end;
 // Setup with that text as the error. The launcher's cleanup deletes the data folder, which would delete the
 // uninstaller mid-run, so installing under it is refused.
 // DataDirShown is for display; the lowercased copies are only for the comparison.
+// Skips the Ready to Install page. DisableReadyPage=yes is ignored when no earlier wizard page was shown (it is the
+// first page here), so without this an interactive run waits on an Install click. Skipping a page does not skip
+// PrepareToInstall, which runs when installation starts.
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = wpReady);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Dir, DataDirShown, DataDirLower: String;
