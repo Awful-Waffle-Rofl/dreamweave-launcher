@@ -38,7 +38,7 @@ jobs:
       - name: Test
         run: dotnet test DreamWeaveLauncher.sln -c Release --no-build
 
-      - name: Check exe size and no unembedded files
+      - name: Check build output against installer/shipped-files.txt
         shell: pwsh
         run: ./tools/release/check-build-output.ps1
 

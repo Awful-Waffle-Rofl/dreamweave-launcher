@@ -1,7 +1,7 @@
 ; DreamWeave Launcher per-user installer (Inno Setup 6).
 ; Build with tools/release/build-setup.ps1, which passes:
 ;   /DAppVersion=<MAJOR.MINOR.PATCH>   the launcher version (Directory.Build.props)
-;   /DExeDir=<folder>                  the folder holding DreamWeaveLauncher.exe and .exe.config
+;   /DExeDir=<folder>                  the folder holding the build output (every "ship" file in installer/shipped-files.txt)
 ; The AppId, AppMutex and --cleanup/--silent literals below are pinned to
 ; src/Launcher.Core/SetupConstants.cs by tests/Launcher.Tests/Cleanup/SetupScriptConsistencyTests.cs.
 
@@ -42,8 +42,11 @@ VersionInfoCopyright=Copyright (c) 2026 Awful-Waffle-Rofl
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
+; One explicit line per file, no wildcards. Kept equal to the "ship" entries of shipped-files.txt by a test.
 Source: "{#ExeDir}\DreamWeaveLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\DreamWeaveLauncher.exe.config"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\Launcher.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\Newtonsoft.Json.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\DreamWeave Launcher"; Filename: "{app}\DreamWeaveLauncher.exe"

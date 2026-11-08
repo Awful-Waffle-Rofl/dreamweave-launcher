@@ -177,17 +177,6 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         }
 
         [TestMethod]
-        public void ShipsOnlyTheExeAndItsConfig()
-        {
-            string iss = Iss();
-            MatchCollection sources = Regex.Matches(iss, @"^Source:\s*""([^""]+)""", RegexOptions.Multiline);
-            Assert.AreEqual(2, sources.Count);
-            Assert.IsTrue(sources[0].Groups[1].Value.EndsWith(@"\DreamWeaveLauncher.exe", StringComparison.Ordinal));
-            Assert.IsTrue(sources[1].Groups[1].Value.EndsWith(@"\DreamWeaveLauncher.exe.config", StringComparison.Ordinal));
-            Assert.IsFalse(iss.IndexOf(".pdb", StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
-        [TestMethod]
         public void Script_IsAscii()
         {
             foreach (string name in new[] { "DreamWeaveLauncher.iss", "privacy.txt" })

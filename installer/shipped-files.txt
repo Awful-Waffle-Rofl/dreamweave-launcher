@@ -1,0 +1,20 @@
+# The single source of truth for what the launcher build produces and what the setup ships.
+# Read by: tools/release/check-build-output.ps1 (CI and release), tests/Launcher.Tests/Cleanup/ShippedFilesTests.cs,
+# and mirrored one Source line per file in installer/DreamWeaveLauncher.iss (a test fails when they disagree).
+# Plain ASCII, one entry per line, file names only (no folders, no wildcards).
+#
+#   ship <name>        lands next to the exe in the Release output AND is installed by the setup
+#   build-only <name>  allowed next to the exe in the Release output, never installed
+#   max-exe-bytes N    size cap for DreamWeaveLauncher.exe
+#   max-total-bytes N  size cap for the sum of every ship file (about double the measured total)
+
+max-exe-bytes 3145728
+max-total-bytes 4194304
+
+ship DreamWeaveLauncher.exe
+ship DreamWeaveLauncher.exe.config
+ship Launcher.Core.dll
+ship Newtonsoft.Json.dll
+
+build-only DreamWeaveLauncher.pdb
+build-only Launcher.Core.pdb
