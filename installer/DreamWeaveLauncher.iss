@@ -55,6 +55,9 @@ Filename: "{app}\DreamWeaveLauncher.exe"; Description: "{cm:LaunchProgram,DreamW
 [InstallDelete]
 ; Legacy migration: the old self-installing launcher's Start menu shortcut.
 Type: files; Name: "{userprograms}\DreamWeave Launcher.lnk"
+; Stale leftovers of the launcher's old self-update swap; nothing in the launcher sweeps them any more.
+Type: files; Name: "{app}\*.old"
+Type: files; Name: "{app}\*.new"
 
 [Registry]
 ; Legacy migration: the old self-installing launcher's uninstall entry. The old install folder is the
@@ -62,7 +65,7 @@ Type: files; Name: "{userprograms}\DreamWeave Launcher.lnk"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\DreamWeaveLauncher"; Flags: deletekey
 
 [UninstallDelete]
-; Left behind by the launcher's self-updater (until it is retired).
+; Update leftovers beside the exe.
 Type: files; Name: "{app}\*.old"
 Type: files; Name: "{app}\*.new"
 
@@ -88,9 +91,9 @@ begin
   Result := IsNet48Installed();
   if not Result then
     // DRAFT: player-facing wording, pending orchestrator review.
-    MsgBox('DreamWeave Launcher needs Microsoft .NET Framework 4.8, which was not found on this PC.' + #13#10 + #13#10 +
+    SuppressibleMsgBox('DreamWeave Launcher needs Microsoft .NET Framework 4.8, which was not found on this PC.' + #13#10 + #13#10 +
       'Install it from Windows Update or from microsoft.com/net/download, then run this setup again.',
-      mbCriticalError, MB_OK);
+      mbCriticalError, MB_OK, IDOK);
 end;
 
 // Runs the launcher's cleanup and returns its exit code, or -1 when it could not be started.
@@ -131,19 +134,21 @@ end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Dir, DataDir: String;
+  Dir, DataDirShown, DataDirLower: String;
 begin
   Result := True;
   if CurPageID = wpSelectDir then
   begin
     // The launcher's cleanup deletes this folder, which would delete the uninstaller mid-run.
+    // DataDirShown is for display; the lowercased copies are only for the comparison.
+    DataDirShown := ExpandConstant('{localappdata}\DreamWeave');
     Dir := Lowercase(RemoveBackslash(WizardDirValue));
-    DataDir := Lowercase(RemoveBackslash(ExpandConstant('{localappdata}\DreamWeave')));
-    if (Dir = DataDir) or (Pos(DataDir + '\', Dir) = 1) then
+    DataDirLower := Lowercase(RemoveBackslash(DataDirShown));
+    if (Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1) then
     begin
       // DRAFT: player-facing wording, pending orchestrator review.
-      MsgBox('Please choose a different folder. The launcher keeps its own data in ' + DataDir + ', and this folder would be erased when the launcher is uninstalled.',
-        mbError, MB_OK);
+      SuppressibleMsgBox('Please choose a different folder. The launcher keeps its own data in ' + DataDirShown + ', and this folder would be erased when the launcher is uninstalled.',
+        mbError, MB_OK, IDOK);
       Result := False;
     end;
   end;

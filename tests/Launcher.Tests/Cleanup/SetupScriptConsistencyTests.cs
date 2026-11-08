@@ -117,8 +117,43 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             StringAssert.Contains(iss, "CurPageID = wpSelectDir");
             StringAssert.Contains(iss, "Lowercase(RemoveBackslash(WizardDirValue))");
             StringAssert.Contains(iss, @"ExpandConstant('{localappdata}\DreamWeave')");
-            StringAssert.Contains(iss, @"(Dir = DataDir) or (Pos(DataDir + '\', Dir) = 1)");
+            StringAssert.Contains(iss, @"DataDirShown := ExpandConstant('{localappdata}\DreamWeave');");
+            StringAssert.Contains(iss, "DataDirLower := Lowercase(RemoveBackslash(DataDirShown));");
+            StringAssert.Contains(iss, @"(Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1)");
+            StringAssert.Contains(iss, "' + DataDirShown + '", "the message must show the original-case path");
             StringAssert.Contains(iss, "Result := False;");
+        }
+
+        [TestMethod]
+        public void MessageBoxes_AreSuppressible()
+        {
+            // A plain MsgBox is not suppressed by /SUPPRESSMSGBOXES and would block a silent run.
+            string iss = Iss();
+            Assert.IsFalse(Regex.IsMatch(iss, @"(?<![A-Za-z])MsgBox\("), "use SuppressibleMsgBox");
+            Assert.AreEqual(2, Regex.Matches(iss, @"SuppressibleMsgBox\(").Count);
+            Assert.AreEqual(2, Regex.Matches(iss, @"MB_OK, IDOK\)").Count);
+        }
+
+        private static string Section(string iss, string name)
+        {
+            Match m = Regex.Match(iss, @"^\[" + name + @"\]\s*$(.*?)(?=^\[|\z)", RegexOptions.Multiline | RegexOptions.Singleline);
+            Assert.IsTrue(m.Success, "missing section [" + name + "]");
+            return m.Groups[1].Value;
+        }
+
+        [TestMethod]
+        public void UpdateLeftovers_AreRemovedOnInstallAndUninstall()
+        {
+            string iss = Iss();
+            foreach (string section in new[] { "InstallDelete", "UninstallDelete" })
+            {
+                string body = Section(iss, section);
+                StringAssert.Contains(body, @"Type: files; Name: ""{app}\*.old""", section);
+                StringAssert.Contains(body, @"Type: files; Name: ""{app}\*.new""", section);
+            }
+
+            StringAssert.Contains(Section(iss, "InstallDelete"), @"{userprograms}\DreamWeave Launcher.lnk");
+            Assert.IsFalse(iss.Contains("until it is retired"));
         }
 
         [TestMethod]

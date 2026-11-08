@@ -60,8 +60,14 @@ jobs:
           # Child processes, so each exit code is the script's own (a script that ends without `exit` leaves $LASTEXITCODE unset).
           pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag "v$ver" -ExePath $env:EXE_PATH -SetupPath $found.FullName
           if ($LASTEXITCODE -ne 0) { throw "assert-version failed for the right tag (exit $LASTEXITCODE)" }
-          pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag 'v9.9.9' -ExePath $env:EXE_PATH -SetupPath $found.FullName *> $null
-          if ($LASTEXITCODE -eq 0) { throw 'assert-version accepted a wrong tag' }
+          # Only the setup's version can be wrong here: a props file and tag that agree on 9.9.9, so the exe and
+          # props checks cannot be what fails. It must fail, and with the setup version message.
+          $tmpProps = Join-Path $env:RUNNER_TEMP 'wrong-version.props'
+          (Get-Content -LiteralPath Directory.Build.props -Raw) -replace '<Version>[^<]*</Version>', '<Version>9.9.9</Version>' | Set-Content -LiteralPath $tmpProps
+          $out = pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag 'v9.9.9' -SetupPath $found.FullName -PropsPath $tmpProps 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -eq 0) { throw 'assert-version accepted a setup with the wrong version' }
+          if ($out -notmatch 'Setup product version') { throw "assert-version failed for the wrong reason: $out" }
           # The wrong tag was meant to fail: do not let its exit code become the step's.
           $global:LASTEXITCODE = 0
 
