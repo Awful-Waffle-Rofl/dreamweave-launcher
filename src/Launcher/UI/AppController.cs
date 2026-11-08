@@ -245,41 +245,32 @@ namespace DreamWeave.Launcher.UI
             return _gate.BannerText;
         }
 
-        private async void ApplyUpdate()
+        /// <summary>
+        /// Update button: opens the manifest's download page in the default browser. The launcher does not
+        /// close, download or replace anything; the player runs the new setup from that page themselves.
+        /// </summary>
+        private void ApplyUpdate()
         {
-            LauncherManifest manifest = _services.Manifests.Manifest;
-            if (manifest == null || !_gate.OffersUpdate)
+            if (!_gate.OffersUpdate)
             {
                 return;
             }
 
-            _launcherScreen?.ShowStatus(UiText.Updating);
+            _launcherScreen?.ShowStatus(UiText.OpeningDownloadPage);
             ITelemetrySink t = _services.TelemetrySink;
             t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Started);
             Stopwatch clock = Stopwatch.StartNew();
-            var updater = new SelfUpdater(_services.Paths, LauncherInfo.SemanticVersion, _services.RunningExePath, _services.Downloads, new WinTrustVerifier(), _services.FileSystem, _services.Processes);
-            var progress = new Progress<ProgressReport>(r => _launcherScreen?.ShowStatus(UiText.Updating + " " + ProgressText.Describe(r)));
-            try
+            LauncherError code = DownloadPageOpener.Open(_services.Processes, _gate.DownloadPage);
+            if (code == LauncherError.None)
             {
-                // The new process (started with --updated) waits a bounded time for this one's mutex.
-                await Task.Run(() => updater.ApplyAsync(manifest, progress, CancellationToken.None));
                 t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
-                _instance?.Release();
-                _window.Close();
             }
-            catch (LauncherException ex)
+            else
             {
-                t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Failed, ex.Code, clock.Elapsed);
-                _launcherScreen?.ShowStatus(ErrorMessages.For(ex.Code));
-            }
-            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
-            {
-                LauncherError code = LauncherException.FromIo(ex, "updating").Code;
                 t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Failed, code, clock.Elapsed);
                 _launcherScreen?.ShowStatus(ErrorMessages.For(code));
             }
         }
-
         /// <summary>
         /// Hands uninstall over to the setup program when its registered command (HKCU, Inno Setup's
         /// <c>{AppId}_is1</c> key, read only) passes <see cref="SetupUninstallLocator.TryResolve"/>, otherwise

@@ -5,7 +5,7 @@ using System.IO;
 namespace DreamWeave.Launcher.Core.Cleanup
 {
     /// <summary>
-    /// The file operations cleanup and self-update perform, behind an interface so
+    /// The file operations cleanup performs, behind an interface so
     /// tests can inject a failure at any step. Production implementation: <see cref="SelfFileSystem"/>.
     /// Methods throw the raw <see cref="IOException"/> / <see cref="UnauthorizedAccessException"/>;
     /// callers classify them.
@@ -17,25 +17,6 @@ namespace DreamWeave.Launcher.Core.Cleanup
 
         /// <summary>True when a folder exists at <paramref name="path"/>.</summary>
         bool DirectoryExists(string path);
-
-        /// <summary>Creates the folder and any missing parents.</summary>
-        void CreateDirectory(string path);
-
-        /// <summary>
-        /// Opens an existing file for reading with <see cref="FileShare.Read"/>: other readers are
-        /// allowed, nobody may write, delete or rename it while the stream is open.
-        /// </summary>
-        FileStream OpenReadLocked(string path);
-
-        /// <summary>
-        /// Creates (or truncates) a file for writing with <see cref="FileShare.Delete"/> only: nobody
-        /// else may read or write it, but it can be RENAMED while the stream is still open, so the
-        /// caller can move exactly the bytes it wrote into place without ever releasing the file.
-        /// </summary>
-        FileStream CreateHeldForMove(string path);
-
-        /// <summary>Renames a file (same volume); fails if the destination exists.</summary>
-        void Move(string sourcePath, string destinationPath);
 
         /// <summary>Deletes a file (clearing a read-only attribute first). No-op when it is absent.</summary>
         void DeleteFile(string path);
@@ -58,24 +39,6 @@ namespace DreamWeave.Launcher.Core.Cleanup
 
         /// <inheritdoc />
         public bool DirectoryExists(string path) => Directory.Exists(path);
-
-        /// <inheritdoc />
-        public void CreateDirectory(string path) => Directory.CreateDirectory(path);
-
-        /// <inheritdoc />
-        public FileStream OpenReadLocked(string path)
-        {
-            return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);
-        }
-
-        /// <inheritdoc />
-        public FileStream CreateHeldForMove(string path)
-        {
-            return new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Delete, 4096, FileOptions.None);
-        }
-
-        /// <inheritdoc />
-        public void Move(string sourcePath, string destinationPath) => File.Move(sourcePath, destinationPath);
 
         /// <inheritdoc />
         public void DeleteFile(string path)

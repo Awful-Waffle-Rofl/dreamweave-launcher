@@ -63,10 +63,11 @@ namespace DreamWeave.Launcher.Tests
                 Assert.IsTrue(Hasher.IsSha256Hex(v), "not 64 hex: '" + v + "'");
             }
 
-            // The launcher block is unpublished in the sample: its hash may be empty only while its URL is.
-            string launcherUrl = (string)root["launcher"]["url"];
-            string launcherSha = (string)root["launcher"]["sha256"];
-            Assert.IsTrue(string.IsNullOrEmpty(launcherUrl) ? string.IsNullOrEmpty(launcherSha) || Hasher.IsSha256Hex(launcherSha) : Hasher.IsSha256Hex(launcherSha));
+            // The launcher block names the page where players get the latest setup; the old url/sha256/size members are gone.
+            LauncherUpdateInfo launcher = ParseSample().Launcher;
+            Assert.AreEqual("https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/releases/latest", launcher.DownloadPage);
+            Assert.IsTrue(LauncherUpdateInfo.IsValidDownloadPage(launcher.DownloadPage));
+            Assert.IsNull(root["launcher"]["url"], "the sample must not advertise the obsolete self-update fields");
         }
 
         [TestMethod]

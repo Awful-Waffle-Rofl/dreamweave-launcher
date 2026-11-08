@@ -80,7 +80,7 @@ namespace DreamWeave.Launcher.Tests.App
         private static LauncherManifest ManifestWithOptionalUpdate()
         {
             LauncherManifest m = AppFixtures.Sample();
-            m.Launcher = new LauncherUpdateInfo { Version = "1.1.0", MinVersion = "1.0.0", Url = "https://example.test/x.exe", Sha256 = new string('A', 64), Size = 10 };
+            m.Launcher = new LauncherUpdateInfo { Version = "1.1.0", MinVersion = "1.0.0", DownloadPage = "https://example.test/download" };
             return m;
         }
 

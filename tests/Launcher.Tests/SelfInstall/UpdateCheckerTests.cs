@@ -90,17 +90,13 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
     [TestClass]
     public class UpdateCheckerTests
     {
-        private static readonly string Sha = new string('a', 64);
-
         private static LauncherUpdateInfo Info(string version, string min = null, bool download = true)
         {
             return new LauncherUpdateInfo
             {
                 Version = version,
                 MinVersion = min,
-                Url = download ? "https://example.test/DreamWeaveLauncher.exe" : string.Empty,
-                Sha256 = download ? Sha : string.Empty,
-                Size = download ? 1234 : 0,
+                DownloadPage = download ? "https://example.test/download" : string.Empty,
             };
         }
 
@@ -166,19 +162,41 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         }
 
         [TestMethod]
-        public void MalformedDownloadFields_AreNotInstallable()
+        [DataRow("not a url")]
+        [DataRow("http://example.test/download")]
+        [DataRow("ftp://example.test/download")]
+        [DataRow("file:///C:/Windows/System32/calc.exe")]
+        [DataRow("/relative/path")]
+        [DataRow(" https://example.test/download")]
+        [DataRow("   ")]
+        public void InvalidDownloadPage_IsNotOffered(string page)
         {
             LauncherUpdateInfo bad = Info("2.0.0");
-            bad.Sha256 = "nothex";
+            bad.DownloadPage = page;
             Assert.AreEqual(UpdateStatus.UpToDate, Check(bad, "1.0.0").Status);
+            Assert.IsNull(Check(bad, "1.0.0").DownloadPage);
 
-            bad = Info("2.0.0");
-            bad.Size = 0;
-            Assert.AreEqual(UpdateStatus.UpToDate, Check(bad, "1.0.0").Status);
+            bad = Info("2.0.0", "2.0.0");
+            bad.DownloadPage = page;
+            Assert.AreEqual(UpdateStatus.MandatoryUnavailable, Check(bad, "1.0.0").Status);
+        }
 
-            bad = Info("2.0.0");
-            bad.Url = "not a url";
-            Assert.AreEqual(UpdateStatus.UpToDate, Check(bad, "1.0.0").Status);
+        [TestMethod]
+        public void ObsoleteDownloadFields_AreIgnored()
+        {
+            LauncherUpdateInfo legacy = Info("2.0.0", download: false);
+            legacy.Url = "https://example.test/DreamWeaveLauncher.exe";
+            legacy.Sha256 = new string('a', 64);
+            legacy.Size = 1234;
+            Assert.AreEqual(UpdateStatus.UpToDate, Check(legacy, "1.0.0").Status, "a legacy url/sha256/size without a downloadPage offers nothing");
+        }
+
+        [TestMethod]
+        public void OfferedUpdate_CarriesTheDownloadPage()
+        {
+            Assert.AreEqual("https://example.test/download", Check(Info("2.0.0"), "1.0.0").DownloadPage);
+            Assert.AreEqual("https://example.test/download", Check(Info("2.0.0", "2.0.0"), "1.0.0").DownloadPage);
+            Assert.IsNull(Check(Info("1.0.0"), "1.0.0").DownloadPage);
         }
     }
 }

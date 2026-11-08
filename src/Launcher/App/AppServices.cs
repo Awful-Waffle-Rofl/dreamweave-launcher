@@ -14,7 +14,7 @@ using DreamWeave.Launcher.Core.Telemetry;
 namespace DreamWeave.Launcher.App
 {
     /// <summary>
-    /// The composition root of a normal (or <c>--updated</c>) run: exactly one manifest provider,
+    /// The composition root of a normal run: exactly one manifest provider,
     /// state store, telemetry client, download service and credential store per process. Built once in
     /// <c>Program.Main</c> after the single-instance mutex is held, then shared by every screen.
     /// </summary>

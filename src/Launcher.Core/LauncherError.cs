@@ -5,7 +5,7 @@ namespace DreamWeave.Launcher.Core
     /// member is also the telemetry error code, so values are explicit and STABLE: never
     /// renumber or reuse a value; add new members with new numbers. Values are grouped by
     /// decade (1x network, 2x integrity, 3x manifest, 4x local disk, 5x install, 6x patch,
-    /// 7x launch, 9x control flow, 10x launcher self-install and self-update).
+    /// 7x launch, 9x control flow, 10x launcher update and cleanup).
     /// </summary>
     public enum LauncherError
     {
@@ -107,18 +107,19 @@ namespace DreamWeave.Launcher.Core
         /// <summary>An unclassified failure.</summary>
         Unknown = 99,
 
-        // 10x: launcher self-update and cleanup (self-install is retired).
+        // 10x: launcher update and cleanup (self-install and self-update are retired; the Update* codes below are never emitted
+        // any more, but stay reserved: never reuse these numbers for a new meaning).
 
-        /// <summary>A launcher update's Authenticode signature did not verify, or its signer is not the one the manifest names.</summary>
+        /// <summary>RETIRED, never emitted: a launcher update's Authenticode signature did not verify, or its signer is not the one the manifest names.</summary>
         UpdateSignatureInvalid = 100,
 
-        /// <summary>The offered launcher update is not newer than the running launcher (a downgrade or the same version), so it was refused.</summary>
+        /// <summary>RETIRED, never emitted: the offered launcher update is not newer than the running launcher (a downgrade or the same version), so it was refused.</summary>
         UpdateNotNewer = 101,
 
-        /// <summary>Swapping in a launcher update failed; the previous launcher was restored and is unchanged.</summary>
+        /// <summary>RETIRED, never emitted: swapping in a launcher update failed; the previous launcher was restored and is unchanged.</summary>
         UpdateSwapFailed = 102,
 
-        /// <summary>Swapping in a launcher update failed AND restoring the previous launcher failed; the install needs repair (re-download the launcher).</summary>
+        /// <summary>RETIRED, never emitted: swapping in a launcher update failed AND restoring the previous launcher failed; the install needs repair (re-download the launcher).</summary>
         UpdateRollbackFailed = 103,
 
         /// <summary>A version string is not a valid semantic version.</summary>

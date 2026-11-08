@@ -17,7 +17,7 @@ namespace DreamWeave.Launcher.Core.Update
 
         /// <summary>
         /// The running launcher is below <c>minVersion</c> but the manifest offers nothing it may install
-        /// (no download, or only a version that is not newer). Block downloads and tell the player to
+        /// (no valid download page, or only a version that is not newer). Block downloads and tell the player to
         /// get the launcher again from the website.
         /// </summary>
         MandatoryUnavailable = 3,
@@ -26,13 +26,14 @@ namespace DreamWeave.Launcher.Core.Update
     /// <summary>The result of <see cref="UpdateChecker.Check"/>.</summary>
     public sealed class UpdateCheckResult
     {
-        internal UpdateCheckResult(UpdateStatus status, SemVersion running, SemVersion available, SemVersion minimum, bool downgradeOffered)
+        internal UpdateCheckResult(UpdateStatus status, SemVersion running, SemVersion available, SemVersion minimum, bool downgradeOffered, string downloadPage)
         {
             Status = status;
             Running = running;
             Available = available;
             Minimum = minimum;
             DowngradeOffered = downgradeOffered;
+            DownloadPage = downloadPage;
         }
 
         /// <summary>The decision.</summary>
@@ -50,15 +51,19 @@ namespace DreamWeave.Launcher.Core.Update
         /// <summary>True when the manifest offered a LOWER version than the one running (refused; worth logging).</summary>
         public bool DowngradeOffered { get; }
 
+        /// <summary>The validated https download page when an update is offered (Optional or Mandatory), otherwise null.</summary>
+        public string DownloadPage { get; }
+
         /// <summary>True for <see cref="UpdateStatus.Optional"/> and <see cref="UpdateStatus.Mandatory"/>.</summary>
         public bool CanUpdate => Status == UpdateStatus.Optional || Status == UpdateStatus.Mandatory;
     }
 
     /// <summary>
-    /// Decides whether the launcher should update itself, from the signed manifest's <c>launcher</c>
+    /// Decides whether the launcher should offer an update, from the signed manifest's <c>launcher</c>
     /// block and the running version. Never offers a downgrade: an update is installable only when
     /// <c>version</c> is strictly newer than the running version (semver precedence, so
-    /// <c>1.2.0-beta.1</c> &lt; <c>1.2.0</c>) and a download (url, sha256, size) is published.
+    /// <c>1.2.0-beta.1</c> &lt; <c>1.2.0</c>) and a valid https <c>downloadPage</c> is published. The launcher never installs
+    /// the update itself; the player gets it from that page in the browser.
     /// </summary>
     /// <remarks>
     /// The floor is the RUNNING version, not <see cref="State.LauncherState.LauncherVersionSeen"/>:
@@ -93,7 +98,7 @@ namespace DreamWeave.Launcher.Core.Update
             }
 
             bool downgrade = available != null && available < runningVersion;
-            bool installable = available != null && available > runningVersion && HasDownload(info);
+            bool installable = available != null && available > runningVersion && HasDownloadPage(info);
             bool mandatory = minimum != null && minimum > runningVersion;
 
             UpdateStatus status;
@@ -106,17 +111,13 @@ namespace DreamWeave.Launcher.Core.Update
                 status = installable ? UpdateStatus.Optional : UpdateStatus.UpToDate;
             }
 
-            return new UpdateCheckResult(status, runningVersion, available, minimum, downgrade);
+            return new UpdateCheckResult(status, runningVersion, available, minimum, downgrade, installable ? info.DownloadPage : null);
         }
 
-        /// <summary>True when the block names a download the updater can fetch and verify.</summary>
-        internal static bool HasDownload(LauncherUpdateInfo info)
+        /// <summary>True when the block names a download page the player can be sent to (absolute https).</summary>
+        internal static bool HasDownloadPage(LauncherUpdateInfo info)
         {
-            return info != null
-                && !string.IsNullOrWhiteSpace(info.Url)
-                && Uri.IsWellFormedUriString(info.Url, UriKind.Absolute)
-                && Hasher.IsSha256Hex(info.Sha256)
-                && info.Size > 0;
+            return info != null && LauncherUpdateInfo.IsValidDownloadPage(info.DownloadPage);
         }
     }
 }

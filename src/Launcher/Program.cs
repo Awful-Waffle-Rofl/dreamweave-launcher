@@ -107,18 +107,6 @@ namespace DreamWeave.Launcher
         {
             AppPaths paths = AppPaths.CreateDefault();
             string running = ExePaths.Running();
-            var fs = new SelfFileSystem();
-
-            if (parsed.Mode == StartupMode.Updated)
-            {
-                // The previous exe has released the mutex (we hold it now); remove its .old copy.
-                SelfUpdater.CompleteUpdate(running, fs, TimeSpan.FromSeconds(10));
-            }
-            else
-            {
-                // Best effort: sweep a stale .old left by an earlier update.
-                SelfUpdater.CompleteUpdate(running, fs, TimeSpan.Zero);
-            }
 
             AppServices services;
             try

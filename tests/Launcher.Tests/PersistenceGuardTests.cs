@@ -13,13 +13,18 @@ namespace DreamWeave.Launcher.Tests
     [TestClass]
     public class PersistenceGuardTests
     {
-        // NOTE: "CreateHeldForMove" is deliberately NOT banned yet. Self-update (SelfUpdater / ExeSwap) still
-        // uses it. The follow-up PR that deletes SelfUpdater and ExeSwap adds it back to this list.
+        // The launcher also must not replace its own exe: the self-update machinery (SelfUpdater, ExeSwap, the
+        // "--updated" relaunch switch, and the held-for-move file handle they needed) is gone for good. An update
+        // is a download page opened in the browser.
         private static readonly string[] BannedLiterals =
         {
             "cmd.exe",
             "ping.exe",
             "IShellLinkW",
+            "CreateHeldForMove",
+            "SelfUpdater",
+            "ExeSwap",
+            "\"--updated\"",
         };
 
         // A registry WRITE API anywhere in src/. Reads (OpenSubKey(path, false), OpenSubKey(path), GetValue) are
@@ -62,6 +67,10 @@ namespace DreamWeave.Launcher.Tests
                     "var p = \"cmd.exe\";",
                     "var p = \"ping.exe\";",
                     "interface IShellLinkW { }",
+                    "FileStream s = fs.CreateHeldForMove(path);",
+                    "var u = new SelfUpdater(paths);",
+                    "ExeSwap.Swap(fs, exe);",
+                    "var p = new ProcessStartInfo(exe, \"--updated\");",
                     "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; key.SetValue(\"a\", \"b\");",
                     "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; Registry.CurrentUser.CreateSubKey(k);",
                     "var k = @\"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\X\"; Registry.CurrentUser.OpenSubKey(k, true);",

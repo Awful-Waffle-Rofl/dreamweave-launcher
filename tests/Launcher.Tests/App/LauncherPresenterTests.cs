@@ -15,7 +15,7 @@ namespace DreamWeave.Launcher.Tests.App
         private static LauncherManifest WithLauncherBlock(string version, string minVersion)
         {
             LauncherManifest m = AppFixtures.Sample();
-            m.Launcher = new LauncherUpdateInfo { Version = version, MinVersion = minVersion, Url = "https://example.test/DreamWeaveLauncher.exe", Sha256 = new string('A', 64), Size = 10 };
+            m.Launcher = new LauncherUpdateInfo { Version = version, MinVersion = minVersion, DownloadPage = "https://example.test/download" };
             return m;
         }
 
@@ -46,7 +46,7 @@ namespace DreamWeave.Launcher.Tests.App
         public void MandatoryButUnavailable_AlsoBlocksPlay()
         {
             LauncherManifest m = WithLauncherBlock("2.0.0", "2.0.0");
-            m.Launcher.Url = string.Empty;
+            m.Launcher.DownloadPage = string.Empty;
             LauncherPresenter p = Presenter(m, new FakeStarter(), new MemoryCredentials());
             p.Update = UpdateGate.Evaluate(m, SemVersion.Parse("1.0.0", "running"));
             Assert.AreEqual(UpdateStatus.MandatoryUnavailable, p.Update.Status);

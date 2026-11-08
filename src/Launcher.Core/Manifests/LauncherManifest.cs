@@ -7,7 +7,7 @@ namespace DreamWeave.Launcher.Core.Manifests
 {
     /// <summary>
     /// Schema-1 launcher manifest: what to download, how to verify it, how to launch, and the
-    /// self-update pointer. Only ever produced by <see cref="ManifestVerifier"/> from bytes whose
+    /// launcher update pointer. Only ever produced by <see cref="ManifestVerifier"/> from bytes whose
     /// signature has already verified. Unknown JSON members are ignored, so new optional fields
     /// can be added without a schema bump; bump <see cref="Schema"/> only for a change an older
     /// launcher must NOT act on (it then blocks downloads and launches from its cache).
@@ -15,7 +15,7 @@ namespace DreamWeave.Launcher.Core.Manifests
     /// <remarks>
     /// Compatibility contract (see Docs/manifest-compat.md): <c>manifest.json</c> stays schema 1
     /// and changes only additively for the life of every v1 launcher, because a v1 launcher that
-    /// sees any other schema can no longer read the self-update pointer. A breaking schema ships
+    /// sees any other schema can no longer read the launcher update pointer. A breaking schema ships
     /// as a NEW file (<c>manifest.v2.json</c> plus its <c>.sig</c>) that newer launchers try first,
     /// falling back to <c>manifest.json</c>; the schema-1 file keeps pointing old launchers at a
     /// release that understands v2.
@@ -46,7 +46,7 @@ namespace DreamWeave.Launcher.Core.Manifests
         [JsonProperty("launch")]
         public LaunchInfo Launch { get; set; }
 
-        /// <summary>Self-update pointer for the launcher exe.</summary>
+        /// <summary>Update pointer for the launcher exe: versions and the download page.</summary>
         [JsonProperty("launcher")]
         public LauncherUpdateInfo Launcher { get; set; }
 
@@ -141,7 +141,11 @@ namespace DreamWeave.Launcher.Core.Manifests
         public string ExtraArgs { get; set; } = string.Empty;
     }
 
-    /// <summary>Self-update pointer for the launcher exe itself.</summary>
+    /// <summary>
+    /// What the manifest says about the launcher exe itself: the latest and the minimum version, and the web
+    /// page where players get the latest setup. The launcher never downloads or replaces itself; an update
+    /// means opening <see cref="DownloadPage"/> in the browser.
+    /// </summary>
     [JsonObject(MemberSerialization.OptIn)]
     public sealed class LauncherUpdateInfo
     {
@@ -153,23 +157,44 @@ namespace DreamWeave.Launcher.Core.Manifests
         [JsonProperty("minVersion")]
         public string MinVersion { get; set; }
 
-        /// <summary>Download URL of the latest exe; empty when no update is published.</summary>
+        /// <summary>
+        /// The web page where players get the latest setup. Optional; when it is present it must be an
+        /// absolute <c>https</c> URL (checked when the manifest is loaded and again before it is opened).
+        /// Without a valid page no update is offered.
+        /// </summary>
+        [JsonProperty("downloadPage")]
+        public string DownloadPage { get; set; }
+
+        /// <summary>Obsolete: the launcher no longer downloads itself. Still parsed so older and newer manifests load; nothing reads it.</summary>
         [JsonProperty("url")]
         public string Url { get; set; }
 
-        /// <summary>SHA-256 of the latest exe (64 hex); empty when <see cref="Url"/> is empty.</summary>
+        /// <summary>Obsolete: see <see cref="Url"/>. Still parsed; nothing reads it.</summary>
         [JsonProperty("sha256")]
         public string Sha256 { get; set; }
 
-        /// <summary>Length of the latest exe in bytes.</summary>
+        /// <summary>Obsolete: see <see cref="Url"/>. Still parsed; nothing reads it.</summary>
         [JsonProperty("size")]
         public long Size { get; set; }
 
-        /// <summary>Expected Authenticode signer subject if the exe is code-signed, otherwise null (hash only).</summary>
+        /// <summary>Obsolete: see <see cref="Url"/>. Still parsed; nothing reads it.</summary>
         [JsonProperty("authenticodeSubject")]
         public string AuthenticodeSubject { get; set; }
-    }
 
+        /// <summary>
+        /// True when <paramref name="url"/> is an absolute <c>https</c> URL with a host and no surrounding
+        /// whitespace. No host allowlist: the manifest is signature-verified.
+        /// </summary>
+        public static bool IsValidDownloadPage(string url)
+        {
+            Uri uri;
+            return !string.IsNullOrEmpty(url)
+                && url == url.Trim()
+                && Uri.TryCreate(url, UriKind.Absolute, out uri)
+                && uri.Scheme == Uri.UriSchemeHttps
+                && !string.IsNullOrEmpty(uri.Host);
+        }
+    }
     /// <summary>
     /// One installable component. <see cref="Kind"/> selects which fields apply:
     /// <see cref="ComponentKinds.Installer"/> uses Transport/Url/Size/Sha256/Elevate/Args/SatisfiedWhen;

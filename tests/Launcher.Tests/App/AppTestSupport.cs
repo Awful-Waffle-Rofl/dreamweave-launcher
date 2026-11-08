@@ -78,7 +78,7 @@ namespace DreamWeave.Launcher.Tests.App
                 Serial = 1,
                 Server = new ServerInfo { Name = "DreamWeave", Host = "play.example.test", Port = 9000 },
                 Launch = new LaunchInfo(),
-                Launcher = new LauncherUpdateInfo { Version = "1.0.0", MinVersion = "1.0.0", Url = string.Empty, Sha256 = string.Empty },
+                Launcher = new LauncherUpdateInfo { Version = "1.0.0", MinVersion = "1.0.0", DownloadPage = string.Empty },
                 Components = new List<ManifestComponent>(components),
             };
         }
@@ -150,9 +150,16 @@ namespace DreamWeave.Launcher.Tests.App
 
         public System.Exception Throw { get; set; }
 
+        /// <summary>When set, Start records the start info and then throws it (a shell that cannot open the URL).</summary>
+        public System.Exception StartThrow { get; set; }
+
         public void Start(ProcessStartInfo startInfo)
         {
             Started.Add(startInfo);
+            if (StartThrow != null)
+            {
+                throw StartThrow;
+            }
         }
 
         public int Run(ProcessStartInfo startInfo)
