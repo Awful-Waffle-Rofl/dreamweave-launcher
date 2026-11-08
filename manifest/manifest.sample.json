@@ -27,9 +27,16 @@
       "required": true,
       "defaultSelected": true,
       "title": "Asheron's Call client",
-      "sourceLabel": "Original Turbine installer, from the Internet Archive (web.archive.org)",
-      "transport": "http",
-      "url": "https://web.archive.org/web/20200102182454id_/http://content.turbine.com/sites/clientdl/ac1/ac1install.exe",
+      "sourceLabel": "Original Turbine installer, from the AC Community Preservation Project (mega.nz)",
+      "transport": "mega",
+      "url": "https://mega.nz/file/S8dSSCxJ#Em2Cezu9fvDAArBIxaz3aeK3i1Mv9GDzUVcFNCocBUQ",
+      "mirrors": [
+        {
+          "transport": "http",
+          "url": "https://web.archive.org/web/20200102182454id_/http://content.turbine.com/sites/clientdl/ac1/ac1install.exe",
+          "sourceLabel": "Original Turbine installer, from the Internet Archive (web.archive.org)"
+        }
+      ],
       "size": 598884909,
       "sha256": "251DE0067F9599A2A566CF7B218B2CB9163292B571BD48050CC6B754F61EEFC7",
       "elevate": true,
@@ -66,7 +73,7 @@
       "id": "palette-leak-fix",
       "kind": "byte-patch",
       "required": false,
-      "defaultSelected": false,
+      "defaultSelected": true,
       "title": "Palette memory leak fix (optional)",
       "sourceLabel": "Two 3-byte changes from github.com/eriknihlen/ac-eor-palette-leak-fix",
       "target": "acclient.exe",

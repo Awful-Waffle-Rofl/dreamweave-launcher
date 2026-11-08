@@ -107,7 +107,7 @@ namespace DreamWeave.Launcher.App
     /// is allowed. Rules:
     /// <list type="bullet">
     /// <item>Satisfied rows are Done: checked, greyed, no work.</item>
-    /// <item>Optional components start unchecked, whatever the manifest's <c>defaultSelected</c> says.</item>
+    /// <item>Optional components start checked when the manifest says <c>defaultSelected: true</c> (and the row can run), unchecked otherwise.</item>
     /// <item>Required components with work start checked, EXCEPT an installer that is NeedsRepair only
     /// because files that a zip overlay in the same manifest replaces differ (acclient.exe, C1): the
     /// 600 MB installer is not auto-checked, because the overlay fixes that file and players swap exes.</item>
@@ -252,7 +252,9 @@ namespace DreamWeave.Launcher.App
             bool initiallyChecked;
             if (!c.Required)
             {
-                initiallyChecked = false;
+                // The manifest's defaultSelected decides an optional component's starting state
+                // (owner ruling 2026-11-07), but never for a row that cannot run.
+                initiallyChecked = c.DefaultSelected && rs != RowStatus.Unknown && rs != RowStatus.NotApplicable;
             }
             else if (covered || rs == RowStatus.Unknown || rs == RowStatus.NotApplicable)
             {

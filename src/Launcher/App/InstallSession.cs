@@ -20,6 +20,9 @@ namespace DreamWeave.Launcher.App
         StepStarted,
         StepProgress,
         StepStatus,
+
+        /// <summary>A download fell back to another source; <see cref="InstallEvent.Text"/> is the player-facing line.</summary>
+        SourceChanged,
         StepDone,
         StepSkipped,
         HandoffStarted,
@@ -571,7 +574,7 @@ namespace DreamWeave.Launcher.App
                 }
             }
 
-            DownloadResult file = await DownloadAsync(c, c.Id + ".exe", progress, ct).ConfigureAwait(false);
+            DownloadResult file = await DownloadAsync(c, c.Id + ".exe", progress, events, ct).ConfigureAwait(false);
 
             // InstallerRunner.Start re-hashes the staged installer through a deny-write handle and keeps
             // that handle open until the (elevated) process exists, so the bytes that run are the bytes verified.
@@ -684,7 +687,7 @@ namespace DreamWeave.Launcher.App
         private async Task<bool> RunOverlayAsync(ManifestComponent c, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
         {
             string folder = RequireFolder();
-            DownloadResult file = await DownloadAsync(c, c.Id + ".zip", progress, ct).ConfigureAwait(false);
+            DownloadResult file = await DownloadAsync(c, c.Id + ".zip", progress, events, ct).ConfigureAwait(false);
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Installing));
             var installer = new ZipOverlayInstaller(_deps.Paths, _deps.Disk);
             EnterCritical(c.Id, events, ct);
@@ -767,9 +770,13 @@ namespace DreamWeave.Launcher.App
             }
         }
 
-        private Task<DownloadResult> DownloadAsync(ManifestComponent c, string fileName, IProgress<ProgressReport> progress, CancellationToken ct)
+        private Task<DownloadResult> DownloadAsync(ManifestComponent c, string fileName, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
         {
             DownloadRequest request = DownloadRequest.FromComponent(c, _deps.Paths, fileName);
+            request.OnFallback = label => events.Report(new InstallEvent(
+                InstallEventKind.SourceChanged,
+                c.Id,
+                text: string.Format(System.Globalization.CultureInfo.InvariantCulture, UiText.FallbackSourceFormat, string.IsNullOrWhiteSpace(label) ? c.Title ?? c.Id : label)));
             return _deps.Downloads.DownloadAsync(request, progress, ct);
         }
 

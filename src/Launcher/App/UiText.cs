@@ -68,6 +68,9 @@ namespace DreamWeave.Launcher.App
         public const string Checking = "Checking your game files...";
         public const string ComponentsTitle = "What to install";
         public const string DownloadedFromFormat = "Downloaded from: {0}";
+
+        /// <summary>Shown on the progress screen when a download falls back to a mirror ({0} = the mirror's source label).</summary>
+        public const string FallbackSourceFormat = "Trying another source: {0}";
         public const string StatusDone = "Done";
         public const string StatusNeedsRepair = "Needs repair";
         public const string StatusWillDownload = "Will download";

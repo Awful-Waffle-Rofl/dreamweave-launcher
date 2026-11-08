@@ -60,7 +60,7 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <inheritdoc />
         public async Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
         {
-            IDownloadTransport transport = Validate(request);
+            Validate(request);
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(request.DestinationPath)));
@@ -70,7 +70,75 @@ namespace DreamWeave.Launcher.Core.Downloads
                 {
                     return existing;
                 }
+            }
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new LauncherException(LauncherError.Cancelled, "Cancelled.", ex);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                throw LauncherException.FromIo(ex, "preparing the download");
+            }
 
+            // The primary first, then each alternate in manifest order. Every source must produce the
+            // same size and SHA-256; a different hash from a mirror is a failure, never accepted.
+            LauncherException last = null;
+            int total = 1 + request.Alternates.Count;
+            for (int i = 0; i < total; i++)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw new LauncherException(LauncherError.Cancelled, "Cancelled.");
+                }
+
+                DownloadRequest attempt = request;
+                if (i > 0)
+                {
+                    DownloadSource source = request.Alternates[i - 1];
+                    attempt = request.ForSource(source);
+
+                    // A partial file belongs to the source that wrote it: never resume it from another.
+                    DiscardPart(request);
+                    request.OnFallback?.Invoke(source.Label);
+                }
+
+                try
+                {
+                    return await DownloadFromSourceAsync(attempt, progress, cancellationToken).ConfigureAwait(false);
+                }
+                catch (LauncherException ex) when (ex.Code != LauncherError.Cancelled && i < total - 1 && CanFallBack(ex.Code))
+                {
+                    last = ex;
+                }
+            }
+
+            // Not reached while the last source throws its own error; kept as a safety net.
+            throw last ?? new LauncherException(LauncherError.Unknown, "No download source was available.");
+        }
+
+        /// <summary>Failures another source could cure. Disk, permission and cancellation problems are not among them.</summary>
+        private static bool CanFallBack(LauncherError code)
+        {
+            switch (code)
+            {
+                case LauncherError.NetworkUnavailable:
+                case LauncherError.SourceHttpError:
+                case LauncherError.SourceQuotaExceeded:
+                case LauncherError.ResponseTooLarge:
+                case LauncherError.HashMismatch:
+                case LauncherError.SizeMismatch:
+                case LauncherError.ManifestInvalid:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private async Task<DownloadResult> DownloadFromSourceAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+        {
+            IDownloadTransport transport = Validate(request);
+            try
+            {
                 long remaining = request.ExpectedSize - transport.GetResumableBytes(request);
                 long free = _disk.GetFreeBytes(_stagingDir);
                 if (free < remaining + FreeSpaceMargin)

@@ -26,6 +26,20 @@ changing its shape can strand players. These rules keep every released launcher 
    `manifest/*.json` and `*.json.sig` as `-text` so git never rewrites line endings. The
    `manifest` branch needs the same `.gitattributes` entries.
 
+## Optional fields added within schema 1
+
+These were added under rule 2 and are safe to publish: a launcher that predates one ignores it.
+
+- **`mirrors`** (on a component): fallback download sources, tried in order after the primary
+  `transport`/`url`/`sourceLabel`. Each entry is `{ "transport": "mega" | "http", "url": "...",
+  "sourceLabel": "..." }`. `http` needs an absolute `https` URL; `mega` needs a public file link
+  (`https://mega.nz/file/<id>#<key>`). Every source must serve the bytes described by the
+  component's single `size` and `sha256`: a mirror never carries its own hash, and a download whose
+  hash differs is deleted and the next source is tried. An older launcher ignores `mirrors` and
+  uses the primary only, so keep the primary the source most players can reach.
+- **`defaultSelected`** (already present) now also sets the starting checkbox of an optional
+  component: `true` starts checked, `false` or absent unchecked. Required components are unchanged.
+
 ## Publishing checklist
 
 - Bump `serial`, keep `schema` at 1, and update `issued`.

@@ -304,6 +304,7 @@ namespace DreamWeave.Launcher.UI
             }
 
             Label current = UiKit.Add(stack, UiKit.Text(string.Empty));
+            Label sourceNote = UiKit.Add(stack, UiKit.Text(string.Empty));
             var currentBar = UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Blocks, 1000));
             var totalBar = UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Blocks, 1000));
 
@@ -369,6 +370,7 @@ namespace DreamWeave.Launcher.UI
                         }
 
                         current.Text = string.Empty;
+                        sourceNote.Text = string.Empty;
                         currentBar.Value = 0;
                         break;
                     case InstallEventKind.StepProgress:
@@ -376,6 +378,9 @@ namespace DreamWeave.Launcher.UI
                         string phase = ev.Report.Message == Core.Downloads.TransferProgress.DownloadingMessage ? string.Empty : UiText.Verifying + " ";
                         current.Text = phase + ProgressText.Describe(ev.Report);
                         currentBar.Value = (int)Math.Round((ev.Report.Fraction ?? 0) * 1000);
+                        break;
+                    case InstallEventKind.SourceChanged:
+                        sourceNote.Text = ev.Text;
                         break;
                     case InstallEventKind.StepStatus:
                         current.Text = ev.Text;

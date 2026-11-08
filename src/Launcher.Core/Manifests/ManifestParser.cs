@@ -91,6 +91,7 @@ namespace DreamWeave.Launcher.Core.Manifests
                 c.SatisfiedWhen = (c.SatisfiedWhen ?? new List<SatisfiedWhenRule>()).Where(r => r != null).ToList();
                 c.Files = (c.Files ?? new List<ManifestFile>()).Where(f => f != null).ToList();
                 c.Patches = (c.Patches ?? new List<BytePatch>()).Where(p => p != null).ToList();
+                c.Mirrors = (c.Mirrors ?? new List<ManifestMirror>()).Where(s => s != null).ToList();
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
                 {
                     rule.Sha256 = rule.Sha256 ?? new List<string>();
@@ -168,6 +169,11 @@ namespace DreamWeave.Launcher.Core.Manifests
                         }
 
                         break;
+                }
+
+                for (int i = 0; i < c.Mirrors.Count; i++)
+                {
+                    RequireSource(c.Mirrors[i].Transport, c.Mirrors[i].Url, where + " mirror " + (i + 1));
                 }
 
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
@@ -271,6 +277,36 @@ namespace DreamWeave.Launcher.Core.Manifests
             catch (Exception ex) when (ex is OverflowException || ex is InvalidCastException || ex is FormatException)
             {
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// A download source: transport "http" needs an absolute https URL; "mega" needs a public file
+        /// link (<c>https://mega.nz/file/&lt;id&gt;#&lt;key&gt;</c>). Anything else is rejected.
+        /// </summary>
+        internal static void RequireSource(string transport, string url, string what)
+        {
+            Uri uri;
+            if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out uri) || uri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(uri.UserInfo))
+            {
+                throw Invalid(what + " needs an absolute https url.");
+            }
+
+            switch (transport)
+            {
+                case Transports.Http:
+                    return;
+                case Transports.Mega:
+                    bool hostOk = string.Equals(uri.Host, "mega.nz", StringComparison.OrdinalIgnoreCase) || string.Equals(uri.Host, "mega.co.nz", StringComparison.OrdinalIgnoreCase);
+                    string[] segments = uri.AbsolutePath.Trim('/').Split('/');
+                    if (!hostOk || segments.Length != 2 || segments[0] != "file" || segments[1].Length == 0 || uri.Fragment.Length < 2)
+                    {
+                        throw Invalid(what + " is not a mega.nz public file link.");
+                    }
+
+                    return;
+                default:
+                    throw Invalid(what + " has unknown transport '" + transport + "'.");
             }
         }
 

@@ -70,13 +70,13 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
-        public void Sample_PaletteFix_IsOptionalDefaultOff_AtVerifiedFileOffsets()
+        public void Sample_PaletteFix_IsOptionalDefaultOn_AtVerifiedFileOffsets()
         {
             ManifestComponent fix = ParseSample().Components.Single(c => c.Id == "palette-leak-fix");
 
             Assert.AreEqual(ComponentKinds.BytePatch, fix.Kind);
             Assert.IsFalse(fix.Required);
-            Assert.IsFalse(fix.DefaultSelected);
+            Assert.IsTrue(fix.DefaultSelected, "owner ruling 2026-11-07: the palette fix defaults to checked");
             Assert.AreEqual(2, fix.Patches.Count);
             Assert.AreEqual(0x13effeL, fix.Patches[0].Offset);
             Assert.AreEqual(0x13f19cL, fix.Patches[1].Offset);

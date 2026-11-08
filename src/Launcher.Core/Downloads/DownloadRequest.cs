@@ -1,9 +1,31 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using DreamWeave.Launcher.Core.Manifests;
 
 namespace DreamWeave.Launcher.Core.Downloads
 {
+    /// <summary>One place the bytes can be fetched from.</summary>
+    public sealed class DownloadSource
+    {
+        /// <summary>Creates a source.</summary>
+        public DownloadSource(string transport, Uri url, string label)
+        {
+            Transport = transport;
+            Url = url;
+            Label = label;
+        }
+
+        /// <summary>A <see cref="Transports"/> value.</summary>
+        public string Transport { get; }
+
+        /// <summary>Absolute source URL.</summary>
+        public Uri Url { get; }
+
+        /// <summary>Player-facing description, or null.</summary>
+        public string Label { get; }
+    }
+
     /// <summary>
     /// One file to download and verify. Every field comes from the signed manifest except
     /// <see cref="DestinationPath"/>, which the caller chooses under <see cref="AppPaths.StagingDir"/>.
@@ -25,6 +47,21 @@ namespace DreamWeave.Launcher.Core.Downloads
             ExpectedSize = expectedSize;
             ExpectedSha256 = expectedSha256;
             DestinationPath = destinationPath;
+        }
+
+        /// <summary>
+        /// Fallback sources tried in order after this request's own transport/URL fails in a way another
+        /// source could fix. Each must yield the same <see cref="ExpectedSize"/> and <see cref="ExpectedSha256"/>.
+        /// </summary>
+        public IReadOnlyList<DownloadSource> Alternates { get; set; } = new DownloadSource[0];
+
+        /// <summary>Called with the player-facing label of an alternate source just before it is tried (may run on a pool thread).</summary>
+        public Action<string> OnFallback { get; set; }
+
+        /// <summary>The same file fetched from one specific source: same size, hash and destination, no alternates.</summary>
+        public DownloadRequest ForSource(DownloadSource source)
+        {
+            return new DownloadRequest(StepId, source.Transport, source.Url, ExpectedSize, ExpectedSha256, DestinationPath);
         }
 
         /// <summary>Progress step id stamped on every report for this download.</summary>
@@ -79,7 +116,19 @@ namespace DreamWeave.Launcher.Core.Downloads
                 throw new LauncherException(LauncherError.ManifestInvalid, "The download address for '" + component.Id + "' is not valid.");
             }
 
-            return new DownloadRequest(component.Id, component.Transport, url, component.Size, component.Sha256, Path.Combine(ComponentFolder(paths.StagingDir, component.Id), fileName));
+            var request = new DownloadRequest(component.Id, component.Transport, url, component.Size, component.Sha256, Path.Combine(ComponentFolder(paths.StagingDir, component.Id), fileName));
+            var alternates = new List<DownloadSource>();
+            foreach (ManifestMirror m in component.Mirrors ?? new List<ManifestMirror>())
+            {
+                Uri mirrorUrl;
+                if (m != null && Uri.TryCreate(m.Url, UriKind.Absolute, out mirrorUrl))
+                {
+                    alternates.Add(new DownloadSource(m.Transport, mirrorUrl, m.SourceLabel));
+                }
+            }
+
+            request.Alternates = alternates;
+            return request;
         }
 
         /// <summary>

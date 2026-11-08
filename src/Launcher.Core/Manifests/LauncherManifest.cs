@@ -212,6 +212,14 @@ namespace DreamWeave.Launcher.Core.Manifests
         [JsonProperty("url")]
         public string Url { get; set; }
 
+        /// <summary>
+        /// Fallback download sources, tried in order after the primary (<see cref="Transport"/>/<see cref="Url"/>).
+        /// Every source must yield bytes matching this component's single <see cref="Size"/> and <see cref="Sha256"/>.
+        /// Optional and additive: launchers that predate the field ignore it.
+        /// </summary>
+        [JsonProperty("mirrors")]
+        public List<ManifestMirror> Mirrors { get; set; } = new List<ManifestMirror>();
+
         /// <summary>Length of the downloaded file in bytes.</summary>
         [JsonProperty("size")]
         public long Size { get; set; }
@@ -346,6 +354,23 @@ namespace DreamWeave.Launcher.Core.Manifests
 
         /// <summary>Every kind this launcher can act on.</summary>
         public static readonly IReadOnlyList<string> Known = new[] { Installer, ZipOverlay, BytePatch };
+    }
+
+    /// <summary>One fallback download source of a component (see <see cref="ManifestComponent.Mirrors"/>).</summary>
+    [JsonObject(MemberSerialization.OptIn)]
+    public sealed class ManifestMirror
+    {
+        /// <summary>Download transport (see <see cref="Transports"/>).</summary>
+        [JsonProperty("transport")]
+        public string Transport { get; set; }
+
+        /// <summary>Download URL for the transport.</summary>
+        [JsonProperty("url")]
+        public string Url { get; set; }
+
+        /// <summary>Player-facing description of where the bytes come from; shown when the launcher falls back to this source.</summary>
+        [JsonProperty("sourceLabel")]
+        public string SourceLabel { get; set; }
     }
 
     /// <summary>Known values of <see cref="ManifestComponent.Transport"/>.</summary>
