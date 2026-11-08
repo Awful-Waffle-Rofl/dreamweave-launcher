@@ -173,9 +173,7 @@ begin
   DataDirLower := Lowercase(RemoveBackslash(DataDirShown));
   if (Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1) then
   begin
-    // DRAFT: player-facing wording, pending orchestrator review.
-    Result := 'Setup cannot install into ' + DataDirShown + '. The launcher keeps its own data there, and that folder would be erased when the launcher is uninstalled.' + #13#10 + #13#10 +
-      'Run setup again without choosing that folder.';
+    Result := 'Setup cannot install into ' + DataDirShown + '. Run setup again without choosing that folder.';
     Log(Result);
   end;
 end;

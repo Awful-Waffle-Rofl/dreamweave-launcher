@@ -135,6 +135,8 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             StringAssert.Contains(guard, @"(Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1)");
             StringAssert.Contains(guard, "' + DataDirShown + '", "the message must show the original-case path");
             StringAssert.Contains(guard, "Result := '';", "no error unless the folder is under the data folder");
+            StringAssert.Contains(guard, "Result := 'Setup cannot install into ' + DataDirShown + '. Run setup again without choosing that folder.';", "owner-approved wording");
+            Assert.IsFalse(guard.Contains("DRAFT"), "the wording is approved");
             Assert.IsTrue(Regex.IsMatch(guard, @"\bthen\s+begin\s+(//[^\n]*\s+)*Result := '[^']*' \+ DataDirShown"), "the refusal text is the function result");
         }
 
