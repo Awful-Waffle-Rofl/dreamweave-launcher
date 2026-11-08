@@ -143,7 +143,8 @@ namespace DreamWeave.Launcher.App
         public const string UpdateOptionalFormat = "A new launcher version ({0}) is available.";
         public const string UpdateMandatoryFormat = "This launcher must be updated to version {0} before you can play.";
         public const string UpdateUnavailable = "This launcher is too old to play on the server and no update could be found. Download the launcher again from the DreamWeave website.";
-        public const string Updating = "Updating the launcher...";
+        public const string OpeningDownloadPage = "Opening the download page in your browser..."; // DRAFT
+        public const string OpenPageFailedFormat = "Could not open your browser. Visit {0} to download the latest launcher."; // DRAFT
         public const string GameStarted = "Asheron's Call is starting.";
         public const string StartingSlotFormat = "Starting {0}...";
         public const string SecondClientMayBeRefused = "Started, but a second client may be refused. Close the other client to play this one.";

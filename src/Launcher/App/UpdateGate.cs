@@ -8,10 +8,11 @@ namespace DreamWeave.Launcher.App
     /// <summary>What the update check means for the launcher window.</summary>
     internal sealed class UpdateGate
     {
-        private UpdateGate(UpdateStatus status, string availableVersion)
+        private UpdateGate(UpdateStatus status, string availableVersion, string downloadPage = null)
         {
             Status = status;
             AvailableVersion = availableVersion;
+            DownloadPage = downloadPage;
         }
 
         /// <summary>No update information (not checked yet, or nothing to offer).</summary>
@@ -22,6 +23,9 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>The offered version, or null.</summary>
         public string AvailableVersion { get; }
+
+        /// <summary>The validated https page where the player gets the latest setup, or null when no update is offered.</summary>
+        public string DownloadPage { get; }
 
         /// <summary>Play is blocked: the running launcher is below the manifest's minimum.</summary>
         public bool BlocksPlay => Status == UpdateStatus.Mandatory || Status == UpdateStatus.MandatoryUnavailable;
@@ -54,7 +58,7 @@ namespace DreamWeave.Launcher.App
         /// <summary>Wraps a checker result.</summary>
         public static UpdateGate From(UpdateCheckResult result)
         {
-            return result == null ? None : new UpdateGate(result.Status, result.Available?.ToString());
+            return result == null ? None : new UpdateGate(result.Status, result.Available?.ToString(), result.DownloadPage);
         }
 
         /// <summary>

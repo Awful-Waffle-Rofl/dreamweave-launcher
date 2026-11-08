@@ -14,10 +14,7 @@
   "launcher": {
     "version": "1.0.0",
     "minVersion": "1.0.0",
-    "url": "",
-    "sha256": "",
-    "size": 0,
-    "authenticodeSubject": null
+    "downloadPage": "https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/releases/latest"
   },
   "requiredFreeBytes": 4500000000,
   "components": [

@@ -30,7 +30,7 @@ namespace DreamWeave.Launcher.Core.State
         [JsonProperty("installId")]
         public Guid InstallId { get; set; }
 
-        /// <summary>The launcher version that last ran, used to detect a completed self-update.</summary>
+        /// <summary>The launcher version that last ran, used to decide whether the first-time help starts expanded.</summary>
         [JsonProperty("launcherVersionSeen")]
         public string LauncherVersionSeen { get; set; }
 

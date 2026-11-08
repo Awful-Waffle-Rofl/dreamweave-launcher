@@ -19,9 +19,6 @@ namespace DreamWeave.Launcher.App
         /// </summary>
         Cleanup = 2,
 
-        /// <summary><c>--updated</c>: a freshly swapped-in launcher; finish the update, then start normally.</summary>
-        Updated = 3,
-
         /// <summary>A switch this launcher does not know (the retired <c>--elevated-copy</c> included), or <c>--place-verified</c> without exactly its three arguments.</summary>
         Invalid = 4,
     }
@@ -38,7 +35,7 @@ namespace DreamWeave.Launcher.App
         /// </summary>
         public const string HandoverSwitch = "--handover";
 
-        /// <summary>How long a hand-over (<c>--updated</c>, <c>--cleanup --handover</c>) waits for the previous launcher's mutex.</summary>
+        /// <summary>How long a hand-over (<c>--cleanup --handover</c>) waits for the previous launcher's mutex.</summary>
         public static readonly TimeSpan HandoverWait = TimeSpan.FromSeconds(30);
 
         /// <summary>How long <c>--cleanup --silent</c> waits for the previous launcher to release the single-instance mutex.</summary>
@@ -59,7 +56,7 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>
         /// True when the previous launcher is exiting on purpose and will release the mutex:
-        /// <c>--updated</c>, and <c>--cleanup --handover</c>.
+        /// <c>--cleanup --handover</c>.
         /// </summary>
         public bool IsHandover { get; }
 
@@ -91,10 +88,10 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>
         /// Whether this mode takes the single-instance mutex. The elevated helper never does (its parent
-        /// holds it and is waiting for it); <c>--updated</c> and <c>--cleanup</c> wait a bounded time for
+        /// holds it and is waiting for it); <c>--cleanup</c> waits a bounded time for
         /// the previous holder to release it instead of handing over to it.
         /// </summary>
-        public bool UsesMutex => Mode == StartupMode.Normal || Mode == StartupMode.Updated || Mode == StartupMode.Cleanup;
+        public bool UsesMutex => Mode == StartupMode.Normal || Mode == StartupMode.Cleanup;
 
         /// <summary>Whether a held mutex means "activate the running launcher and exit" (normal start only).</summary>
         public bool HandsOverToRunningInstance => Mode == StartupMode.Normal;
@@ -137,11 +134,6 @@ namespace DreamWeave.Launcher.App
                 }
 
                 return new StartupArgs(StartupMode.Cleanup, null, handover, silent);
-            }
-
-            if (string.Equals(first, CleanupLayout.UpdatedSwitch, StringComparison.Ordinal))
-            {
-                return new StartupArgs(StartupMode.Updated, null, true);
             }
 
             return new StartupArgs(StartupMode.Invalid, null);

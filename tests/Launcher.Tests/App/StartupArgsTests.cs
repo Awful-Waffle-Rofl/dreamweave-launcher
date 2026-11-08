@@ -101,13 +101,11 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual(StartupMode.Invalid, StartupArgs.Parse(new[] { "--uninstall", "--handover" }).Mode);
         }
         [TestMethod]
-        public void Updated_WaitsForMutex_DoesNotHandOver()
+        public void RetiredUpdatedSwitch_IsInvalid()
         {
             StartupArgs a = StartupArgs.Parse(new[] { "--updated" });
-            Assert.AreEqual(StartupMode.Updated, a.Mode);
-            Assert.IsTrue(a.UsesMutex);
-            Assert.IsFalse(a.HandsOverToRunningInstance, "--updated must wait for the old process, not hand over to it");
-            Assert.AreEqual(StartupArgs.HandoverWait, a.MutexWait);
+            Assert.AreEqual(StartupMode.Invalid, a.Mode);
+            Assert.IsFalse(a.UsesMutex);
         }
 
         [TestMethod]

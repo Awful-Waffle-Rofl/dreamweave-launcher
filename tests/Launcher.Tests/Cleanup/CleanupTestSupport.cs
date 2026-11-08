@@ -77,39 +77,16 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         }
     }
 
-    /// <summary>The real file system with a hook that can fail any Move or DeleteFile, recording every Move.</summary>
+    /// <summary>The real file system with a hook that can fail any DeleteFile or DeleteTree.</summary>
     internal sealed class FaultyFileSystem : ISelfFileSystem
     {
         private readonly SelfFileSystem _real = new SelfFileSystem();
-
-        public List<Tuple<string, string>> Moves { get; } = new List<Tuple<string, string>>();
-
-        /// <summary>Called before each Move with (1-based move number, source, destination); return an exception to fail it.</summary>
-        public Func<int, string, string, Exception> MoveFailure { get; set; }
 
         public Func<string, Exception> DeleteFailure { get; set; }
 
         public bool FileExists(string path) => _real.FileExists(path);
 
         public bool DirectoryExists(string path) => _real.DirectoryExists(path);
-
-        public void CreateDirectory(string path) => _real.CreateDirectory(path);
-
-        public FileStream OpenReadLocked(string path) => _real.OpenReadLocked(path);
-
-        public FileStream CreateHeldForMove(string path) => _real.CreateHeldForMove(path);
-
-        public void Move(string sourcePath, string destinationPath)
-        {
-            Moves.Add(Tuple.Create(sourcePath, destinationPath));
-            Exception ex = MoveFailure?.Invoke(Moves.Count, sourcePath, destinationPath);
-            if (ex != null)
-            {
-                throw ex;
-            }
-
-            _real.Move(sourcePath, destinationPath);
-        }
 
         public void DeleteFile(string path)
         {
@@ -135,43 +112,6 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             }
 
             _real.DeleteTree(folder, preserveFile, failures);
-        }
-    }
-
-    /// <summary>Writes scripted bytes to the request's destination, as a successful download would.</summary>
-    internal sealed class FakeDownloader : IDownloader
-    {
-        private readonly byte[] _bytes;
-
-        public FakeDownloader(byte[] bytes)
-        {
-            _bytes = bytes;
-        }
-
-        public List<DownloadRequest> Requests { get; } = new List<DownloadRequest>();
-
-        public Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
-        {
-            Requests.Add(request);
-            Directory.CreateDirectory(Path.GetDirectoryName(request.DestinationPath));
-            File.WriteAllBytes(request.DestinationPath, _bytes);
-            return Task.FromResult(new DownloadResult(request.DestinationPath, _bytes.Length, Hasher.ComputeSha256Hex(_bytes), false));
-        }
-    }
-
-    internal sealed class FakeAuthenticode : IAuthenticodeVerifier
-    {
-        public List<string> Calls { get; } = new List<string>();
-
-        public bool Fail { get; set; }
-
-        public void Verify(string path, FileStream heldFile, string expectedSubject)
-        {
-            Calls.Add(expectedSubject);
-            if (Fail)
-            {
-                throw new LauncherException(LauncherError.UpdateSignatureInvalid, "fake signature failure");
-            }
         }
     }
 

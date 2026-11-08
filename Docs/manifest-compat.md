@@ -1,6 +1,6 @@
 # Manifest compatibility
 
-The signed manifest is the launcher's trust anchor and its self-update pointer, so
+The signed manifest is the launcher's trust anchor and its launcher-update pointer, so
 changing its shape can strand players. These rules keep every released launcher working.
 
 ## Rules
@@ -8,7 +8,7 @@ changing its shape can strand players. These rules keep every released launcher 
 1. **`manifest.json` stays schema 1 for the life of every v1 launcher.** A v1 launcher
    that sees any other `schema` value refuses to download (it still launches from its
    cached manifest). It also cannot read the `launcher` block any more, so it cannot
-   self-update. A schema bump in `manifest.json` therefore strands every v1 install.
+   offer the player a launcher update. A schema bump in `manifest.json` therefore strands every v1 install.
 2. **Changes to schema 1 are additive only.** Unknown fields are ignored, and components
    whose `kind` is unknown are skipped with a warning. When a skipped component is
    marked `required`, the launcher reports it in `LauncherManifest.SkippedRequired` so it
@@ -42,8 +42,24 @@ These were added under rule 2 and are safe to publish: a launcher that predates 
   primary or an earlier mirror (same transport and URL), makes the manifest invalid.
   Each source keeps its own in-progress file, and a corrupt mega download falls back to the next
   source at once instead of being retried.
+- **`launcher.downloadPage`**: the web page where players get the latest setup, for example
+  `"https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/releases/latest"`. Optional, but an update is
+  offered (Optional or Mandatory) only when `launcher.version` is newer than the running launcher AND this
+  is an absolute `https` URL; a non-empty value that is not an absolute `https` URL makes the manifest
+  invalid. The launcher only opens the page in the default browser: it never downloads, replaces or
+  restarts itself. There is no host allowlist, because the manifest is signature-verified. The older
+  `launcher.url`, `sha256`, `size` and `authenticodeSubject` members are obsolete: they still parse (so older
+  and newer manifests both load) but are no longer validated or read, and new manifests should omit them.
+  A launcher that predates `downloadPage` ignores it.
 - **`defaultSelected`** (already present) now also sets the starting checkbox of an optional
   component: `true` starts checked, `false` or absent unchecked. Required components are unchanged.
+
+## Reaching launchers built before downloadPage
+
+No public install predates `downloadPage` (v1.0.0 was never released), so this only matters for internal builds.
+
+- A launcher built before this change ignores `downloadPage`. The only way to reach it is to raise `launcher.minVersion`, which shows it the "download again from the website" banner and blocks Play.
+- Never publish a build of the current code as a bare exe at `launcher.url`. An old launcher would download it, swap it in and start it with `--updated`, which the current launcher rejects and exits silently, leaving the player with a launcher that does not start.
 
 ## Publishing checklist
 

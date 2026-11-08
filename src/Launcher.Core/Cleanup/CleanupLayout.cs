@@ -4,23 +4,12 @@ using System.IO;
 namespace DreamWeave.Launcher.Core.Cleanup
 {
     /// <summary>
-    /// Fixed names and path helpers shared by cleanup and self-update. The launcher no longer installs
-    /// itself (the setup program owns install and uninstall), so this holds only what is still needed.
+    /// Fixed names and path helpers shared by cleanup. The launcher no longer installs or updates
+    /// itself (the setup program owns install and uninstall; an update is a download page the player opens),
+    /// so this holds only what is still needed.
     /// </summary>
     public static class CleanupLayout
     {
-        /// <summary>File name of the launcher exe.</summary>
-        public const string ExeFileName = "DreamWeaveLauncher.exe";
-
-        /// <summary>Command-line switch a freshly swapped-in launcher is started with.</summary>
-        public const string UpdatedSwitch = "--updated";
-
-        /// <summary>Suffix of the previous exe kept during a swap (deleted by the new process).</summary>
-        public const string OldSuffix = ".old";
-
-        /// <summary>Suffix of the incoming exe written next to the target before a swap.</summary>
-        public const string NewSuffix = ".new";
-
         /// <summary>True when two paths name the same location (full paths, case-insensitive).</summary>
         internal static bool SamePath(string a, string b)
         {

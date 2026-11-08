@@ -228,9 +228,7 @@ namespace DreamWeave.Launcher.Tests.App
             {
                 Version = version,
                 MinVersion = min,
-                Url = download ? "https://example.test/DreamWeaveLauncher.exe" : string.Empty,
-                Sha256 = download ? new string('A', 64) : string.Empty,
-                Size = download ? 10 : 0,
+                DownloadPage = download ? "https://example.test/download" : string.Empty,
             };
             return m;
         }
@@ -250,6 +248,7 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreEqual("1.3.0", optional.AvailableVersion);
             StringAssert.Contains(optional.BannerText, "1.3.0");
             Assert.IsTrue(optional.OffersUpdate && optional.OffersLater && !optional.BlocksPlay);
+            Assert.AreEqual("https://example.test/download", optional.DownloadPage);
 
             UpdateGate mandatory = UpdateGate.Evaluate(With("1.3.0", "1.3.0"), Running);
             Assert.AreEqual(UpdateStatus.Mandatory, mandatory.Status);

@@ -142,14 +142,11 @@ namespace DreamWeave.Launcher.Core.Manifests
                 throw Invalid("its server port " + m.Server.Port + " is outside 1-65535.");
             }
 
-            if (m.Launcher != null)
+            // The old url/sha256/size/authenticodeSubject members are obsolete and no longer validated, so a manifest
+            // that still carries them (or omits them) loads. downloadPage is optional but must be https when present.
+            if (m.Launcher != null && !string.IsNullOrEmpty(m.Launcher.DownloadPage) && !LauncherUpdateInfo.IsValidDownloadPage(m.Launcher.DownloadPage))
             {
-                bool hasUrl = !string.IsNullOrEmpty(m.Launcher.Url);
-                bool hasSha = !string.IsNullOrEmpty(m.Launcher.Sha256);
-                if (hasUrl || hasSha)
-                {
-                    RequireSha(m.Launcher.Sha256, "launcher.sha256");
-                }
+                throw Invalid("its launcher downloadPage '" + m.Launcher.DownloadPage + "' is not an absolute https URL.");
             }
 
             foreach (ManifestComponent c in m.Components)

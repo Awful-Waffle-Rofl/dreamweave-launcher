@@ -402,7 +402,7 @@ namespace DreamWeave.Launcher.Tests.App
         private static DreamWeave.Launcher.Core.Manifests.LauncherManifest MandatoryUpdateManifest()
         {
             DreamWeave.Launcher.Core.Manifests.LauncherManifest m = AppFixtures.Sample();
-            m.Launcher = new DreamWeave.Launcher.Core.Manifests.LauncherUpdateInfo { Version = "2.0.0", MinVersion = "2.0.0", Url = "https://example.test/x.exe", Sha256 = new string('A', 64), Size = 10 };
+            m.Launcher = new DreamWeave.Launcher.Core.Manifests.LauncherUpdateInfo { Version = "2.0.0", MinVersion = "2.0.0", DownloadPage = "https://example.test/download" };
             return m;
         }
 

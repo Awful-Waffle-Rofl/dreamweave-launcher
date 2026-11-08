@@ -53,8 +53,16 @@ namespace DreamWeave.Launcher.Tests
                 case "host-empty": m["server"]["host"] = " "; break;
                 case "port-zero": m["server"]["port"] = 0; break;
                 case "port-too-high": m["server"]["port"] = 65536; break;
-                case "launcher-url-without-sha": m["launcher"]["url"] = "https://example.test/l.exe"; break;
-                case "launcher-sha-bad": m["launcher"]["url"] = "https://example.test/l.exe"; m["launcher"]["sha256"] = "ABC"; break;
+                case "launcher-page-http": m["launcher"]["downloadPage"] = "http://example.test/get"; break;
+                case "launcher-page-relative": m["launcher"]["downloadPage"] = "/releases/latest"; break;
+                case "launcher-page-ftp": m["launcher"]["downloadPage"] = "ftp://example.test/get"; break;
+                case "launcher-page-blank": m["launcher"]["downloadPage"] = "  "; break;
+                case "launcher-page-quote": m["launcher"]["downloadPage"] = "https://example.test/x\" -arg"; break;
+                case "launcher-page-crlf": m["launcher"]["downloadPage"] = "https://example.test/x\r\nHost: evil"; break;
+                case "launcher-page-space": m["launcher"]["downloadPage"] = "https://example.test/x y"; break;
+                case "launcher-page-tab": m["launcher"]["downloadPage"] = "https://example.test/x\ty"; break;
+                case "launcher-page-control": m["launcher"]["downloadPage"] = "https://example.test/x\u0001"; break;
+                case "launcher-page-not-a-url": m["launcher"]["downloadPage"] = "get it from the website"; break;
                 case "component-sha-bad": installer["sha256"] = new string('Z', 64); break;
                 case "component-sha-short": zip["sha256"] = "66E9"; break;
                 case "file-sha-bad": zip["files"][0]["sha256"] = ""; break;
@@ -87,8 +95,16 @@ namespace DreamWeave.Launcher.Tests
         [DataRow("host-empty")]
         [DataRow("port-zero")]
         [DataRow("port-too-high")]
-        [DataRow("launcher-url-without-sha")]
-        [DataRow("launcher-sha-bad")]
+        [DataRow("launcher-page-http")]
+        [DataRow("launcher-page-relative")]
+        [DataRow("launcher-page-ftp")]
+        [DataRow("launcher-page-blank")]
+        [DataRow("launcher-page-not-a-url")]
+        [DataRow("launcher-page-quote")]
+        [DataRow("launcher-page-crlf")]
+        [DataRow("launcher-page-space")]
+        [DataRow("launcher-page-tab")]
+        [DataRow("launcher-page-control")]
         [DataRow("component-sha-bad")]
         [DataRow("component-sha-short")]
         [DataRow("file-sha-bad")]
@@ -119,6 +135,41 @@ namespace DreamWeave.Launcher.Tests
 
             var ex = Assert.ThrowsExactly<LauncherException>(() => Verify(Bytes(m)));
             Assert.AreEqual(LauncherError.ManifestInvalid, ex.Code, rule + ": " + ex.Detail);
+        }
+
+        [TestMethod]
+        public void LauncherDownloadPage_Https_IsAccepted_AndCarried()
+        {
+            JObject m = Sample();
+            m["launcher"]["downloadPage"] = "https://example.test/releases/latest";
+
+            Assert.AreEqual("https://example.test/releases/latest", Verify(Bytes(m)).Launcher.DownloadPage);
+        }
+
+        [TestMethod]
+        public void LauncherDownloadPage_Absent_Loads()
+        {
+            JObject m = Sample();
+            ((JObject)m["launcher"]).Remove("downloadPage");
+
+            Assert.IsNull(Verify(Bytes(m)).Launcher.DownloadPage);
+        }
+
+        [TestMethod]
+        public void LauncherObsoleteDownloadFields_StillLoad_AndAreNotValidated()
+        {
+            // An older manifest carries url/sha256/size/authenticodeSubject. They stay parseable; nothing reads them.
+            JObject m = Sample();
+            m["launcher"]["url"] = "https://example.test/l.exe";
+            m["launcher"]["sha256"] = "ABC";
+            m["launcher"]["size"] = 12;
+            m["launcher"]["authenticodeSubject"] = "CN=Someone";
+
+            LauncherUpdateInfo info = Verify(Bytes(m)).Launcher;
+            Assert.AreEqual("https://example.test/l.exe", info.Url);
+            Assert.AreEqual("ABC", info.Sha256);
+            Assert.AreEqual(12, info.Size);
+            Assert.AreEqual("CN=Someone", info.AuthenticodeSubject);
         }
 
         [TestMethod]
@@ -256,19 +307,6 @@ namespace DreamWeave.Launcher.Tests
             // Positive control: the same serialize-and-sign path accepts the unmodified sample,
             // so every rejection above is caused by its mutation.
             Assert.AreEqual(3, Verify(Bytes(Sample())).Components.Count);
-        }
-
-        [TestMethod]
-        public void LauncherShaMayBeEmpty_OnlyWhileUrlIsEmpty()
-        {
-            JObject m = Sample();
-            Assert.AreEqual(string.Empty, (string)m["launcher"]["url"]);
-            Assert.AreEqual(string.Empty, (string)m["launcher"]["sha256"]);
-            Verify(Bytes(m));
-
-            m["launcher"]["url"] = "https://example.test/l.exe";
-            m["launcher"]["sha256"] = new string('C', 64);
-            Verify(Bytes(m));
         }
 
         [TestMethod]
