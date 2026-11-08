@@ -146,5 +146,6 @@ namespace DreamWeave.Launcher.Tests.App
             {
                 Lines.Add(componentId + ":" + outcome + ":" + error);
             }
-        }    }
+        }
+    }
 }

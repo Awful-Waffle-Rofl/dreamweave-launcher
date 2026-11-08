@@ -17,7 +17,7 @@ if ($ver -notmatch '^\d+\.\d+\.\d+$') {
     Write-Error "Version '$Version' is not MAJOR.MINOR.PATCH"
     exit 1
 }
-if ($DownloadPage -and ($DownloadPage -notmatch '^https://[^\s"]+$')) {
+if ($DownloadPage -and ($DownloadPage -notmatch '^https://[^\x00-\x20\x7F"]+$')) {
     Write-Error "DownloadPage '$DownloadPage' is not an https URL without spaces or quotes"
     exit 1
 }

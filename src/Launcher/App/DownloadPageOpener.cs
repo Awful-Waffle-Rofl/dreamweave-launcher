@@ -76,5 +76,6 @@ namespace DreamWeave.Launcher.App
             }
 
             return ErrorMessages.For(code);
-        }    }
+        }
+    }
 }
