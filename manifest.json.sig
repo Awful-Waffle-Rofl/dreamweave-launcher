@@ -1,5 +1,5 @@
 {
   "keyId": "dw-c9584c035493fe04",
   "alg": "ES256-P1363",
-  "sig": "9x/Z5g2DEacbeSQIBpmAvV1ncVVfadDCuapQGHw/Z0bmB2cEfDONRRB9nGla14xjMkWCNMsTJzucoFsX0RlVCw=="
+  "sig": "VPnbFJa/seD4AqAruhDYMpUprPCATeANXWPzMbCEk20WzXeNu+0umyjQ0oblh7dDsoAhT6mQcR12FR+/IV8luA=="
 }
