@@ -11,6 +11,9 @@ namespace DreamWeave.Launcher.Core.Install
 
         /// <summary>Exit code once <see cref="HasExited"/> is true, otherwise null.</summary>
         int? ExitCode { get; }
+
+        /// <summary>The process id, or null when Windows did not report one (ShellExecute can return no handle).</summary>
+        int? Id { get; }
     }
 
     /// <summary>
@@ -73,6 +76,22 @@ namespace DreamWeave.Launcher.Core.Install
                     try
                     {
                         return _process.HasExited ? _process.ExitCode : (int?)null;
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception || ex is NotSupportedException)
+                    {
+                        return null;
+                    }
+                }
+            }
+
+            public int? Id
+            {
+                get
+                {
+                    try
+                    {
+                        // From the ShellExecute handle (GetProcessId); works for an elevated child too.
+                        return _process.Id;
                     }
                     catch (Exception ex) when (ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception || ex is NotSupportedException)
                     {

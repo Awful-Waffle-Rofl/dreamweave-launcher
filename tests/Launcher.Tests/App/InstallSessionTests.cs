@@ -58,6 +58,7 @@ namespace DreamWeave.Launcher.Tests.App
                 ReadSavedFolder = () => _saved,
                 SaveFolder = f => _saved = f,
                 Installers = new InstallerRunner(_starter),
+                Processes = new FakeProcessTable(),
                 PollInterval = TimeSpan.FromMilliseconds(20),
                 SettleInterval = TimeSpan.FromMilliseconds(5),
                 VerifyRetryDelay = TimeSpan.Zero,
@@ -437,6 +438,8 @@ namespace DreamWeave.Launcher.Tests.App
                 public bool HasExited => true;
 
                 public int? ExitCode => 0;
+
+                public int? Id => null;
 
                 public void Dispose()
                 {

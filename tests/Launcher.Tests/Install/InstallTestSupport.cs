@@ -311,6 +311,8 @@ namespace DreamWeave.Launcher.Tests.Install
 
             public int? ExitCode => 0;
 
+            public int? Id => null;
+
             public void Dispose()
             {
             }

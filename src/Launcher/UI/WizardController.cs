@@ -355,6 +355,29 @@ namespace DreamWeave.Launcher.UI
                 stepLabels.TryGetValue(ev.ComponentId ?? string.Empty, out step);
                 switch (ev.Kind)
                 {
+                    case InstallEventKind.StageStarted:
+                        aggregate.Begin(ev.ComponentId);
+                        if (step != null)
+                        {
+                            step.Status = UiText.StepDownloading;
+                            step.StatusColor = Theme.Gold;
+                        }
+
+                        current.Text = string.Empty;
+                        sourceNote.Text = string.Empty;
+                        currentBar.Value = 0;
+                        break;
+                    case InstallEventKind.StageDone:
+                        // The download is the component's weight in the total bar; installing it adds nothing.
+                        aggregate.Complete(ev.ComponentId);
+                        if (step != null)
+                        {
+                            step.Status = UiText.StepDownloaded;
+                            step.StatusColor = Theme.Muted;
+                        }
+
+                        currentBar.Value = 1000;
+                        break;
                     case InstallEventKind.StepStarted:
                         aggregate.Begin(ev.ComponentId);
                         if (step != null)
@@ -444,8 +467,9 @@ namespace DreamWeave.Launcher.UI
                     return;
                 }
 
-                int failed = components.ToList().FindIndex(c => c.Id == result.ComponentId);
-                startIndex = failed < 0 ? 0 : failed;
+                // A download-phase failure retries from the run's first component: nothing was installed yet.
+                int retryFrom = components.ToList().FindIndex(c => c.Id == result.RetryFromId);
+                startIndex = retryFrom < 0 ? 0 : retryFrom;
                 if (result.ComponentId != null && stepLabels.TryGetValue(result.ComponentId, out StatusRow failedLabel))
                 {
                     failedLabel.Status = UiText.StepFailed;

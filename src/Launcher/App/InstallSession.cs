@@ -17,6 +17,13 @@ namespace DreamWeave.Launcher.App
     /// <summary>What an <see cref="InstallEvent"/> reports.</summary>
     internal enum InstallEventKind
     {
+        /// <summary>The download phase started fetching this component (it is applied later, after every download).</summary>
+        StageStarted,
+
+        /// <summary>This component's download is complete and verified; it waits for the install phase.</summary>
+        StageDone,
+
+        /// <summary>The install phase started this component.</summary>
         StepStarted,
         StepProgress,
         StepStatus,
@@ -57,14 +64,22 @@ namespace DreamWeave.Launcher.App
     /// <summary>How a run ended.</summary>
     internal sealed class InstallRunResult
     {
-        public InstallRunResult(LauncherError error, string componentId, string acFolder, IReadOnlyList<string> fileDetails = null, string sourceTransport = null)
+        public InstallRunResult(LauncherError error, string componentId, string acFolder, IReadOnlyList<string> fileDetails = null, string sourceTransport = null, string retryFromId = null)
         {
+            RetryFromId = retryFromId ?? componentId;
             SourceTransport = sourceTransport;
             Error = error;
             ComponentId = componentId;
             AcFolder = acFolder;
             FileDetails = fileDetails ?? new string[0];
         }
+
+        /// <summary>
+        /// The component a Retry starts from. A failure in the download phase happens before anything
+        /// was installed, so the retry starts from the first component again (finished downloads are
+        /// found in place); a failure in the install phase retries from the failed component.
+        /// </summary>
+        public string RetryFromId { get; }
 
         /// <summary>Transport ("mega" or "http") of the last download source that failed, or null.</summary>
         public string SourceTransport { get; }
@@ -248,8 +263,15 @@ namespace DreamWeave.Launcher.App
         /// <summary>Gap between the two polls that must see identical files before the installer counts as finished copying.</summary>
         public TimeSpan SettleInterval { get; set; } = TimeSpan.FromSeconds(10);
 
-        /// <summary>How long to wait for the installer's files to settle before carrying on regardless (the final check is the backstop).</summary>
+        /// <summary>
+        /// How long the installer may stay busy (still running, or its files still changing) before the
+        /// player is told to finish it. The wait goes on after that: the game data step never starts
+        /// while the installer is running.
+        /// </summary>
         public TimeSpan SettleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+        /// <summary>Lists running processes, to tell whether the started installer (and its helpers) are still running.</summary>
+        public IProcessTable Processes { get; set; } = ToolhelpProcessTable.Instance;
 
         /// <summary>Wait before re-checking a file that could not be read (locked by a scanner, say) during the final check.</summary>
         public TimeSpan VerifyRetryDelay { get; set; } = TimeSpan.FromSeconds(3);
@@ -273,11 +295,21 @@ namespace DreamWeave.Launcher.App
     }
 
     /// <summary>
-    /// Runs the selected components in manifest order, entirely off the UI thread, and reports through
-    /// an <see cref="IProgress{T}"/> the caller created on the UI thread. Telemetry records each component
-    /// (outcome and error code only). Cancelling leaves partial downloads in place to resume later.
-    /// One session serves every Retry of the same Progress screen, so it remembers which installers it
-    /// has already launched: a retry detects the install first and only relaunches when it is not there.
+    /// Runs the selected components entirely off the UI thread, in phases, and reports through an
+    /// <see cref="IProgress{T}"/> the caller created on the UI thread:
+    /// <list type="number">
+    /// <item>Download phase: every component that needs a download is downloaded and verified into
+    /// staging, in manifest order. Nothing is installed yet, so every download (and its source
+    /// trouble) is over before the game installer's window appears.</item>
+    /// <item>Install phase, in manifest order: the game installer hand-off, which ends only once the
+    /// installer is no longer running (process tree and InstallShield helpers) AND its files have
+    /// settled; then the game data overlay; then the patch.</item>
+    /// <item>The final check (<c>VerifyPlanAsync</c>).</item>
+    /// </list>
+    /// Telemetry records each component (outcome and error code only). Cancelling leaves partial
+    /// downloads in place to resume later. One session serves every Retry of the same Progress screen,
+    /// so it remembers which installers it has already launched: a retry detects the install first and
+    /// only relaunches when it is not there.
     /// </summary>
     internal sealed class InstallSession
     {
@@ -288,6 +320,7 @@ namespace DreamWeave.Launcher.App
         private readonly LauncherManifest _manifest;
         private readonly object _pokeGate = new object();
         private readonly HashSet<string> _launchedInstallers = new HashSet<string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, InstallerProcessWatch> _watches = new Dictionary<string, InstallerProcessWatch>(StringComparer.Ordinal);
         private TaskCompletionSource<bool> _poke = NewPoke();
         private readonly List<string> _stagedUntilVerified = new List<string>();
         private string _acFolder;
@@ -331,30 +364,55 @@ namespace DreamWeave.Launcher.App
         {
             try
             {
+                ITelemetrySink t = _deps.Telemetry;
+                var staged = new Dictionary<string, StagedComponent>(StringComparer.Ordinal);
+                var clocks = new Dictionary<string, Stopwatch>(StringComparer.Ordinal);
+                SetPhase(InstallPhase.Stoppable);
+
+                // 1. Download phase: nothing is installed until every download has been verified.
                 foreach (ManifestComponent c in components)
                 {
-                    ITelemetrySink t = _deps.Telemetry;
+                    if (!NeedsDownload(c))
+                    {
+                        continue;
+                    }
+
                     t.RecordComponent(c.Id, TelemetryOutcome.Started);
-                    Stopwatch clock = Stopwatch.StartNew();
+                    clocks[c.Id] = Stopwatch.StartNew();
+                    try
+                    {
+                        staged[c.Id] = await StageAsync(c, events, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Nothing was installed yet: a Retry starts from the first component again.
+                        return Failed(c, ex, clocks[c.Id], cancellationToken, components[0].Id);
+                    }
+                }
+
+                // 2 and 3. Install phase: the installer hand-off, then the overlay, then the patch.
+                foreach (ManifestComponent c in components)
+                {
+                    Stopwatch clock;
+                    if (!clocks.TryGetValue(c.Id, out clock))
+                    {
+                        t.RecordComponent(c.Id, TelemetryOutcome.Started);
+                        clock = Stopwatch.StartNew();
+                    }
+
                     SetPhase(InstallPhase.Stoppable);
                     events.Report(new InstallEvent(InstallEventKind.StepStarted, c.Id));
                     try
                     {
-                        bool didWork = await RunOneAsync(c, events, cancellationToken).ConfigureAwait(false);
+                        StagedComponent s;
+                        staged.TryGetValue(c.Id, out s);
+                        bool didWork = await ApplyAsync(c, s, events, cancellationToken).ConfigureAwait(false);
                         t.RecordComponent(c.Id, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
                         events.Report(new InstallEvent(didWork ? InstallEventKind.StepDone : InstallEventKind.StepSkipped, c.Id));
                     }
                     catch (Exception ex)
                     {
-                        LauncherError code = Classify(ex, cancellationToken);
-                        t.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, clock.Elapsed);
-                        if (!(ex is LauncherException) && !(ex is OperationCanceledException) && !IsExpectedIo(ex))
-                        {
-                            // A programming error: surface it as Unknown rather than crash the wizard.
-                            Trace.TraceError("Install step failed unexpectedly: " + ex.GetType().FullName);
-                        }
-
-                        return new InstallRunResult(code, c.Id, _acFolder, null, (ex as LauncherException)?.Data["transport"] as string);
+                        return Failed(c, ex, clock, cancellationToken, c.Id);
                     }
                 }
 
@@ -362,9 +420,9 @@ namespace DreamWeave.Launcher.App
                 if (verified.Error == LauncherError.None)
                 {
                     // Kept until now so a repair does not have to download the archive again.
-                    foreach (string staged in _stagedUntilVerified)
+                    foreach (string kept in _stagedUntilVerified)
                     {
-                        TryDeleteStaged(staged);
+                        TryDeleteStaged(kept);
                     }
 
                     _stagedUntilVerified.Clear();
@@ -376,6 +434,19 @@ namespace DreamWeave.Launcher.App
             {
                 SetPhase(InstallPhase.Idle);
             }
+        }
+
+        private InstallRunResult Failed(ManifestComponent c, Exception ex, Stopwatch clock, CancellationToken ct, string retryFromId)
+        {
+            LauncherError code = Classify(ex, ct);
+            _deps.Telemetry.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, clock.Elapsed);
+            if (!(ex is LauncherException) && !(ex is OperationCanceledException) && !IsExpectedIo(ex))
+            {
+                // A programming error: surface it as Unknown rather than crash the wizard.
+                Trace.TraceError("Install step failed unexpectedly: " + ex.GetType().FullName);
+            }
+
+            return new InstallRunResult(code, c.Id, _acFolder, null, (ex as LauncherException)?.Data["transport"] as string, retryFromId);
         }
 
         /// <summary>
@@ -475,14 +546,22 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>
-        /// After the retail installer is first detected, waits until the files this manifest cares about
-        /// (every overlay file and every satisfiedWhen path that exists) stop changing and can be opened
-        /// exclusively, so the game data step does not race the installer''s own copying. Settled means two
-        /// polls, <see cref="InstallDependencies.SettleInterval"/> apart, with identical (size, last write)
-        /// stamps and every probe open succeeding. Gives up after <see cref="InstallDependencies.SettleTimeout"/>
-        /// and carries on: the final check is the backstop. The installer process exiting is never the signal.
+        /// After the retail installer is first detected, waits until the installer has really finished, so
+        /// the game data step never races the installer's own copying. Finished means BOTH:
+        /// <list type="bullet">
+        /// <item>no process of the installer is running: neither the started process nor any of its
+        /// descendants, nor a known InstallShield helper (see <see cref="InstallerProcessWatch"/>);
+        /// the started process exiting alone is never the signal, because the self-extractor exits early;</item>
+        /// <item>the files this manifest cares about (every overlay file and every satisfiedWhen path that
+        /// exists) have settled: two polls, <see cref="InstallDependencies.SettleInterval"/> apart and
+        /// both made with no installer process running, with identical (size, last write) stamps and
+        /// every exclusive open succeeding.</item>
+        /// </list>
+        /// There is no carrying on regardless: after <see cref="InstallDependencies.SettleTimeout"/> the
+        /// player is asked to finish the installer, and the wait goes on. "I finished" runs one check at
+        /// once, with the same process and in-use conditions; it never skips either.
         /// </summary>
-        private async Task SettleAsync(ManifestComponent installer, string folder, IProgress<InstallEvent> events, CancellationToken ct)
+        private async Task WaitForInstallerDoneAsync(ManifestComponent installer, string folder, InstallerProcessWatch watch, IProgress<InstallEvent> events, CancellationToken ct)
         {
             var relative = new List<string>();
             foreach (ManifestComponent comp in _manifest.Components)
@@ -495,22 +574,67 @@ namespace DreamWeave.Launcher.App
             events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: UiText.WaitingForInstallerFiles));
             Stopwatch clock = Stopwatch.StartNew();
             string previous = null;
+            bool poked = false;
+            bool warned = false;
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
-                string snapshot = await Task.Run(() => SettleSnapshot(folder, targets), ct).ConfigureAwait(false);
+                Task<bool> poke;
+                lock (_pokeGate)
+                {
+                    poke = _poke.Task;
+                }
+
+                bool running = watch != null && await Task.Run(() => watch.IsRunning(), ct).ConfigureAwait(false);
+                string snapshot = running ? null : await Task.Run(() => SettleSnapshot(folder, targets), ct).ConfigureAwait(false);
                 if (snapshot != null && snapshot == previous)
                 {
                     return;
                 }
 
-                previous = snapshot;
-                if (clock.Elapsed >= _deps.SettleTimeout)
+                if (poked && snapshot != null)
                 {
-                    return;
+                    // "I finished" with the installer gone and the files openable: one confirming look a
+                    // short gap later, rather than make the player wait a full settle interval.
+                    await Task.Delay(_deps.PollInterval, ct).ConfigureAwait(false);
+                    string confirm = await Task.Run(() => watch != null && watch.IsRunning() ? null : SettleSnapshot(folder, targets), ct).ConfigureAwait(false);
+                    if (confirm != null && confirm == snapshot)
+                    {
+                        return;
+                    }
+
+                    snapshot = confirm;
                 }
 
-                await Task.Delay(_deps.SettleInterval, ct).ConfigureAwait(false);
+                previous = snapshot;
+                if (poked)
+                {
+                    events.Report(new InstallEvent(InstallEventKind.HandoffNotDetected, installer.Id, text: UiText.InstallerStillRunning));
+                }
+                else if (!warned && clock.Elapsed >= _deps.SettleTimeout)
+                {
+                    warned = true;
+                    events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: UiText.InstallerStillRunning));
+                }
+
+                Task delay = Task.Delay(_deps.SettleInterval, ct);
+                Task first = await Task.WhenAny(delay, poke).ConfigureAwait(false);
+                poked = first == poke;
+                if (poked)
+                {
+                    // Consumed BEFORE the check, so a click during the check is not lost.
+                    lock (_pokeGate)
+                    {
+                        if (_poke.Task == poke)
+                        {
+                            _poke = NewPoke();
+                        }
+                    }
+                }
+                else
+                {
+                    await delay.ConfigureAwait(false);
+                }
             }
         }
 
@@ -549,36 +673,98 @@ namespace DreamWeave.Launcher.App
 
             return sb.ToString();
         }
-        private async Task<bool> RunOneAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
+
+        /// <summary>What the download phase left for the install phase.</summary>
+        private sealed class StagedComponent
         {
-            var progress = new ForwardingProgress(c.Id, events);
-            switch (c.Kind)
-            {
-                case ComponentKinds.Installer:
-                    return await RunInstallerAsync(c, progress, events, ct).ConfigureAwait(false);
-                case ComponentKinds.ZipOverlay:
-                    return await RunOverlayAsync(c, progress, events, ct).ConfigureAwait(false);
-                case ComponentKinds.BytePatch:
-                    return await RunPatchAsync(c, events, ct).ConfigureAwait(false);
-                default:
-                    throw new LauncherException(LauncherError.ManifestInvalid, "Unknown component kind.");
-            }
+            /// <summary>The verified download in staging, or null when nothing was downloaded.</summary>
+            public DownloadResult File { get; set; }
+
+            /// <summary>For an installer launched earlier in this session: the folder it was detected in (no download, no relaunch).</summary>
+            public string DetectedFolder { get; set; }
         }
 
-        private async Task<bool> RunInstallerAsync(ManifestComponent c, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
+        /// <summary>A patch has nothing to download; installers and overlays do.</summary>
+        private static bool NeedsDownload(ManifestComponent c)
         {
-            if (_launchedInstallers.Contains(c.Id))
+            return c.Kind == ComponentKinds.Installer || c.Kind == ComponentKinds.ZipOverlay;
+        }
+
+        /// <summary>Download phase for one component: downloads and verifies it into staging. Installs nothing.</summary>
+        private async Task<StagedComponent> StageAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            if (c.Kind == ComponentKinds.Installer && _launchedInstallers.Contains(c.Id))
             {
                 // A retry after the hand-off was stopped: the player may have finished the installer meanwhile.
                 string already = await Task.Run(() => Detect(c, ct), ct).ConfigureAwait(false);
                 if (already != null)
                 {
-                    await AdoptFolderAsync(already).ConfigureAwait(false);
-                    return true;
+                    return new StagedComponent { DetectedFolder = already };
                 }
             }
 
-            DownloadResult file = await DownloadAsync(c, c.Id + ".exe", progress, events, ct).ConfigureAwait(false);
+            events.Report(new InstallEvent(InstallEventKind.StageStarted, c.Id));
+            var progress = new ForwardingProgress(c.Id, events);
+            string fileName = c.Id + (c.Kind == ComponentKinds.Installer ? ".exe" : ".zip");
+            DownloadResult file = await DownloadAsync(c, fileName, progress, events, ct).ConfigureAwait(false);
+            events.Report(new InstallEvent(InstallEventKind.StageDone, c.Id));
+            return new StagedComponent { File = file };
+        }
+
+        /// <summary>Install phase for one component, from what <see cref="StageAsync"/> staged (null for a patch).</summary>
+        private async Task<bool> ApplyAsync(ManifestComponent c, StagedComponent staged, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            var progress = new ForwardingProgress(c.Id, events);
+            try
+            {
+                switch (c.Kind)
+                {
+                    case ComponentKinds.Installer:
+                        return await RunInstallerAsync(c, staged, progress, events, ct).ConfigureAwait(false);
+                    case ComponentKinds.ZipOverlay:
+                        return await RunOverlayAsync(c, staged.File, progress, events, ct).ConfigureAwait(false);
+                    case ComponentKinds.BytePatch:
+                        return await RunPatchAsync(c, events, ct).ConfigureAwait(false);
+                    default:
+                        throw new LauncherException(LauncherError.ManifestInvalid, "Unknown component kind.");
+                }
+            }
+            catch (LauncherException ex) when (ex.Code == LauncherError.GameRunning && c.Kind != ComponentKinds.Installer && _launchedInstallers.Count > 0)
+            {
+                // The installer ran in this session: it, not a game client, is the likely holder.
+                throw new LauncherException(LauncherError.InstallerStillRunning, ex.Message, ex);
+            }
+        }
+
+        /// <summary>A re-run during the final check: download (normally found in staging at once), then install.</summary>
+        private async Task<bool> RunOneAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            StagedComponent staged = NeedsDownload(c) ? await StageAsync(c, events, ct).ConfigureAwait(false) : null;
+            return await ApplyAsync(c, staged, events, ct).ConfigureAwait(false);
+        }
+
+        private async Task<bool> RunInstallerAsync(ManifestComponent c, StagedComponent staged, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            if (staged.DetectedFolder != null)
+            {
+                // Launched by an earlier run of this session and detected since: still wait until it is gone.
+                InstallerProcessWatch earlier;
+                _watches.TryGetValue(c.Id, out earlier);
+                events.Report(new InstallEvent(InstallEventKind.HandoffStarted, c.Id, text: UiText.InstallerHandoff));
+                try
+                {
+                    await WaitForInstallerDoneAsync(c, staged.DetectedFolder, earlier, events, ct).ConfigureAwait(false);
+                    await AdoptFolderAsync(staged.DetectedFolder).ConfigureAwait(false);
+                }
+                finally
+                {
+                    events.Report(new InstallEvent(InstallEventKind.HandoffEnded, c.Id));
+                }
+
+                return true;
+            }
+
+            DownloadResult file = staged.File;
 
             // InstallerRunner.Start re-hashes the staged installer through a deny-write handle and keeps
             // that handle open until the (elevated) process exists, so the bytes that run are the bytes verified.
@@ -587,11 +773,14 @@ namespace DreamWeave.Launcher.App
             _launchedInstallers.Add(c.Id);
             using (process)
             {
+                // Rooted at the started process, plus anything running under the staged file's name.
+                var watch = new InstallerProcessWatch(_deps.Processes, process.ProcessId, Path.GetFileName(file.Path));
+                _watches[c.Id] = watch;
                 events.Report(new InstallEvent(InstallEventKind.HandoffStarted, c.Id, text: UiText.InstallerHandoff));
                 try
                 {
                     string folder = await WaitForInstallAsync(c, events, ct).ConfigureAwait(false);
-                    await SettleAsync(c, folder, events, ct).ConfigureAwait(false);
+                    await WaitForInstallerDoneAsync(c, folder, watch, events, ct).ConfigureAwait(false);
                     await AdoptFolderAsync(folder).ConfigureAwait(false);
                 }
                 finally
@@ -688,10 +877,9 @@ namespace DreamWeave.Launcher.App
             }
         }
 
-        private async Task<bool> RunOverlayAsync(ManifestComponent c, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
+        private async Task<bool> RunOverlayAsync(ManifestComponent c, DownloadResult file, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
         {
             string folder = RequireFolder();
-            DownloadResult file = await DownloadAsync(c, c.Id + ".zip", progress, events, ct).ConfigureAwait(false);
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Installing));
             var installer = new ZipOverlayInstaller(_deps.Paths, _deps.Disk);
             EnterCritical(c.Id, events, ct);

@@ -90,8 +90,18 @@ namespace DreamWeave.Launcher.Tests.App
                 _afterExe = afterExe;
             }
 
+            /// <summary>The id the fake "started" process reports (null: ShellExecute returned no handle).</summary>
+            public int? Pid { get; set; }
+
+            /// <summary>Runs first in Start, before any file is written (puts the installer's processes in the fake table).</summary>
+            public Action OnStart { get; set; }
+
+            public ConcurrentQueue<string> Log { get; set; }
+
             public IStartedProcess Start(ProcessStartInfo startInfo)
             {
+                Log?.Enqueue("installer-started");
+                OnStart?.Invoke();
                 // The retail setup: the final exe first, then the stock dats.
                 File.WriteAllBytes(Path.Combine(_folder, "acclient.exe"), Exe);
                 if (_afterExe != null)
@@ -103,14 +113,21 @@ namespace DreamWeave.Launcher.Tests.App
                     File.WriteAllBytes(Path.Combine(_folder, "client_portal.dat"), StockDat);
                 }
 
-                return new Done();
+                return new Done(Pid);
             }
 
             private sealed class Done : IStartedProcess
             {
+                public Done(int? id)
+                {
+                    Id = id;
+                }
+
                 public bool HasExited => true;
 
                 public int? ExitCode => 0;
+
+                public int? Id { get; }
 
                 public void Dispose()
                 {
@@ -127,12 +144,36 @@ namespace DreamWeave.Launcher.Tests.App
                 _zip = zip;
             }
 
-            public Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+            public ConcurrentQueue<string> Log { get; set; }
+
+            /// <summary>When set, a download of this file name waits for the gate.</summary>
+            public string GatedFile { get; set; }
+
+            public TaskCompletionSource<bool> Gate { get; set; }
+
+            /// <summary>When set, a download of this file name fails with this code.</summary>
+            public string FailFile { get; set; }
+
+            public LauncherError FailWith { get; set; }
+
+            public async Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
             {
+                string name = Path.GetFileName(request.DestinationPath);
+                if (Gate != null && name == GatedFile)
+                {
+                    await Gate.Task.ConfigureAwait(false);
+                }
+
+                if (name == FailFile)
+                {
+                    throw new LauncherException(FailWith, "scripted");
+                }
+
+                Log?.Enqueue("downloaded:" + name);
                 Directory.CreateDirectory(Path.GetDirectoryName(request.DestinationPath));
                 byte[] bytes = request.DestinationPath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) ? File.ReadAllBytes(_zip) : InstallerBytes;
                 File.WriteAllBytes(request.DestinationPath, bytes);
-                return Task.FromResult(new DownloadResult(request.DestinationPath, bytes.Length, Hasher.ComputeSha256Hex(bytes), false));
+                return new DownloadResult(request.DestinationPath, bytes.Length, Hasher.ComputeSha256Hex(bytes), false);
             }
         }
 
@@ -169,17 +210,20 @@ namespace DreamWeave.Launcher.Tests.App
                 var fs = new RealAcFileSystem();
                 Evaluator = new ComponentEvaluator(new FileVerifier(fs, state));
                 Fs = fs;
+                Downloads = new Downloader(zip) { Log = Log };
+                Starter = new Starter(Ac, afterExe) { Log = Log };
                 Deps = new InstallDependencies
                 {
                     Paths = new AppPaths(Path.Combine(_dir.Path, "root")),
-                    Downloads = new Downloader(zip),
+                    Downloads = Downloads,
+                    Processes = Processes,
                     Disk = new FixedDiskSpace(long.MaxValue / 4),
                     Locator = new AcInstallLocator(new FakeRegistry(), fs, Ac),
                     Evaluator = Evaluator,
                     Telemetry = Telemetry,
                     ReadSavedFolder = () => Saved,
                     SaveFolder = f => Saved = f,
-                    Installers = new InstallerRunner(new Starter(Ac, afterExe)),
+                    Installers = new InstallerRunner(Starter),
                     PollInterval = TimeSpan.FromMilliseconds(20),
                     SettleInterval = TimeSpan.FromMilliseconds(30),
                     VerifyRetryDelay = TimeSpan.Zero,
@@ -187,6 +231,15 @@ namespace DreamWeave.Launcher.Tests.App
             }
 
             public string Ac { get; }
+
+            /// <summary>Ordered record of downloads and the installer start.</summary>
+            public ConcurrentQueue<string> Log { get; } = new ConcurrentQueue<string>();
+
+            public Downloader Downloads { get; }
+
+            public Starter Starter { get; }
+
+            public FakeProcessTable Processes { get; } = new FakeProcessTable();
 
             public string StatePath => Path.Combine(_dir.Path, "state.json");
 
@@ -400,10 +453,130 @@ namespace DreamWeave.Launcher.Tests.App
             }
         }
 
-        [TestMethod]
-        public void SettleWait_TimesOut_AndCarriesOn()
+        private static void WaitUntil(Func<bool> condition, string what)
         {
-            // A watched file whose stamp keeps changing never settles; after the timeout the run goes on.
+            Stopwatch clock = Stopwatch.StartNew();
+            while (!condition() && clock.Elapsed < TimeSpan.FromSeconds(15))
+            {
+                Thread.Sleep(10);
+            }
+
+            Assert.IsTrue(condition(), "timed out waiting for " + what);
+        }
+
+        private static bool OverlayStarted(Hooked e) => e.All.Any(x => x.Kind == InstallEventKind.StepStarted && x.ComponentId == "eor-dats");
+
+        private static bool Has(Hooked e, InstallEventKind kind, string text = null) => e.All.Any(x => x.Kind == kind && (text == null || x.Text == text));
+
+        /// <summary>
+        /// Starts the run, waits until the hand-off has polled a while, checks the overlay has not
+        /// started, then calls <paramref name="release"/> and expects a clean finish.
+        /// </summary>
+        private static void AssertOverlayHeldUntilReleased(Rig rig, Action release)
+        {
+            var events = new Hooked(null);
+            Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None);
+            WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+            int seen = rig.Processes.Snapshots;
+            WaitUntil(() => rig.Processes.Snapshots >= seen + 8, "more polls");
+            Assert.IsFalse(OverlayStarted(events), "the overlay started while the installer was still running");
+            Assert.IsFalse(run.IsCompleted, "the run ended while the installer was still running: " + (run.IsCompleted ? run.Result.Error.ToString() : string.Empty));
+
+            release();
+            Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)), "did not proceed once the installer was gone");
+            Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+            Assert.IsTrue(OverlayStarted(events));
+            rig.AssertAllSatisfied();
+        }
+
+        [TestMethod]
+        public void InstallerStillRunning_BlocksTheOverlay_UntilItExits()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((4242, 900, "setup-root.exe"));
+                AssertOverlayHeldUntilReleased(rig, () => rig.Processes.Set());
+            }
+        }
+
+        [TestMethod]
+        public void InstallerWithoutAProcessId_IsFoundByItsStagedFileName()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Starter.Pid = null;
+                rig.Starter.OnStart = () => rig.Processes.Set((4242, 900, "ac-client.exe"));
+                AssertOverlayHeldUntilReleased(rig, () => rig.Processes.Set());
+            }
+        }
+
+        [TestMethod]
+        public void SelfExtractorExited_WhileItsChildRuns_StillBlocks()
+        {
+            using (var rig = new Rig())
+            {
+                // By the first poll the extractor (4242) is already gone; only its child, whose parent id still names it, runs.
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((5000, 4242, "setup.exe"));
+                AssertOverlayHeldUntilReleased(rig, () => rig.Processes.Set());
+            }
+        }
+
+        [TestMethod]
+        public void InstallShieldHelperStillRunning_Blocks()
+        {
+            using (var rig = new Rig())
+            {
+                // Started by COM, so not a descendant of anything the launcher started.
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((77, 600, "IDriver.exe"), (600, 4, "svchost.exe"));
+                AssertOverlayHeldUntilReleased(rig, () => rig.Processes.Set((600, 4, "svchost.exe")));
+            }
+        }
+
+        [TestMethod]
+        public void SlowInstallerHoldingADat_PastTheSettleTimeout_KeepsWaitingAndAsksThePlayer()
+        {
+            // The VM case: the installer still has client_portal.dat open well after acclient.exe appeared,
+            // for longer than the settle timeout. Before the fix the overlay started and failed GameRunning.
+            FileStream held = null;
+            using (var rig = new Rig(folder =>
+            {
+                held = new FileStream(Path.Combine(folder, "client_portal.dat"), FileMode.Create, FileAccess.Write, FileShare.Read);
+                held.Write(StockDat, 0, 8);
+                held.Flush(true);
+            }))
+            {
+                rig.Deps.SettleTimeout = TimeSpan.FromMilliseconds(200);
+                var events = new Hooked(null);
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                try
+                {
+                    WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.InstallerStillRunning), "the finish-the-installer status");
+                    Thread.Sleep(400);
+                    Assert.IsFalse(OverlayStarted(events), "the overlay started past the settle timeout");
+                    Assert.IsFalse(run.IsCompleted);
+                    Assert.IsTrue(Has(events, InstallEventKind.HandoffStarted) && !Has(events, InstallEventKind.HandoffEnded), "the I finished box stays up while waiting");
+
+                    // The installer finishes writing and closes the file.
+                    held.Write(StockDat, 8, StockDat.Length - 8);
+                    held.Dispose();
+                    held = null;
+                    Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)));
+                    Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                    rig.AssertAllSatisfied();
+                }
+                finally
+                {
+                    held?.Dispose();
+                }
+            }
+        }
+
+        [TestMethod]
+        public void SettleWait_PastTheTimeout_WithFilesStillChanging_DoesNotCarryOn()
+        {
             bool stop = false;
             using (var rig = new Rig(folder =>
             {
@@ -426,27 +599,196 @@ namespace DreamWeave.Launcher.Tests.App
                 });
             }))
             {
-                rig.Deps.SettleTimeout = TimeSpan.FromMilliseconds(400);
-                Stopwatch clock = Stopwatch.StartNew();
-                long overlayStartedAtMs = -1;
-                var events = new Hooked(e =>
-                {
-                    if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats")
-                    {
-                        overlayStartedAtMs = clock.ElapsedMilliseconds;
-                    }
-                });
+                rig.Deps.SettleTimeout = TimeSpan.FromMilliseconds(200);
+                var events = new Hooked(null);
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None);
                 try
                 {
-                    InstallRunResult r = rig.Run(events);
-                    Assert.AreEqual(LauncherError.None, r.Error, r.ComponentId);
-                    Assert.IsTrue(overlayStartedAtMs >= 350, "carried on before the timeout: " + overlayStartedAtMs + " ms");
+                    WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.InstallerStillRunning), "the finish-the-installer status");
+                    Thread.Sleep(400);
+                    Assert.IsFalse(OverlayStarted(events), "carried on past the timeout");
                 }
                 finally
                 {
                     Volatile.Write(ref stop, true);
                 }
+
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
             }
+        }
+
+        [TestMethod]
+        public void IFinished_WithADatStillLocked_RechecksButNeverSkipsTheInUseProbe()
+        {
+            FileStream held = null;
+            using (var rig = new Rig(folder =>
+            {
+                File.WriteAllBytes(Path.Combine(folder, "client_portal.dat"), StockDat);
+                held = new FileStream(Path.Combine(folder, "client_portal.dat"), FileMode.Open, FileAccess.Read, FileShare.Read);
+            }))
+            {
+                // Only clicks drive the settle wait: its own interval is far away.
+                rig.Deps.SettleInterval = TimeSpan.FromMinutes(5);
+                rig.Deps.SettleTimeout = TimeSpan.FromMinutes(5);
+                var events = new Hooked(null);
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                try
+                {
+                    WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+                    session.CheckInstallNow();
+                    WaitUntil(() => Has(events, InstallEventKind.HandoffNotDetected, UiText.InstallerStillRunning), "the still-running answer to I finished");
+                    Assert.IsFalse(OverlayStarted(events), "I finished skipped the in-use probe");
+
+                    held.Dispose();
+                    held = null;
+                    session.CheckInstallNow();
+                    Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)), "a click once the file is free goes on without the 5 minute interval");
+                    Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                }
+                finally
+                {
+                    held?.Dispose();
+                }
+            }
+        }
+
+        [TestMethod]
+        public void LockedFileAtOverlayTime_GivesTheInstallerStillRunningMessage()
+        {
+            FileStream held = null;
+            using (var rig = new Rig())
+            {
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats" && held == null)
+                    {
+                        held = new FileStream(rig.Dat, FileMode.Open, FileAccess.Read, FileShare.None);
+                    }
+                });
+                try
+                {
+                    InstallRunResult r = rig.Run(events);
+                    Assert.AreEqual(LauncherError.InstallerStillRunning, r.Error);
+                    Assert.AreEqual("eor-dats", r.ComponentId);
+                    Assert.AreEqual("eor-dats", r.RetryFromId);
+                    Assert.AreEqual(
+                        "A game file is still in use, probably by the Asheron's Call installer. Finish the installer, then click Retry.",
+                        ErrorMessages.For(r.Error, r.SourceTransport));
+                }
+                finally
+                {
+                    held?.Dispose();
+                }
+            }
+        }
+
+        [TestMethod]
+        public void EveryDownload_IsVerified_BeforeTheInstallerStarts()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Downloads.GatedFile = "eor-dats.zip";
+                rig.Downloads.Gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var events = new Hooked(null);
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                WaitUntil(() => rig.Log.Contains("downloaded:ac-client.exe"), "the installer download");
+                WaitUntil(() => Has(events, InstallEventKind.StageStarted) && events.All.Any(x => x.Kind == InstallEventKind.StageStarted && x.ComponentId == "eor-dats"), "the game data download");
+                Thread.Sleep(200);
+                Assert.IsFalse(rig.Log.Contains("installer-started"), "the installer started before every download was verified");
+                Assert.IsFalse(Has(events, InstallEventKind.StepStarted), "a component was installed before every download was verified");
+
+                rig.Downloads.Gate.SetResult(true);
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                CollectionAssert.AreEqual(new[] { "downloaded:ac-client.exe", "downloaded:eor-dats.zip", "installer-started" }, rig.Log.ToArray());
+
+                List<InstallEvent> all = events.All.ToList();
+                int lastStaged = all.FindLastIndex(x => x.Kind == InstallEventKind.StageDone);
+                int firstApplied = all.FindIndex(x => x.Kind == InstallEventKind.StepStarted);
+                Assert.IsTrue(lastStaged >= 0 && lastStaged < firstApplied, "every StageDone must precede the first StepStarted");
+                CollectionAssert.AreEqual(new[] { "ac-client", "eor-dats" }, all.Where(x => x.Kind == InstallEventKind.StageDone).Select(x => x.ComponentId).ToArray(), "a patch has no download phase");
+                Assert.IsTrue(all.FindIndex(x => x.Kind == InstallEventKind.HandoffEnded) < all.FindIndex(x => x.Kind == InstallEventKind.StepStarted && x.ComponentId == "eor-dats"), "no overlay before the hand-off has ended");
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void DownloadPhaseFailure_NeverStartsTheInstaller_AndRetriesFromTheFirstComponent()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Downloads.FailFile = "eor-dats.zip";
+                rig.Downloads.FailWith = LauncherError.SourceQuotaExceeded;
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                InstallRunResult r = session.RunAsync(rig.FullPlan(), new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(LauncherError.SourceQuotaExceeded, r.Error);
+                Assert.AreEqual("eor-dats", r.ComponentId, "the failed row is the game data one");
+                Assert.AreEqual("ac-client", r.RetryFromId, "nothing was installed, so Retry starts from the installer");
+                Assert.IsFalse(rig.Log.Contains("installer-started"), "the installer window must not appear when a download failed");
+
+                rig.Downloads.FailFile = null;
+                InstallRunResult retry = session.RunAsync(rig.FullPlan(), new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(LauncherError.None, retry.Error, retry.ComponentId);
+                rig.AssertAllSatisfied();
+            }
+        }
+    }
+
+    [TestClass]
+    public class InstallerProcessWatchTests
+    {
+        [TestMethod]
+        public void TracksGrandchildren_AcrossExitedParents_AndDropsTheDead()
+        {
+            var table = new FakeProcessTable();
+            var watch = new InstallerProcessWatch(table, 10, null);
+            table.Set((10, 1, "extract.exe"), (11, 10, "setup.exe"));
+            Assert.IsTrue(watch.IsRunning());
+
+            // The extractor and setup are gone; setup's child (parent id 11) is still at work.
+            table.Set((12, 11, "engine.exe"), (99, 1, "explorer.exe"));
+            Assert.IsTrue(watch.IsRunning(), "an orphaned grandchild was missed");
+            StringAssert.Contains(watch.LastReason, "engine.exe");
+
+            table.Set((99, 1, "explorer.exe"));
+            Assert.IsFalse(watch.IsRunning());
+
+            // A later process that reuses a dead id's parent link is not adopted: 11 was dropped.
+            table.Set((13, 11, "unrelated.exe"), (99, 1, "explorer.exe"));
+            Assert.IsFalse(watch.IsRunning(), "a dropped id was still tracked");
+        }
+
+        [TestMethod]
+        public void HelperNames_MatchWholeNamesAnyCase()
+        {
+            Assert.IsTrue(InstallerProcessWatch.IsHelper("idriver.EXE"));
+            Assert.IsTrue(InstallerProcessWatch.IsHelper("ISBEW64.exe"));
+            Assert.IsTrue(InstallerProcessWatch.IsHelper("_INS5576._MP"));
+            Assert.IsFalse(InstallerProcessWatch.IsHelper("NotIDriver.exe"));
+            Assert.IsFalse(InstallerProcessWatch.IsHelper("acclient.exe"));
+        }
+
+        [TestMethod]
+        public void AFailingProcessList_CountsAsRunning()
+        {
+            var watch = new InstallerProcessWatch(new ThrowingTable(), 10, null);
+            Assert.IsTrue(watch.IsRunning());
+        }
+
+        [TestMethod]
+        public void RealToolhelpTable_ListsThisProcessWithItsParent()
+        {
+            int me = Process.GetCurrentProcess().Id;
+            ProcessEntry self = ToolhelpProcessTable.Instance.Snapshot().Single(p => p.Pid == me);
+            Assert.IsTrue(self.ParentPid > 0);
+            Assert.IsFalse(string.IsNullOrEmpty(self.ExeName));
+        }
+
+        private sealed class ThrowingTable : IProcessTable
+        {
+            public IReadOnlyList<ProcessEntry> Snapshot() => throw new System.ComponentModel.Win32Exception(5);
         }
     }
 }

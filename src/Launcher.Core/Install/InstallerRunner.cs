@@ -272,6 +272,12 @@ namespace DreamWeave.Launcher.Core.Install
         public int? ExitCode => _process?.ExitCode;
 
         /// <summary>
+        /// Id of the process Windows started (the self-extractor, for InstallShield), or null when
+        /// ShellExecute returned no handle. The root of an <see cref="InstallerProcessWatch"/>.
+        /// </summary>
+        public int? ProcessId => _process?.Id;
+
+        /// <summary>
         /// Polls detection until the client is installed: each poll locates the game folder
         /// (registry entries appear when the installer finishes) and evaluates the installer
         /// component; returns the folder once it is Satisfied (acclient.exe present with an
