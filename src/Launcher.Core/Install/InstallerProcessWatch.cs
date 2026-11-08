@@ -43,6 +43,7 @@ namespace DreamWeave.Launcher.Core.Install
     public sealed class ToolhelpProcessTable : IProcessTable
     {
         private const uint Th32csSnapProcess = 0x00000002;
+        private const int ErrorNoMoreFiles = 18;
         private static readonly IntPtr InvalidHandle = new IntPtr(-1);
 
         /// <summary>The shared instance.</summary>
@@ -63,17 +64,26 @@ namespace DreamWeave.Launcher.Core.Install
                 var e = new ProcessEntry32 { dwSize = (uint)Marshal.SizeOf(typeof(ProcessEntry32)) };
                 if (!Process32First(snap, ref e))
                 {
-                    return list;
+                    // The snapshot always holds at least this process, so an empty one is a failure too.
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
 
-                do
+                while (true)
                 {
                     list.Add(new ProcessEntry((int)e.th32ProcessID, (int)e.th32ParentProcessID, e.szExeFile));
                     e.dwSize = (uint)Marshal.SizeOf(typeof(ProcessEntry32));
-                }
-                while (Process32Next(snap, ref e));
+                    if (!Process32Next(snap, ref e))
+                    {
+                        int error = Marshal.GetLastWin32Error();
+                        if (error != ErrorNoMoreFiles)
+                        {
+                            // A partial list could miss the installer: report it, so the watch says Unknown.
+                            throw new Win32Exception(error);
+                        }
 
-                return list;
+                        return list;
+                    }
+                }
             }
             finally
             {
@@ -123,8 +133,11 @@ namespace DreamWeave.Launcher.Core.Install
         /// <summary>Only InstallShield helpers outside the tracked tree are running (they can linger after the wizard closes).</summary>
         HelpersOnly = 1,
 
-        /// <summary>The started process or one of its descendants (or a staged-name match) is running, or the list could not be read.</summary>
+        /// <summary>The started process or one of its descendants (or a staged-name match) is running.</summary>
         Tree = 2,
+
+        /// <summary>The process list could not be read. Treated as running, except that "I finished" may proceed on settled files.</summary>
+        Unknown = 3,
     }
 
     /// <summary>
@@ -182,6 +195,9 @@ namespace DreamWeave.Launcher.Core.Install
         /// <summary>Image names of the helper-only processes the last <see cref="Check"/> saw (outside the tracked tree).</summary>
         public IReadOnlyList<string> LastHelpers { get; private set; } = new string[0];
 
+        /// <summary>Image names of the tracked tree's processes the last <see cref="Check"/> saw.</summary>
+        public IReadOnlyList<string> LastTree { get; private set; } = new string[0];
+
         /// <summary>True while any tracked process or any InstallShield helper is running.</summary>
         public bool IsRunning()
         {
@@ -192,6 +208,7 @@ namespace DreamWeave.Launcher.Core.Install
         public InstallerActivity Check()
         {
             LastHelpers = new string[0];
+            LastTree = new string[0];
             IReadOnlyList<ProcessEntry> all;
             try
             {
@@ -199,9 +216,8 @@ namespace DreamWeave.Launcher.Core.Install
             }
             catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException || ex is ExternalException)
             {
-                // Unknown is treated like the tree: nothing may proceed on a guess.
                 LastReason = "process list unavailable";
-                return InstallerActivity.Tree;
+                return InstallerActivity.Unknown;
             }
 
             var alive = new HashSet<int>(all.Select(p => p.Pid));
@@ -232,6 +248,7 @@ namespace DreamWeave.Launcher.Core.Install
             List<string> tree = all.Where(p => _tracked.Contains(p.Pid)).Select(p => p.ExeName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             List<string> helpers = all.Where(p => !_tracked.Contains(p.Pid) && IsHelper(p.ExeName)).Select(p => p.ExeName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             LastHelpers = helpers;
+            LastTree = tree;
             LastReason = string.Join(", ", tree.Concat(helpers).Distinct(StringComparer.OrdinalIgnoreCase));
             if (tree.Count > 0)
             {

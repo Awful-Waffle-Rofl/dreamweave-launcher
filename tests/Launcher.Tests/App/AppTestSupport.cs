@@ -105,6 +105,9 @@ namespace DreamWeave.Launcher.Tests.App
         private readonly object _gate = new object();
         private List<DreamWeave.Launcher.Core.Install.ProcessEntry> _entries = new List<DreamWeave.Launcher.Core.Install.ProcessEntry>();
 
+        /// <summary>When true every snapshot fails, as a Toolhelp error would.</summary>
+        public bool Throw { get; set; }
+
         /// <summary>How many snapshots were taken.</summary>
         public int Snapshots { get; private set; }
 
@@ -126,6 +129,11 @@ namespace DreamWeave.Launcher.Tests.App
             lock (_gate)
             {
                 Snapshots++;
+                if (Throw)
+                {
+                    throw new System.ComponentModel.Win32Exception(299);
+                }
+
                 return _entries.ToArray();
             }
         }

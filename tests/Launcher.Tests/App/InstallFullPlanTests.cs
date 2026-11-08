@@ -98,10 +98,18 @@ namespace DreamWeave.Launcher.Tests.App
 
             public ConcurrentQueue<string> Log { get; set; }
 
+            /// <summary>False: the fake installer writes nothing (still on its first pages).</summary>
+            public bool WriteFiles { get; set; } = true;
+
             public IStartedProcess Start(ProcessStartInfo startInfo)
             {
                 Log?.Enqueue("installer-started");
                 OnStart?.Invoke();
+                if (!WriteFiles)
+                {
+                    return new Done(Pid);
+                }
+
                 // The retail setup: the final exe first, then the stock dats.
                 File.WriteAllBytes(Path.Combine(_folder, "acclient.exe"), Exe);
                 if (_afterExe != null)
@@ -677,6 +685,8 @@ namespace DreamWeave.Launcher.Tests.App
                 {
                     if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats" && held == null)
                     {
+                        // A helper of the installer is still around when the game data step hits the lock.
+                        rig.Processes.Set((77, 600, "IDriver.exe"));
                         held = new FileStream(rig.Dat, FileMode.Open, FileAccess.Read, FileShare.None);
                     }
                 });
@@ -765,7 +775,7 @@ namespace DreamWeave.Launcher.Tests.App
                 session.CheckInstallNow();
                 Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)), "I finished with only a helper left did not proceed");
                 Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
-                string line = rig.InstallLogLines.SingleOrDefault();
+                string line = rig.InstallLogLines.SingleOrDefault(l => l.Contains("proceeding"));
                 Assert.IsNotNull(line, "the decision must be logged");
                 StringAssert.Contains(line, "IDriver.exe");
                 StringAssert.Contains(line, "I finished");
@@ -784,11 +794,12 @@ namespace DreamWeave.Launcher.Tests.App
                 rig.Starter.OnStart = () => rig.Processes.Set((77, 600, "ISBEW64.exe"));
                 var events = new Hooked(null);
                 Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, cts.Token);
-                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.InstallerStillRunning), "the finish-the-installer status");
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.InstallerStillRunning + " Still running: ISBEW64.exe"), "the finish-the-installer status naming the helper");
                 int seen = rig.Processes.Snapshots;
                 WaitUntil(() => rig.Processes.Snapshots >= seen + 8, "more polls");
                 Assert.IsFalse(OverlayStarted(events), "a helper alone must still block the automatic path");
-                Assert.AreEqual(0, rig.InstallLogLines.Count);
+                Assert.IsFalse(rig.InstallLogLines.Any(l => l.Contains("proceeding")));
+                StringAssert.Contains(rig.InstallLogLines.Single(l => l.Contains("settle timeout")), "ISBEW64.exe");
 
                 cts.Cancel();
                 Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
@@ -810,10 +821,11 @@ namespace DreamWeave.Launcher.Tests.App
                 WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
 
                 session.CheckInstallNow();
-                WaitUntil(() => Has(events, InstallEventKind.HandoffNotDetected, UiText.InstallerStillRunning), "the still-running answer");
+                WaitUntil(() => Has(events, InstallEventKind.HandoffNotDetected, UiText.InstallerStillRunning + " Still running: setup-root.exe, IDriver.exe"), "the still-running answer naming the processes");
                 Thread.Sleep(200);
                 Assert.IsFalse(OverlayStarted(events), "I finished went on while the installer itself still ran");
-                Assert.AreEqual(0, rig.InstallLogLines.Count);
+                Assert.IsFalse(rig.InstallLogLines.Any(l => l.Contains("proceeding")));
+                StringAssert.Contains(rig.InstallLogLines.First(l => l.Contains("I finished refused")), "setup-root.exe");
 
                 cts.Cancel();
                 Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
@@ -840,6 +852,157 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.IsFalse(rig.Log.Contains("installer-started"), "the installer window must not open after a failed download");
                 Assert.IsFalse(Has(events, InstallEventKind.HandoffStarted));
                 Assert.IsFalse(Has(events, InstallEventKind.StepStarted), "nothing is installed before every download is verified");
+            }
+        }
+        [TestMethod]
+        public void LockedFileAtOverlayTime_WithNothingOfTheInstallerRunning_StaysGameRunning()
+        {
+            FileStream held = null;
+            using (var rig = new Rig())
+            {
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats" && held == null)
+                    {
+                        // Empty process table: the installer is gone, so the holder is a game left running.
+                        held = new FileStream(rig.Dat, FileMode.Open, FileAccess.Read, FileShare.None);
+                    }
+                });
+                try
+                {
+                    InstallRunResult r = rig.Run(events);
+                    Assert.AreEqual(LauncherError.GameRunning, r.Error);
+                    Assert.AreEqual("eor-dats", r.ComponentId);
+                    Assert.AreEqual("A game file is in use, probably by a running Asheron's Call. Close the game and click Retry.", ErrorMessages.For(r.Error, r.SourceTransport));
+                }
+                finally
+                {
+                    held?.Dispose();
+                }
+            }
+        }
+
+        [TestMethod]
+        public void GameClientStartedByTheInstaller_IsNamed_AndThePlayerIsAskedToCloseTheGame()
+        {
+            using (var rig = new Rig())
+            using (var cts = new CancellationTokenSource())
+            {
+                // The finish page started acclient.exe as the installer's child; the installer itself has exited.
+                rig.Deps.SettleTimeout = TimeSpan.FromMilliseconds(200);
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((5000, 4242, "acclient.exe"));
+                var events = new Hooked(null);
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), events, cts.Token);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, "Close Asheron's Call, then click \"I finished\"."), "the close-the-game status");
+                StringAssert.Contains(rig.InstallLogLines.Single(l => l.Contains("settle timeout")), "acclient.exe");
+
+                session.CheckInstallNow();
+                WaitUntil(() => Has(events, InstallEventKind.HandoffNotDetected, UiText.CloseGameThenFinished), "the close-the-game answer to I finished");
+                StringAssert.Contains(rig.InstallLogLines.First(l => l.Contains("I finished refused")), "acclient.exe");
+                Assert.IsFalse(OverlayStarted(events));
+
+                cts.Cancel();
+                Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
+            }
+        }
+
+        [TestMethod]
+        public void RetryAfterStopDuringTheHandoff_WithTheTreeAlive_DoesNotStartASecondInstaller()
+        {
+            using (var rig = new Rig())
+            {
+                // The installer is still on its first pages: nothing written yet, its process alive.
+                rig.Starter.Pid = 4242;
+                rig.Starter.WriteFiles = false;
+                rig.Starter.OnStart = () => rig.Processes.Set((4242, 900, "setup-root.exe"));
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                using (var cts = new CancellationTokenSource())
+                {
+                    var first = new Hooked(null);
+                    Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), first, cts.Token);
+                    WaitUntil(() => Has(first, InstallEventKind.HandoffStarted), "the hand-off");
+                    cts.Cancel();
+                    Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
+                }
+
+                var second = new Hooked(null);
+                Task<InstallRunResult> retry = session.RunAsync(rig.FullPlan(), second, CancellationToken.None);
+                WaitUntil(() => Has(second, InstallEventKind.HandoffStarted), "the resumed hand-off");
+                Thread.Sleep(100);
+                Assert.AreEqual(1, rig.Log.Count(l => l == "installer-started"), "a second installer was started beside the first");
+
+                // The first installer finishes.
+                File.WriteAllBytes(Path.Combine(rig.Ac, "acclient.exe"), Exe);
+                File.WriteAllBytes(rig.Dat, StockDat);
+                rig.Processes.Set();
+                Assert.IsTrue(retry.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, retry.Result.Error, retry.Result.ComponentId);
+                Assert.AreEqual(1, rig.Log.Count(l => l == "installer-started"));
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void OverlayRetry_WhileTheInstallerTreeRuns_RefusesBeforeWritingTheGameFolder()
+        {
+            FileStream held = null;
+            using (var rig = new Rig())
+            {
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.StepStarted && e.ComponentId == "eor-dats" && held == null)
+                    {
+                        rig.Processes.Set((77, 600, "IDriver.exe"));
+                        held = new FileStream(rig.Dat, FileMode.Open, FileAccess.Read, FileShare.None);
+                    }
+                });
+                InstallRunResult r;
+                try
+                {
+                    r = session.RunAsync(rig.FullPlan(), events, CancellationToken.None).GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    held?.Dispose();
+                }
+
+                Assert.AreEqual(LauncherError.InstallerStillRunning, r.Error);
+                Assert.AreEqual("eor-dats", r.RetryFromId);
+
+                // Retry from the game data step while a copy of the installer runs again (found by its staged name).
+                rig.Processes.Set((9000, 1, "ac-client.exe"));
+                List<ManifestComponent> remaining = rig.FullPlan().Skip(1).ToList();
+                InstallRunResult retry = session.RunAsync(remaining, new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(LauncherError.InstallerStillRunning, retry.Error);
+                Assert.AreEqual("eor-dats", retry.ComponentId);
+                CollectionAssert.AreEqual(StockDat, File.ReadAllBytes(rig.Dat), "the game folder was written while the installer ran");
+            }
+        }
+
+        [TestMethod]
+        public void UnreadableProcessList_BlocksTheAutomaticPath_ButIFinishedProceeds_AndLogsIt()
+        {
+            using (var rig = new Rig())
+            {
+                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(20);
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Throw = true;
+                var events = new Hooked(null);
+                var session = new InstallSession(rig.Deps, rig.Manifest, null);
+                Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+                int seen = rig.Processes.Snapshots;
+                WaitUntil(() => rig.Processes.Snapshots >= seen + 8, "more polls");
+                Assert.IsFalse(OverlayStarted(events), "an unreadable process list let the automatic path go on");
+
+                session.CheckInstallNow();
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)), "I finished with settled files must not be trapped by an unreadable process list");
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                StringAssert.Contains(rig.InstallLogLines.Single(l => l.Contains("proceeding")), "process list could not be read");
+                rig.AssertAllSatisfied();
             }
         }
     }

@@ -562,14 +562,16 @@ namespace DreamWeave.Launcher.App
         /// every exclusive open succeeding.</item>
         /// </list>
         /// There is no carrying on regardless: after <see cref="InstallDependencies.SettleTimeout"/> the
-        /// player is asked to finish the installer, and the wait goes on. "I finished" runs one check at
-        /// once with the same in-use and settle conditions, which it never skips. The one thing a click
-        /// relaxes: InstallShield helpers alone (outside the tracked installer tree) no longer block,
-        /// because a helper can linger after the wizard closes. That decision is logged with the helper
-        /// names. Helpers alone still block the automatic path.
+        /// player is told what is still running, and the wait goes on. "I finished" runs one check at once
+        /// with the same in-use and settle conditions, which it never skips. A click relaxes exactly two
+        /// things, both logged: InstallShield helpers alone (outside the tracked tree), which can linger
+        /// after the wizard closes, and a process list that cannot be read. The tracked tree always blocks.
+        /// The automatic path treats helpers and an unreadable list as running.
         /// </summary>
         private async Task WaitForInstallerDoneAsync(ManifestComponent installer, string folder, InstallerProcessWatch watch, IProgress<InstallEvent> events, CancellationToken ct)
         {
+            // Never without a gate: at least anything running under the staged installer's name.
+            watch = watch ?? NameOnlyWatch(installer);
             var relative = new List<string>();
             foreach (ManifestComponent comp in _manifest.Components)
             {
@@ -585,20 +587,12 @@ namespace DreamWeave.Launcher.App
             bool warned = false;
 
             // One look: the files' stamps, or null while the installer (as far as this look allows) runs or a file is in use.
-            string Look(bool helpersAllowed, out IReadOnlyList<string> helpers)
+            string Look(bool clickRelaxes, out InstallerActivity activity)
             {
-                helpers = new string[0];
-                if (watch != null)
-                {
-                    InstallerActivity activity = watch.Check();
-                    helpers = watch.LastHelpers;
-                    if (activity == InstallerActivity.Tree || (activity == InstallerActivity.HelpersOnly && !helpersAllowed))
-                    {
-                        return null;
-                    }
-                }
-
-                return SettleSnapshot(folder, targets);
+                activity = watch.Check();
+                bool blocked = activity == InstallerActivity.Tree
+                    || (!clickRelaxes && (activity == InstallerActivity.HelpersOnly || activity == InstallerActivity.Unknown));
+                return blocked ? null : SettleSnapshot(folder, targets);
             }
 
             while (true)
@@ -610,12 +604,11 @@ namespace DreamWeave.Launcher.App
                     poke = _poke.Task;
                 }
 
-                IReadOnlyList<string> helpers = null;
+                InstallerActivity activity = InstallerActivity.None;
                 bool clicked = poked;
-                string snapshot = await Task.Run(() => Look(clicked, out helpers), ct).ConfigureAwait(false);
-                if (snapshot != null && snapshot == previous && (!poked || helpers.Count == 0))
+                string snapshot = await Task.Run(() => Look(clicked, out activity), ct).ConfigureAwait(false);
+                if (snapshot != null && snapshot == previous && activity == InstallerActivity.None)
                 {
-                    // An automatic pass never reaches here with helpers running; a click with none needs no note.
                     return;
                 }
 
@@ -624,13 +617,17 @@ namespace DreamWeave.Launcher.App
                     // "I finished" with the installer tree gone and the files openable: one confirming look a
                     // short gap later, rather than make the player wait a full settle interval.
                     await Task.Delay(_deps.PollInterval, ct).ConfigureAwait(false);
-                    IReadOnlyList<string> confirmHelpers = null;
-                    string confirm = await Task.Run(() => Look(true, out confirmHelpers), ct).ConfigureAwait(false);
+                    InstallerActivity confirmActivity = InstallerActivity.None;
+                    string confirm = await Task.Run(() => Look(true, out confirmActivity), ct).ConfigureAwait(false);
                     if (confirm != null && confirm == snapshot)
                     {
-                        if (confirmHelpers.Count > 0)
+                        if (confirmActivity == InstallerActivity.HelpersOnly)
                         {
-                            _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: installer tree gone and files settled, InstallShield helper processes still running: " + string.Join(", ", confirmHelpers));
+                            _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: installer tree gone and files settled, InstallShield helper processes still running: " + string.Join(", ", watch.LastHelpers));
+                        }
+                        else if (confirmActivity == InstallerActivity.Unknown)
+                        {
+                            _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: files settled, the process list could not be read");
                         }
 
                         return;
@@ -643,12 +640,14 @@ namespace DreamWeave.Launcher.App
                 previous = poked ? null : snapshot;
                 if (poked)
                 {
-                    events.Report(new InstallEvent(InstallEventKind.HandoffNotDetected, installer.Id, text: UiText.InstallerStillRunning));
+                    _deps.InstallLog("installer-handoff component=" + installer.Id + " I finished refused: " + BlockerText(watch, snapshot));
+                    events.Report(new InstallEvent(InstallEventKind.HandoffNotDetected, installer.Id, text: StillRunningText(watch)));
                 }
                 else if (!warned && clock.Elapsed >= _deps.SettleTimeout)
                 {
                     warned = true;
-                    events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: UiText.InstallerStillRunning));
+                    _deps.InstallLog("installer-handoff component=" + installer.Id + " settle timeout: " + BlockerText(watch, snapshot));
+                    events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: StillRunningText(watch)));
                 }
 
                 Task delay = Task.Delay(_deps.SettleInterval, ct);
@@ -670,6 +669,59 @@ namespace DreamWeave.Launcher.App
                     await delay.ConfigureAwait(false);
                 }
             }
+        }
+
+        /// <summary>A watch with no root id: anything running under the staged installer's file name, plus the helpers.</summary>
+        private InstallerProcessWatch NameOnlyWatch(ManifestComponent installer)
+        {
+            return new InstallerProcessWatch(_deps.Processes, null, installer.Id + ".exe");
+        }
+
+        /// <summary>Image names the watch's last look saw: the tracked tree first, then helpers outside it.</summary>
+        private static List<string> BlockingNames(InstallerProcessWatch watch)
+        {
+            return watch.LastTree.Concat(watch.LastHelpers).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static bool OnlyTheGameClient(InstallerProcessWatch watch)
+        {
+            return watch.LastTree.Count > 0 && watch.LastTree.All(n => string.Equals(n, AcInstallLocator.ClientExeName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// The player's line while waiting: the game client alone (the installer's finish page can start it)
+        /// asks them to close the game; otherwise the still-running text, with the process names when known.
+        /// </summary>
+        internal static string StillRunningText(InstallerProcessWatch watch)
+        {
+            if (OnlyTheGameClient(watch))
+            {
+                return UiText.CloseGameThenFinished;
+            }
+
+            List<string> names = BlockingNames(watch);
+            if (names.Count == 0)
+            {
+                return UiText.InstallerStillRunning;
+            }
+
+            return UiText.InstallerStillRunning + " " + string.Format(System.Globalization.CultureInfo.InvariantCulture, UiText.StillRunningFormat, string.Join(", ", names));
+        }
+
+        private static string BlockerText(InstallerProcessWatch watch, string snapshot)
+        {
+            List<string> names = BlockingNames(watch);
+            if (names.Count > 0)
+            {
+                return "still running: " + string.Join(", ", names);
+            }
+
+            if (watch.LastReason.Length > 0)
+            {
+                return watch.LastReason;
+            }
+
+            return snapshot == null ? "a game file is still in use" : "game files still changing";
         }
 
         /// <summary>Stamps of the existing targets, or null when any of them could not be opened exclusively.</summary>
@@ -716,6 +768,9 @@ namespace DreamWeave.Launcher.App
 
             /// <summary>For an installer launched earlier in this session: the folder it was detected in (no download, no relaunch).</summary>
             public string DetectedFolder { get; set; }
+
+            /// <summary>For an installer launched earlier in this session whose tree still runs: wait on it again (no download, no relaunch).</summary>
+            public InstallerProcessWatch Resume { get; set; }
         }
 
         /// <summary>A patch has nothing to download; installers and overlays do.</summary>
@@ -735,6 +790,13 @@ namespace DreamWeave.Launcher.App
                 {
                     return new StagedComponent { DetectedFolder = already };
                 }
+
+                // Or it is still running: never start a second copy beside it.
+                InstallerProcessWatch earlier;
+                if (_watches.TryGetValue(c.Id, out earlier) && await Task.Run(() => earlier.Check(), ct).ConfigureAwait(false) == InstallerActivity.Tree)
+                {
+                    return new StagedComponent { Resume = earlier };
+                }
             }
 
             events.Report(new InstallEvent(InstallEventKind.StageStarted, c.Id));
@@ -745,9 +807,42 @@ namespace DreamWeave.Launcher.App
             return new StagedComponent { File = file };
         }
 
+        /// <summary>What a still-running installer tree means for a write to the game folder, or null when none runs.</summary>
+        private LauncherException InstallerTreeBlocks()
+        {
+            foreach (InstallerProcessWatch w in _watches.Values)
+            {
+                if (w.Check() == InstallerActivity.Tree)
+                {
+                    // The finish page can start the game client as the installer's child: then it is the game to close.
+                    return OnlyTheGameClient(w)
+                        ? new LauncherException(LauncherError.GameRunning, "Asheron's Call, started by the installer, is still running.")
+                        : new LauncherException(LauncherError.InstallerStillRunning, "The game installer is still running: " + string.Join(", ", BlockingNames(w)) + ".");
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>True while any installer launched in this session shows any activity (tree, helpers, or an unreadable list).</summary>
+        private bool AnyInstallerActivity()
+        {
+            return _watches.Values.Any(w => w.Check() != InstallerActivity.None);
+        }
+
         /// <summary>Install phase for one component, from what <see cref="StageAsync"/> staged (null for a patch).</summary>
         private async Task<bool> ApplyAsync(ManifestComponent c, StagedComponent staged, IProgress<InstallEvent> events, CancellationToken ct)
         {
+            if (c.Kind != ComponentKinds.Installer)
+            {
+                // A Retry of the game data step must not skip the gate the hand-off applied.
+                LauncherException blocked = await Task.Run(() => InstallerTreeBlocks(), ct).ConfigureAwait(false);
+                if (blocked != null)
+                {
+                    throw blocked;
+                }
+            }
+
             var progress = new ForwardingProgress(c.Id, events);
             try
             {
@@ -763,10 +858,15 @@ namespace DreamWeave.Launcher.App
                         throw new LauncherException(LauncherError.ManifestInvalid, "Unknown component kind.");
                 }
             }
-            catch (LauncherException ex) when (ex.Code == LauncherError.GameRunning && c.Kind != ComponentKinds.Installer && _launchedInstallers.Count > 0)
+            catch (LauncherException ex) when (ex.Code == LauncherError.GameRunning && c.Kind != ComponentKinds.Installer)
             {
-                // The installer ran in this session: it, not a game client, is the likely holder.
-                throw new LauncherException(LauncherError.InstallerStillRunning, ex.Message, ex);
+                // The installer is the likely holder only while something of it still runs; otherwise it is the game.
+                if (AnyInstallerActivity())
+                {
+                    throw new LauncherException(LauncherError.InstallerStillRunning, ex.Message, ex);
+                }
+
+                throw;
             }
         }
 
@@ -779,16 +879,23 @@ namespace DreamWeave.Launcher.App
 
         private async Task<bool> RunInstallerAsync(ManifestComponent c, StagedComponent staged, IProgress<ProgressReport> progress, IProgress<InstallEvent> events, CancellationToken ct)
         {
-            if (staged.DetectedFolder != null)
+            if (staged.DetectedFolder != null || staged.Resume != null)
             {
-                // Launched by an earlier run of this session and detected since: still wait until it is gone.
-                InstallerProcessWatch earlier;
-                _watches.TryGetValue(c.Id, out earlier);
+                // Launched by an earlier run of this session: detect it (unless already detected) and wait
+                // until it is gone. A missing watch falls back to the staged-name one, never to no gate.
+                InstallerProcessWatch earlier = staged.Resume;
+                if (earlier == null)
+                {
+                    _watches.TryGetValue(c.Id, out earlier);
+                }
+
+                earlier = earlier ?? NameOnlyWatch(c);
                 events.Report(new InstallEvent(InstallEventKind.HandoffStarted, c.Id, text: UiText.InstallerHandoff));
                 try
                 {
-                    await WaitForInstallerDoneAsync(c, staged.DetectedFolder, earlier, events, ct).ConfigureAwait(false);
-                    await AdoptFolderAsync(staged.DetectedFolder).ConfigureAwait(false);
+                    string folder = staged.DetectedFolder ?? await WaitForInstallAsync(c, events, ct).ConfigureAwait(false);
+                    await WaitForInstallerDoneAsync(c, folder, earlier, events, ct).ConfigureAwait(false);
+                    await AdoptFolderAsync(folder).ConfigureAwait(false);
                 }
                 finally
                 {
