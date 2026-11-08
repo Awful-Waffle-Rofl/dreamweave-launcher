@@ -24,7 +24,7 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') {
     exit 1
 }
 
-# --- the exe and its .config ---
+# --- the build folder: ISCC fails on any missing Source file; the .config is checked here for a clearer message ---
 if (-not (Test-Path -LiteralPath $ExePath)) { Write-Error "Exe not found: $ExePath"; exit 1 }
 $exeAbs = (Resolve-Path -LiteralPath $ExePath).Path
 $exeDir = Split-Path -Parent $exeAbs

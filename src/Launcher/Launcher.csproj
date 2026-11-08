@@ -19,6 +19,10 @@
     <EmbeddedResource Include="Assets\*.jpg;Assets\*.png;Assets\*.ico" LogicalName="Assets.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The license notices for the shipped third-party DLLs travel beside the exe; a test keeps this equal to the shipped section of THIRD-PARTY-NOTICES.md. -->
+    <None Include="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />
   </ItemGroup>
 </Project>

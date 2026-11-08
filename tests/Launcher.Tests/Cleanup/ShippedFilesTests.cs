@@ -153,7 +153,14 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             string outDir = Path.Combine(RepoRoot(), "src", "Launcher", "bin", config, tfm);
             if (!File.Exists(Path.Combine(outDir, "DreamWeaveLauncher.exe")))
             {
-                Assert.Inconclusive("No launcher build output at " + outDir);
+                string message = "No launcher build output at " + outDir;
+                if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CI")))
+                {
+                    // CI always builds first: a missing output there means this check would silently not run.
+                    Assert.Fail(message);
+                }
+
+                Assert.Inconclusive(message);
             }
 
             Manifest m = Load();
@@ -167,6 +174,48 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             Assert.IsTrue(total <= m.MaxTotalBytes, "shipped files over the total cap: " + total);
         }
 
+        /// <summary>Markdown markers removed and runs of whitespace collapsed, so only the words are compared.</summary>
+        private static string Normalize(string text)
+        {
+            string t = text.Replace("\r\n", "\n");
+            t = Regex.Replace(t, @"^#+\s+", string.Empty, RegexOptions.Multiline);
+            t = t.Replace("`", string.Empty);
+            return Regex.Replace(t, @"\s+", " ").Trim();
+        }
+
+        [TestMethod]
+        public void NoticesText_IsTheShippedSectionOfTheMarkdownNotices_AndNamesOnlyShippedThirdPartyFiles()
+        {
+            string md = ReadRepoFile("THIRD-PARTY-NOTICES.md").Replace("\r\n", "\n");
+            int start = md.IndexOf("## Shipped beside the exe", StringComparison.Ordinal);
+            int end = md.IndexOf("\n## ", start + 1, StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0 && end > start, "the shipped section of THIRD-PARTY-NOTICES.md was not found");
+            string expected = Normalize("# Third-party notices\n\n" + md.Substring(start, end - start));
+            string txt = ReadRepoFile("src", "Launcher", "THIRD-PARTY-NOTICES.txt");
+            Assert.AreEqual(expected, Normalize(txt), "src/Launcher/THIRD-PARTY-NOTICES.txt must carry the same words as the shipped section of THIRD-PARTY-NOTICES.md (headings without '#', no backticks).");
+
+            foreach (string retired in new[] { "Costura", "Fody" })
+            {
+                Assert.IsFalse(txt.Contains(retired), "retired package in the shipped notices: " + retired);
+            }
+
+            // Every shipped third-party DLL (anything but our own files) has a notice entry.
+            foreach (string name in Load().Ship.Where(n => n.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) && !n.StartsWith("Launcher.", StringComparison.Ordinal)))
+            {
+                StringAssert.Contains(txt, name, "no notice for the shipped " + name);
+            }
+        }
+
+        [TestMethod]
+        public void NoticesText_IsShippedBesideTheExe()
+        {
+            CollectionAssert.Contains(Load().Ship, "THIRD-PARTY-NOTICES.txt");
+            StringAssert.Contains(ReadRepoFile("src", "Launcher", "Launcher.csproj"), "THIRD-PARTY-NOTICES.txt");
+            foreach (char c in ReadRepoFile("src", "Launcher", "THIRD-PARTY-NOTICES.txt"))
+            {
+                Assert.IsTrue(c == '\r' || c == '\n' || c == '\t' || (c >= ' ' && c < 127), "non-ASCII or control character: U+" + ((int)c).ToString("X4"));
+            }
+        }
         [TestMethod]
         public void List_IsAscii()
         {

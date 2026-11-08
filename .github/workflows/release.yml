@@ -65,8 +65,8 @@ jobs:
 
       # Code signing is not done in v1: the launcher ships UNSIGNED. Signing is planned through
       # SignPath Foundation (https://signpath.org/) once the application is approved; see
-      # Docs/code-signing-policy.md. When approved, sign here, BEFORE the packaging step above
-      # (so SHA256SUMS covers the signed exe; the setup installer is signed too once approved). Do not add any manifest-signing key to CI.
+      # Docs/code-signing-policy.md. When approved, sign here, BEFORE build-setup.ps1 (the setup
+      # packs the exe and Launcher.Core.dll, so they must already be signed) and so SHA256SUMS covers the signed setup installer. Do not add any manifest-signing key to CI.
       #
       # - name: Sign with SignPath
       #   uses: signpath/github-action-submit-signing-request@<full commit sha>

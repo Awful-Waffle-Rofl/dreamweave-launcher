@@ -9,7 +9,7 @@ Windows setup program (no administrator rights needed).
 ## What it is
 
 The player runs `DreamWeaveLauncher-Setup-<version>.exe` from the GitHub Releases
-page. It installs the launcher (one small exe) under `%LOCALAPPDATA%\Programs`,
+page. It installs the launcher (one exe and two DLLs) under `%LOCALAPPDATA%\Programs`,
 adds a Start menu shortcut, and is removed from Windows Settings > Apps like any
 other program; uninstalling also removes saved passwords and launcher data. In
 the launcher the player ticks checkboxes for the pieces they need, the launcher

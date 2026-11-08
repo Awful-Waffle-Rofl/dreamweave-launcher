@@ -15,6 +15,7 @@ ship DreamWeaveLauncher.exe
 ship DreamWeaveLauncher.exe.config
 ship Launcher.Core.dll
 ship Newtonsoft.Json.dll
+ship THIRD-PARTY-NOTICES.txt
 
 build-only DreamWeaveLauncher.pdb
 build-only Launcher.Core.pdb

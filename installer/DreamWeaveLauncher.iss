@@ -47,6 +47,7 @@ Source: "{#ExeDir}\DreamWeaveLauncher.exe"; DestDir: "{app}"; Flags: ignoreversi
 Source: "{#ExeDir}\DreamWeaveLauncher.exe.config"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\Launcher.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\Newtonsoft.Json.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\DreamWeave Launcher"; Filename: "{app}\DreamWeaveLauncher.exe"
