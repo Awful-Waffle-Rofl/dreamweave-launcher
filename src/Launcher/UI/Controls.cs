@@ -83,7 +83,8 @@ namespace DreamWeave.Launcher.UI
                 // so nothing runs under it and no horizontal bar is needed.
                 if (ClientSize.Width != before)
                 {
-                    Place(ClientSize.Width, true);
+                    content = Place(ClientSize.Width, true);
+                    AutoScrollMinSize = new Size(0, content);
                 }
             }
         }

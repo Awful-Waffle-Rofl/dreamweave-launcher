@@ -85,6 +85,32 @@ namespace DreamWeave.Launcher.UI
             ShowError();
         }
 
+        /// <summary>
+        /// Enter inside this row's account or password box plays this row only. <paramref name="boxFocused"/>
+        /// says whether one of those boxes has the focus.
+        /// </summary>
+        internal bool HandleEnter(bool boxFocused)
+        {
+            if (!boxFocused || !_play.Enabled)
+            {
+                return false;
+            }
+
+            _play.PerformClick();
+            return true;
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Key presses in the child boxes bubble up here before the form's default button sees them.
+            if (keyData == Keys.Enter && HandleEnter(_account.Focused || _password.Focused))
+            {
+                return true;
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
         private void ShowError()
         {
             string text = _launch ?? _validation ?? string.Empty;

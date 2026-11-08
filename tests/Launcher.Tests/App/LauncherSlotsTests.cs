@@ -287,6 +287,33 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void PlaySlot_SavesNamesBeforeTheClientStarts()
+        {
+            var slots = new MemorySlots();
+            List<string> seenAtStart = null;
+            var starter = new HookStarter(() => seenAtStart = new List<string>(slots.Saved));
+            LauncherPresenter p = Presenter(starter, new LauncherPresenterTests.MemoryCredentials(), slots);
+
+            p.PlaySlotAsync(1, Rows("mainacct", string.Empty, "altone", "pw1", string.Empty, string.Empty), false).GetAwaiter().GetResult();
+
+            Assert.IsNotNull(seenAtStart, "the client started");
+            CollectionAssert.AreEqual(new[] { "mainacct", "altone", string.Empty }, seenAtStart.ToArray(), "the store already held the names when the starter ran");
+            Assert.IsFalse(p.IsStarting);
+        }
+
+        private sealed class HookStarter : IGameStarter
+        {
+            private readonly Action _onStart;
+
+            public HookStarter(Action onStart)
+            {
+                _onStart = onStart;
+            }
+
+            public void Start(string acFolder, string args) => _onStart();
+        }
+
+        [TestMethod]
         public void PlayAll_CancelledDuringTheGap_DoesNotStartTheLaterRows()
         {
             var starter = new ScriptedStarter();

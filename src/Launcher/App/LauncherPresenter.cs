@@ -462,9 +462,18 @@ namespace DreamWeave.Launcher.App
                 return new SlotResult(slot, new PlayResult(LauncherError.InvalidCredentials, duplicate, false));
             }
 
-            PlayResult result = await StartCoreAsync(inputs[slot].Account, inputs[slot].Password, remember).ConfigureAwait(false);
-            await SaveSlotsAsync(inputs).ConfigureAwait(false);
-            return new SlotResult(slot, result);
+            // Names first, as Play all does. The flag keeps a second start out while the save runs.
+            _batch = true;
+            try
+            {
+                await SaveSlotsAsync(inputs).ConfigureAwait(false);
+                PlayResult result = await StartCoreAsync(inputs[slot].Account, inputs[slot].Password, remember).ConfigureAwait(false);
+                return new SlotResult(slot, result);
+            }
+            finally
+            {
+                _batch = false;
+            }
         }
 
         /// <summary>
