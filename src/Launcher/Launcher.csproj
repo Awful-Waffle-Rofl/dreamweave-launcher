@@ -5,12 +5,17 @@
     <AssemblyName>DreamWeaveLauncher</AssemblyName>
     <RootNamespace>DreamWeave.Launcher</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\dreamweave.ico</ApplicationIcon>
     <Platforms>AnyCPU</Platforms>
     <!-- Do not copy referenced assemblies' XML docs next to the exe (only the exe ships). -->
     <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Launcher.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Art and icons stay embedded: the Release output is only the exe, .config and .pdb. -->
+    <EmbeddedResource Include="Assets\*.jpg;Assets\*.png;Assets\*.ico" LogicalName="Assets.%(Filename)%(Extension)" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />

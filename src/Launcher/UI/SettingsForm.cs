@@ -29,25 +29,24 @@ namespace DreamWeave.Launcher.UI
             MinimizeBox = false;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(560, 380);
+            ClientSize = new Size(520, 400);
+            Theme.Apply(this);
 
-            TableLayoutPanel stack = UiKit.Stack();
+            VStack stack = UiKit.Stack();
             Controls.Add(stack);
 
+            UiKit.Add(stack, UiKit.Heading(UiText.SettingsTitle));
             UiKit.Add(stack, UiKit.Text(UiText.SettingsFolder, true));
-            var row = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            var folder = new TextBox { Dock = DockStyle.Fill, ReadOnly = true, Text = acFolder ?? string.Empty };
+            TextBox folder = UiKit.Input();
+            folder.ReadOnly = true;
+            folder.Text = acFolder ?? string.Empty;
             Button browse = UiKit.Button(UiText.Browse);
-            row.Controls.Add(folder, 0, 0);
-            row.Controls.Add(browse, 1, 0);
-            UiKit.Add(stack, row);
+            UiKit.Add(stack, UiKit.PathInput(folder, browse));
 
             Button verifyButton = UiKit.Button(UiText.SettingsVerify);
             UiKit.Add(stack, UiKit.ButtonRow(verifyButton));
 
-            var telemetry = new CheckBox { Text = UiText.SettingsTelemetry, AutoSize = true, Enabled = false };
+            var telemetry = new ThemedCheckBox { Text = UiText.SettingsTelemetry, Enabled = false };
             UiKit.Add(stack, telemetry);
 
             Button updates = UiKit.Button(UiText.SettingsCheckUpdates);
@@ -55,8 +54,8 @@ namespace DreamWeave.Launcher.UI
             UiKit.Add(stack, UiKit.ButtonRow(updates, uninstallButton));
 
             _message = UiKit.Add(stack, UiKit.Text(string.Empty));
-            UiKit.Add(stack, UiKit.Text(string.Format(CultureInfo.InvariantCulture, UiText.SettingsVersionFormat, LauncherInfo.Version)));
-            Button close = UiKit.Button(UiText.Close, (s, e) => Close());
+            UiKit.Add(stack, UiKit.Muted(string.Format(CultureInfo.InvariantCulture, UiText.SettingsVersionFormat, LauncherInfo.Version)));
+            Button close = UiKit.Button(UiText.Close, (s, e) => Close(), true);
             UiKit.Add(stack, UiKit.ButtonRow(close));
             CancelButton = close;
 
@@ -214,6 +213,12 @@ namespace DreamWeave.Launcher.UI
     /// <summary>The <c>--uninstall</c> window: confirm (with the optional client checkbox), then run, then report.</summary>
     internal sealed class UninstallForm : Form
     {
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            base.OnFormClosed(e);
+            Assets.Release();
+        }
+
         /// <summary>How long the result stays on screen before the window closes itself (the self-delete helper waits about 60 s).</summary>
         internal static readonly TimeSpan AutoCloseAfter = TimeSpan.FromSeconds(20);
 
@@ -226,13 +231,14 @@ namespace DreamWeave.Launcher.UI
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             ClientSize = new Size(520, 300);
+            Theme.Apply(this);
 
-            TableLayoutPanel stack = UiKit.Stack();
+            VStack stack = UiKit.Stack();
             Controls.Add(stack);
             UiKit.Add(stack, UiKit.Heading(UiText.UninstallTitle));
             Label body = UiKit.Add(stack, UiKit.Text(UiText.UninstallConfirm));
-            var alsoClient = UiKit.Add(stack, new CheckBox { Text = UiText.UninstallAlsoClient, Checked = false, AutoSize = true });
-            Button go = UiKit.Button(UiText.UninstallButton);
+            var alsoClient = UiKit.Add(stack, new ThemedCheckBox { Text = UiText.UninstallAlsoClient, Checked = false });
+            Button go = UiKit.Button(UiText.UninstallButton, null, true);
             Button cancel = UiKit.Button(UiText.Cancel, (s, e) => Close());
             UiKit.Add(stack, UiKit.ButtonRow(cancel, go));
             CancelButton = cancel;

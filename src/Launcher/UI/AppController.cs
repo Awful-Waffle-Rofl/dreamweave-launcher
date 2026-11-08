@@ -27,7 +27,6 @@ namespace DreamWeave.Launcher.UI
         private readonly MainWindow _window = new MainWindow();
         private ManifestLoadResult _load;
         private string _acFolder;
-        private bool _firstRun;
         private LauncherPresenter _presenter;
         private LauncherScreen _launcherScreen;
         private UpdateGate _gate = UpdateGate.None;
@@ -51,7 +50,6 @@ namespace DreamWeave.Launcher.UI
             try
             {
                 string seen = await _services.ReadStateAsync(s => s.LauncherVersionSeen);
-                _firstRun = seen == null;
                 if (seen != LauncherInfo.Version)
                 {
                     await _services.UpdateStateAsync(s => s.LauncherVersionSeen = LauncherInfo.Version);
@@ -80,6 +78,7 @@ namespace DreamWeave.Launcher.UI
             }
 
             _load = load;
+            _window.SetLinks(load.Manifest.Links?.Discord);
             try
             {
                 await _services.Telemetry.ConfigureAsync(load.Manifest);
@@ -118,18 +117,18 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowLoading()
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(LauncherInfo.ProductName));
-            UiKit.Add(stack, UiKit.Text(UiText.Loading));
-            UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Marquee));
+            Page stack = UiKit.NewScreen(ScreenArt.Launcher);
+            stack.Add(UiKit.Heading(LauncherInfo.ProductName));
+            stack.Add(UiKit.Text(UiText.Loading));
+            stack.Add(UiKit.Bar(ProgressBarStyle.Marquee));
             _window.ShowScreen(stack);
         }
 
         private void ShowLoadFailed(LauncherError code)
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(LauncherInfo.ProductName));
-            var errors = UiKit.Add(stack, new ErrorPanel { ShowTryLater = true });
+            Page stack = UiKit.NewScreen(ScreenArt.Launcher);
+            stack.Add(UiKit.Heading(LauncherInfo.ProductName));
+            var errors = stack.Add(new ErrorPanel { ShowTryLater = true });
             errors.RetryClicked += (s, e) => StartAsync();
             errors.TryLaterClicked += (s, e) => _window.Close();
             errors.ShowError(code, TelemetrySteps.Manifest);
@@ -144,14 +143,41 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowLauncher()
         {
-            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder)
+            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State))
             {
                 Update = _gate,
             };
-            _launcherScreen = new LauncherScreen(_presenter, _firstRun, _services.Manifests.Manifest?.Notice);
+            _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice);
+            _window.FormClosing -= OnLauncherClosing;
+            _window.FormClosing += OnLauncherClosing;
             _launcherScreen.UpdateClicked += (s, e) => ApplyUpdate();
             _launcherScreen.SettingsClicked += (s, e) => ShowSettings();
             _window.ShowScreen(_launcherScreen);
+        }
+
+        // Closing during Play all drops the rows not yet started. A client that is mid-start is never
+        // interrupted: the close waits for it, then goes ahead.
+        private async void OnLauncherClosing(object sender, FormClosingEventArgs e)
+        {
+            LauncherPresenter presenter = _presenter;
+            if (presenter == null)
+            {
+                return;
+            }
+
+            presenter.CancelPending();
+            if (!presenter.IsStartInFlight)
+            {
+                return;
+            }
+
+            e.Cancel = true;
+            _window.FormClosing -= OnLauncherClosing;
+            await presenter.WhenNoStartInFlightAsync();
+            if (!_window.IsDisposed)
+            {
+                _window.Close();
+            }
         }
 
         private void ShowSettings()

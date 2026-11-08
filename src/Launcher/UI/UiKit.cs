@@ -7,99 +7,80 @@ using DreamWeave.Launcher.Core;
 
 namespace DreamWeave.Launcher.UI
 {
-    /// <summary>Small factory helpers so every screen lays out the same way.</summary>
+    /// <summary>Small factory helpers so every screen lays out and looks the same.</summary>
     internal static class UiKit
     {
-        public const int Gutter = 12;
+        public const int Gutter = 20;
 
-        /// <summary>A vertical, auto-sizing stack that fills its parent's width.</summary>
-        public static TableLayoutPanel Stack()
+        /// <summary>A themed vertical stack that fills its parent (used by the plain dialogs).</summary>
+        public static VStack Stack()
         {
-            var t = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                AutoScroll = true,
-                Padding = new Padding(Gutter),
-                GrowStyle = TableLayoutPanelGrowStyle.AddRows,
-            };
-            t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            return t;
+            var s = new VStack { Dock = DockStyle.Fill };
+            Spacing.SetPadding(s, new Padding(Gutter));
+            return s;
         }
 
         /// <summary>Adds <paramref name="c"/> as the next row of <paramref name="stack"/>.</summary>
-        public static T Add<T>(TableLayoutPanel stack, T c) where T : Control
+        public static T Add<T>(VStack stack, T c) where T : Control
         {
-            stack.RowCount++;
-            stack.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            stack.Controls.Add(c, 0, stack.RowCount - 1);
+            stack.Controls.Add(c);
             return c;
         }
 
-        /// <summary>Height of a progress bar at 96 DPI.</summary>
-        public const int BarHeight = 20;
+        /// <summary>A new wizard/launcher screen with the art it wants behind its card.</summary>
+        public static Page NewScreen(ScreenArt art)
+        {
+            return new Page(art);
+        }
 
         /// <summary>
-        /// A full-width progress bar of normal fixed height (<see cref="BarHeight"/> scaled to the DPI of
-        /// the window it ends up in). Never Dock.Fill: in an auto-sizing stack that renders as a block as
-        /// tall as the window.
+        /// A full-width progress bar of fixed height (<see cref="ThemedBar.LogicalHeight"/> scaled to the
+        /// DPI of the window it is in). Never docked to fill: that renders as a block as tall as the window.
         /// </summary>
-        public static ProgressBar Bar(ProgressBarStyle style = ProgressBarStyle.Blocks, int maximum = 100)
+        public static ThemedBar Bar(ProgressBarStyle style = ProgressBarStyle.Blocks, int maximum = 100)
         {
-            var bar = new ProgressBar
-            {
-                Style = style,
-                Minimum = 0,
-                Maximum = maximum,
-                Dock = DockStyle.None,
-                Anchor = AnchorStyles.Left | AnchorStyles.Right,
-                Height = BarHeight,
-                Margin = new Padding(0, 4, 0, 4),
-            };
-
-            // Sized from the host control's own DPI once it has a parent (and again if the window moves
-            // to a monitor with another scale), not from the primary screen.
-            bar.ParentChanged += (s, e) => ApplyBarHeight(bar);
-            bar.DpiChangedAfterParent += (s, e) => ApplyBarHeight(bar);
-            return bar;
+            return new ThemedBar { Style = style, Maximum = maximum };
         }
 
-        private static void ApplyBarHeight(ProgressBar bar)
+        /// <summary>A wrapping label (body text colour).</summary>
+        public static WrapLabel Text(string text, bool bold = false, float sizeDelta = 0)
         {
-            if (bar.Parent != null)
+            var l = new WrapLabel { Text = text ?? string.Empty };
+            if (sizeDelta == 0)
             {
-                bar.Height = bar.LogicalToDeviceUnits(BarHeight);
+                if (bold)
+                {
+                    l.Font = Theme.BodyBold;
+                }
             }
-        }
-        /// <summary>A wrapping label.</summary>
-        public static Label Text(string text, bool bold = false, float sizeDelta = 0)
-        {
-            var l = new Label
+            else
             {
-                Text = text ?? string.Empty,
-                AutoSize = true,
-                MaximumSize = new Size(560, 0),
-                Margin = new Padding(0, 4, 0, 4),
-                UseMnemonic = false,
-            };
-            if (bold || sizeDelta != 0)
-            {
-                l.Font = new Font(l.Font.FontFamily, l.Font.Size + sizeDelta, bold ? FontStyle.Bold : FontStyle.Regular);
+                var f = new Font(Theme.BodyFamily, 9.75f + sizeDelta, bold ? FontStyle.Bold : FontStyle.Regular);
+                l.Font = f;
+                l.Disposed += (s, e) => f.Dispose();
             }
 
             return l;
         }
 
-        /// <summary>A heading label.</summary>
-        public static Label Heading(string text)
+        /// <summary>A wrapping label in the secondary (muted) colour.</summary>
+        public static WrapLabel Muted(string text)
         {
-            return Text(text, true, 3);
+            var l = Text(text);
+            l.ForeColor = Theme.Muted;
+            return l;
         }
 
-        /// <summary>A button sized to its text.</summary>
-        public static Button Button(string text, EventHandler onClick = null)
+        /// <summary>A screen title with the gold rule beneath.</summary>
+        public static TitleBlock Heading(string text)
         {
-            var b = new Button { Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(8, 2, 8, 2), UseMnemonic = false };
+            return new TitleBlock(text);
+        }
+
+        /// <summary>A primary (gold) or secondary (outlined) button sized to its text.</summary>
+        public static FlatButton Button(string text, EventHandler onClick = null, bool primary = false)
+        {
+            var b = new FlatButton(primary) { Text = text };
             if (onClick != null)
             {
                 b.Click += onClick;
@@ -108,15 +89,41 @@ namespace DreamWeave.Launcher.UI
             return b;
         }
 
-        /// <summary>A right-aligned row of buttons.</summary>
+        /// <summary>A text link in the accent colour.</summary>
+        public static LinkLabel Link(string text, Action onClick)
+        {
+            var l = new LinkLabel
+            {
+                Text = text,
+                AutoSize = true,
+                BackColor = Color.Transparent,
+                LinkColor = Theme.Gold,
+                ActiveLinkColor = Theme.Lighten(Theme.Gold, 0.2),
+                VisitedLinkColor = Theme.Gold,
+                LinkBehavior = LinkBehavior.HoverUnderline,
+                UseMnemonic = false,
+                Font = Theme.Body,
+                Margin = new Padding(0, 4, 0, 4),
+            };
+            l.LinkClicked += (s, e) => onClick();
+            return l;
+        }
+
+        /// <summary>A text box with a button to its right.</summary>
+        public static PathRow PathInput(TextBox box, Button button)
+        {
+            return new PathRow(box, button);
+        }
+
+        /// <summary>A right-aligned row of buttons; the last one is rightmost.</summary>
         public static FlowLayoutPanel ButtonRow(params Control[] buttons)
         {
             var f = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.RightToLeft,
                 AutoSize = true,
-                Dock = DockStyle.Fill,
                 WrapContents = false,
+                BackColor = Color.Transparent,
                 Margin = new Padding(0, 8, 0, 0),
             };
             for (int i = buttons.Length - 1; i >= 0; i--)
@@ -129,6 +136,33 @@ namespace DreamWeave.Launcher.UI
 
             return f;
         }
+
+        /// <summary>A themed text box.</summary>
+        public static TextBox Input(string cue = null, bool password = false, int maxLength = 0)
+        {
+            var t = Theme.StyleInput(new TextBox { Font = Theme.Body, Margin = new Padding(0) });
+            t.UseSystemPasswordChar = password;
+            if (maxLength > 0)
+            {
+                t.MaxLength = maxLength;
+            }
+
+            if (!string.IsNullOrEmpty(cue))
+            {
+                t.HandleCreated += (s, e) => SendMessage(t.Handle, EmSetCueBanner, new IntPtr(1), cue);
+                if (t.IsHandleCreated)
+                {
+                    SendMessage(t.Handle, EmSetCueBanner, new IntPtr(1), cue);
+                }
+            }
+
+            return t;
+        }
+
+        private const int EmSetCueBanner = 0x1501;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
 
         /// <summary>Puts <paramref name="text"/> on the clipboard, ignoring a clipboard held by another program.</summary>
         public static void CopyToClipboard(string text)
@@ -147,11 +181,11 @@ namespace DreamWeave.Launcher.UI
     /// The failure panel: the plain message from <see cref="ErrorMessages"/>, then Retry, Try later and
     /// Copy details. Copy details carries the code name, launcher version, step and time only.
     /// </summary>
-    internal sealed class ErrorPanel : TableLayoutPanel
+    internal sealed class ErrorPanel : VStack
     {
-        private readonly Label _message;
-        private readonly Button _retry;
-        private readonly Button _later;
+        private readonly WrapLabel _message;
+        private readonly FlatButton _retry;
+        private readonly FlatButton _later;
         private LauncherError _code;
         private string _step;
         private DateTime _whenUtc;
@@ -160,27 +194,20 @@ namespace DreamWeave.Launcher.UI
 
         public ErrorPanel()
         {
-            Dock = DockStyle.Fill;
-            AutoSize = true;
-            ColumnCount = 1;
-            ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             Visible = false;
+            Margin = new Padding(0);
             _message = UiKit.Text(string.Empty);
-            _message.ForeColor = Color.Firebrick;
-            _retry = UiKit.Button(UiText.Retry, (s, e) => RetryClicked?.Invoke(this, EventArgs.Empty));
+            _message.ForeColor = Theme.Err;
+            _retry = UiKit.Button(UiText.Retry, (s, e) => RetryClicked?.Invoke(this, EventArgs.Empty), true);
             _later = UiKit.Button(UiText.TryLater, (s, e) => TryLaterClicked?.Invoke(this, EventArgs.Empty));
             Button copy = UiKit.Button(UiText.CopyDetails, (s, e) =>
             {
                 UiKit.CopyToClipboard(ErrorDetails.Build(_code, LauncherInfo.Version, _step, _whenUtc, _files));
                 _message.Text = ErrorMessages.For(_code, _transport) + " " + UiText.DetailsCopied;
             });
-            RowCount = 2;
-            RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Controls.Add(_message, 0, 0);
-            Controls.Add(UiKit.ButtonRow(_retry, _later, copy), 0, 1);
+            Controls.Add(_message);
+            Controls.Add(UiKit.ButtonRow(_later, copy, _retry));
         }
-
         public event EventHandler RetryClicked;
 
         public event EventHandler TryLaterClicked;

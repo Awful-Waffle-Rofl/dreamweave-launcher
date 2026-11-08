@@ -57,7 +57,11 @@ namespace DreamWeave.Launcher.App
 
         // ---- Wizard ----
 
-        public const string WelcomeTitle = "Welcome";
+        public const string WelcomeTitle = "Welcome to DreamWeave";
+        public const string WelcomeNextHeading = "What happens next";
+        public const string WelcomeStepFolder = "Choose your Asheron's Call game folder.";
+        public const string WelcomeStepDownloads = "Choose which files to download.";
+        public const string WelcomeStepLogin = "Log in and play.";
         public const string LocationTitle = "Game folder";
         public const string LocationIntro = "Where is Asheron's Call installed on this PC? If it is not installed yet, keep the default folder.";
         public const string LocationFound = "Asheron's Call was found in this folder.";
@@ -127,6 +131,22 @@ namespace DreamWeave.Launcher.App
         public const string UpdateUnavailable = "This launcher is too old to play on the server and no update could be found. Download the launcher again from the DreamWeave website.";
         public const string Updating = "Updating the launcher...";
         public const string GameStarted = "Asheron's Call is starting.";
+        public const string SlotMain = "Main";
+        public const string SlotAlt1 = "Alt 1";
+        public const string SlotAlt2 = "Alt 2";
+        public const string RememberPasswords = "Remember passwords";
+        public const string PlayAll = "Play all";
+        public const string FillInFirst = "Fill in an account and password first.";
+        public const string DuplicateAccount = "This account is already used in another row.";
+        public const string NewHereInfo = "New here? There is no sign-up page. Type any account name and password you like and press Play: your first login creates the account. Use the same name and password every time after that.";
+
+        // ---- Header links ----
+
+        public const string LinkWebsite = "Website";
+        public const string LinkWiki = "Wiki";
+        public const string LinkDiscord = "Discord";
+        public const string WebsiteUrl = "https://www.acdreamweave.com";
+        public const string WikiUrl = "https://wiki.acdreamweave.com";
 
         // ---- Settings ----
 
