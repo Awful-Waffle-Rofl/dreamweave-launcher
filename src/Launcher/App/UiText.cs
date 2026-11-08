@@ -28,6 +28,9 @@ namespace DreamWeave.Launcher.App
         public const string InstallerHandoff = "The Asheron's Call installer is now open. Keep the default folder, click through to the end, and untick any option to launch the game or check for updates. This window continues automatically when the install is detected.";
 
         // FIXED E1
+        /// <summary>A download limit that did not come from mega.nz (for example an HTTP 429 from a mirror).</summary>
+        public const string SourceBusy = "The download site is limiting downloads right now. Wait a while and click Retry.";
+
         public const string MegaQuota = "mega.nz has temporarily limited downloads from your connection. This is a mega.nz limit, not a problem with your PC. Wait a while (usually under an hour) and click Retry.";
 
         // FIXED L1
@@ -68,6 +71,9 @@ namespace DreamWeave.Launcher.App
         public const string Checking = "Checking your game files...";
         public const string ComponentsTitle = "What to install";
         public const string DownloadedFromFormat = "Downloaded from: {0}";
+
+        /// <summary>Shown on the progress screen when a download falls back to a mirror ({0} = the mirror's source label).</summary>
+        public const string FallbackSourceFormat = "Trying another source: {0}";
         public const string StatusDone = "Done";
         public const string StatusNeedsRepair = "Needs repair";
         public const string StatusWillDownload = "Will download";

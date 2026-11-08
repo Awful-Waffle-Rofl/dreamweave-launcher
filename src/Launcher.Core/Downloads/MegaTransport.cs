@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
 using System.Threading;
@@ -11,8 +12,17 @@ namespace DreamWeave.Launcher.Core.Downloads
     /// <summary>Tunables for <see cref="MegaTransport"/>.</summary>
     public sealed class MegaTransportOptions
     {
-        /// <summary>No progress for this long cancels the attempt and retries.</summary>
+        /// <summary>Once bytes have started to arrive, no further progress for this long cancels the attempt and retries.</summary>
         public TimeSpan InactivityTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+        /// <summary>
+        /// How long to wait for the FIRST progress change after the download starts. mega.nz can take
+        /// minutes to begin a large file, so this is far longer than <see cref="InactivityTimeout"/>.
+        /// </summary>
+        public TimeSpan FirstProgressTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+        /// <summary>Login and link resolution must each answer within this time, or the attempt fails as NetworkUnavailable.</summary>
+        public TimeSpan ApiTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
         /// <summary>How long to wait for a cancelled MegaApiClient download to unwind before abandoning it.</summary>
         public TimeSpan AbandonGrace { get; set; } = TimeSpan.FromSeconds(10);
@@ -31,13 +41,20 @@ namespace DreamWeave.Launcher.Core.Downloads
     /// </summary>
     public sealed class MegaTransport : IDownloadTransport
     {
+        private const string NeverStartedKey = "neverStarted";
+
         private readonly Func<IMegaClient> _clientFactory;
         private readonly MegaTransportOptions _options;
 
         // Part paths whose last attempt was abandoned while its library read was still running.
         // Instance state (not per call), so a cancel during a stall followed by an immediate new
         // DownloadAsync still treats the held part as transient. Cleared once an attempt deletes the part.
-        private readonly ConcurrentDictionary<string, bool> _possiblyHeld = new ConcurrentDictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        private readonly ConcurrentDictionary<string, object> _possiblyHeld = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
+        // Orders an abandoned read's late clean-up against a newer attempt taking the path over: the
+        // clean-up checks its token and deletes under this lock, and a new attempt clears the entry under
+        // it BEFORE it creates its own part, so the late delete can never remove a newer attempt's file.
+        private readonly object _heldGate = new object();
 
         /// <summary>Production constructor (MegaApiClient).</summary>
         public MegaTransport()
@@ -84,6 +101,12 @@ namespace DreamWeave.Launcher.Core.Downloads
 
                     bool transient;
                     LauncherException mapped = MegaErrorMapper.Map(ex, out transient);
+                    if (request.FallbackAvailable && (mapped.Code == LauncherError.HashMismatch || mapped.Data.Contains(NeverStartedKey)))
+                    {
+                        // Mega's own checksum failed, or it never started sending, and another source is waiting: move on instead of retrying.
+                        throw mapped;
+                    }
+
                     if (!transient || retriesUsed >= _options.Retry.MaxRetries)
                     {
                         throw mapped;
@@ -113,12 +136,17 @@ namespace DreamWeave.Launcher.Core.Downloads
                 PartFiles.Delete(request.PartPath, "clearing an old partial download");
             }
 
-            bool ignored;
-            _possiblyHeld.TryRemove(Path.GetFullPath(request.PartPath), out ignored);
+            lock (_heldGate)
+            {
+                // This attempt now owns the path: any pending clean-up from an abandoned read no longer matches.
+                object previousToken;
+                _possiblyHeld.TryRemove(Path.GetFullPath(request.PartPath), out previousToken);
+            }
+
             using (IMegaClient client = _clientFactory())
             {
-                await WithCancellation(client.LoginAnonymousAsync(), cancellationToken).ConfigureAwait(false);
-                MegaFile file = await WithCancellation(client.GetFileFromLinkAsync(request.Url), cancellationToken).ConfigureAwait(false);
+                await WithCancellation(WithApiTimeout(client.LoginAnonymousAsync(), _options.ApiTimeout), cancellationToken).ConfigureAwait(false);
+                MegaFile file = await WithCancellation(WithApiTimeout(client.GetFileFromLinkAsync(request.Url), _options.ApiTimeout), cancellationToken).ConfigureAwait(false);
                 if (file == null || file.Size != request.ExpectedSize)
                 {
                     throw new LauncherException(
@@ -154,7 +182,10 @@ namespace DreamWeave.Launcher.Core.Downloads
                             break;
                         }
 
-                        bool stalled = TimeSpan.FromSeconds((clock.ElapsedTicks - Interlocked.Read(ref lastActivityTicks)) / (double)Stopwatch.Frequency) > _options.InactivityTimeout;
+                        // Before the first byte of progress mega may legitimately take minutes; after it, 60 s of silence is a stall.
+                        bool neverStarted = Interlocked.Read(ref lastBytes) == 0;
+                        TimeSpan limit = neverStarted ? _options.FirstProgressTimeout : _options.InactivityTimeout;
+                        bool stalled = TimeSpan.FromSeconds((clock.ElapsedTicks - Interlocked.Read(ref lastActivityTicks)) / (double)Stopwatch.Frequency) > limit;
                         if (cancellationToken.IsCancellationRequested || stalled)
                         {
                             // Detach first: from here on the library's callbacks must not touch the
@@ -164,12 +195,53 @@ namespace DreamWeave.Launcher.Core.Downloads
                             await Task.WhenAny(download, Task.Delay(_options.AbandonGrace)).ConfigureAwait(false);
                             if (!download.IsCompleted)
                             {
-                                _possiblyHeld[Path.GetFullPath(request.PartPath)] = true;
+                                string heldKey = Path.GetFullPath(request.PartPath);
+                                string heldPart = request.PartPath;
+                                var token = new object();
+                                lock (_heldGate)
+                                {
+                                    _possiblyHeld[heldKey] = token;
+                                }
+
+                                // When the abandoned read finally lets go, remove the part it leaves behind, but only
+                                // while this attempt's token is still the entry: a newer attempt replaces it first.
+                                download.ContinueWith(
+                                    _ =>
+                                    {
+                                        lock (_heldGate)
+                                        {
+                                            object current;
+                                            if (!_possiblyHeld.TryGetValue(heldKey, out current) || !ReferenceEquals(current, token))
+                                            {
+                                                return;
+                                            }
+
+                                            try
+                                            {
+                                                File.Delete(heldPart);
+                                            }
+                                            catch (IOException)
+                                            {
+                                            }
+                                            catch (UnauthorizedAccessException)
+                                            {
+                                            }
+
+                                            ((ICollection<KeyValuePair<string, object>>)_possiblyHeld).Remove(new KeyValuePair<string, object>(heldKey, token));
+                                        }
+                                    },
+                                    TaskScheduler.Default);
                             }
 
                             Observe(download);
                             cancellationToken.ThrowIfCancellationRequested();
-                            throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.");
+                            var stall = new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.");
+                            if (neverStarted)
+                            {
+                                stall.Data[NeverStartedKey] = true;
+                            }
+
+                            throw stall;
                         }
                     }
 
@@ -214,6 +286,24 @@ namespace DreamWeave.Launcher.Core.Downloads
                 }
             }
         }
+        private static async Task<T> WithApiTimeout<T>(Task<T> task, TimeSpan timeout)
+        {
+            await WithApiTimeout((Task)task, timeout).ConfigureAwait(false);
+            return await task.ConfigureAwait(false);
+        }
+
+        private static async Task WithApiTimeout(Task task, TimeSpan timeout)
+        {
+            Task first = await Task.WhenAny(task, Task.Delay(timeout)).ConfigureAwait(false);
+            if (first != task)
+            {
+                Observe(task);
+                throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz did not answer in time.");
+            }
+
+            await task.ConfigureAwait(false);
+        }
+
         private static async Task<T> WithCancellation<T>(Task<T> task, CancellationToken cancellationToken)
         {
             await WithCancellation((Task)task, cancellationToken).ConfigureAwait(false);

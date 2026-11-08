@@ -61,21 +61,55 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void OptionalComponent_DefaultsOff_EvenWhenManifestSaysDefaultSelected()
+        public void OptionalComponent_FollowsDefaultSelected()
         {
             ComponentSelection s = FreshInstall();
             ComponentRow patch = s.Rows.Single(r => r.Id == "palette-leak-fix");
-            Assert.IsFalse(patch.Checked);
             Assert.IsTrue(patch.CanToggle);
             Assert.IsNull(patch.Note, "the source label has its own line; the manifest has no description to repeat");
 
-            var selected = new ComponentSelection(AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: true)), new[]
+            var statuses = new[]
             {
                 AppFixtures.Status("ac-client", ComponentState.Missing),
                 AppFixtures.Status("eor-dats", ComponentState.Missing),
                 AppFixtures.Status("palette-leak-fix", ComponentState.Missing),
+            };
+            var on = new ComponentSelection(AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: true)), statuses);
+            Assert.IsTrue(on.Rows.Single(r => r.Id == "palette-leak-fix").Checked, "defaultSelected: true starts checked");
+            var off = new ComponentSelection(AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: false)), statuses);
+            Assert.IsFalse(off.Rows.Single(r => r.Id == "palette-leak-fix").Checked, "defaultSelected: false starts unchecked");
+
+            // A patch that cannot run (target absent or unknown state) is never pre-checked, and a required component is unchanged.
+            var na = new ComponentSelection(AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: true)), new[]
+            {
+                AppFixtures.Status("ac-client", ComponentState.Satisfied),
+                AppFixtures.Status("eor-dats", ComponentState.Satisfied),
+                AppFixtures.Status("palette-leak-fix", ComponentState.Unknown),
             });
-            Assert.IsFalse(selected.Rows.Single(r => r.Id == "palette-leak-fix").Checked);
+            Assert.IsFalse(na.Rows.Single(r => r.Id == "palette-leak-fix").Checked);
+            Assert.IsTrue(on.Rows.Single(r => r.Id == "ac-client").Checked);
+        }
+        [TestMethod]
+        public void DefaultSelectedPatch_OnASwappedExe_StartsUnchecked_ButOnAnAbsentExeStaysChecked()
+        {
+            LauncherManifest manifest = AppFixtures.Manifest(AppFixtures.Installer(), AppFixtures.Overlay(), AppFixtures.Patch(defaultSelected: true));
+            var swapped = new ComponentSelection(manifest, new[]
+            {
+                AppFixtures.Status("ac-client", ComponentState.Satisfied),
+                AppFixtures.Status("eor-dats", ComponentState.Satisfied),
+                AppFixtures.Status("palette-leak-fix", ComponentState.NotApplicable, AppFixtures.File("acclient.exe", FileState.Mismatch)),
+            });
+            Assert.IsFalse(swapped.Rows.Single(r => r.Id == "palette-leak-fix").Checked, "the patch would be skipped on a different exe");
+
+            var absent = new ComponentSelection(manifest, new[]
+            {
+                AppFixtures.Status("ac-client", ComponentState.Missing),
+                AppFixtures.Status("eor-dats", ComponentState.Missing),
+                AppFixtures.Status("palette-leak-fix", ComponentState.NotApplicable, AppFixtures.File("acclient.exe", FileState.Missing)),
+            });
+            ComponentRow row = absent.Rows.Single(r => r.Id == "palette-leak-fix");
+            Assert.AreEqual(RowStatus.WillApply, row.RowStatus);
+            Assert.IsTrue(row.Checked, "a target that is merely absent now may be put in place by the game data step");
         }
 
         [TestMethod]

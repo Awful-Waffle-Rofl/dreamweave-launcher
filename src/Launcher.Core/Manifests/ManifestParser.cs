@@ -91,6 +91,15 @@ namespace DreamWeave.Launcher.Core.Manifests
                 c.SatisfiedWhen = (c.SatisfiedWhen ?? new List<SatisfiedWhenRule>()).Where(r => r != null).ToList();
                 c.Files = (c.Files ?? new List<ManifestFile>()).Where(f => f != null).ToList();
                 c.Patches = (c.Patches ?? new List<BytePatch>()).Where(p => p != null).ToList();
+                // A mirror of a transport this launcher does not know is skipped (a newer manifest may add
+                // transports); a known transport with a bad URL is still an error, checked in Validate.
+                c.Mirrors = (c.Mirrors ?? new List<ManifestMirror>()).Where(s => s != null).ToList();
+                foreach (ManifestMirror unknown in c.Mirrors.Where(s => s.Transport != Transports.Http && s.Transport != Transports.Mega).ToList())
+                {
+                    warnings.Add("Skipping a mirror of component '" + c.Id + "' with unknown transport '" + (unknown.Transport ?? "(none)") + "'.");
+                    c.Mirrors.Remove(unknown);
+                }
+
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
                 {
                     rule.Sha256 = rule.Sha256 ?? new List<string>();
@@ -168,6 +177,22 @@ namespace DreamWeave.Launcher.Core.Manifests
                         }
 
                         break;
+                }
+
+                // Ordinal, not ignore-case: mega file ids and keys are case-sensitive.
+                var seenSources = new HashSet<string>(StringComparer.Ordinal);
+                if (c.Kind != ComponentKinds.BytePatch)
+                {
+                    seenSources.Add(SourceKey(c.Transport, c.Url));
+                }
+
+                for (int i = 0; i < c.Mirrors.Count; i++)
+                {
+                    RequireSource(c.Mirrors[i].Transport, c.Mirrors[i].Url, where + " mirror " + (i + 1));
+                    if (!seenSources.Add(SourceKey(c.Mirrors[i].Transport, c.Mirrors[i].Url)))
+                    {
+                        throw Invalid(where + " mirror " + (i + 1) + " repeats the primary source or an earlier mirror.");
+                    }
                 }
 
                 foreach (SatisfiedWhenRule rule in c.SatisfiedWhen)
@@ -272,6 +297,43 @@ namespace DreamWeave.Launcher.Core.Manifests
             {
                 return null;
             }
+        }
+
+        /// <summary>
+        /// A download source: transport "http" needs an absolute https URL; "mega" needs a public file
+        /// link (<c>https://mega.nz/file/&lt;id&gt;#&lt;key&gt;</c>). Anything else is rejected.
+        /// </summary>
+        internal static void RequireSource(string transport, string url, string what)
+        {
+            Uri uri;
+            if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out uri) || uri.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(uri.UserInfo))
+            {
+                throw Invalid(what + " needs an absolute https url.");
+            }
+
+            switch (transport)
+            {
+                case Transports.Http:
+                    return;
+                case Transports.Mega:
+                    bool hostOk = string.Equals(uri.Host, "mega.nz", StringComparison.OrdinalIgnoreCase) || string.Equals(uri.Host, "mega.co.nz", StringComparison.OrdinalIgnoreCase);
+                    string[] segments = uri.AbsolutePath.Trim('/').Split('/');
+                    if (!hostOk || segments.Length != 2 || segments[0] != "file" || segments[1].Length == 0 || uri.Fragment.Length < 2)
+                    {
+                        throw Invalid(what + " is not a mega.nz public file link.");
+                    }
+
+                    return;
+                default:
+                    throw Invalid(what + " has unknown transport '" + transport + "'.");
+            }
+        }
+
+        private static string SourceKey(string transport, string url)
+        {
+            Uri uri;
+            string normal = Uri.TryCreate(url, UriKind.Absolute, out uri) ? uri.AbsoluteUri : (url ?? string.Empty);
+            return (transport ?? string.Empty) + "|" + normal;
         }
 
         private static void RequireSha(string value, string what)

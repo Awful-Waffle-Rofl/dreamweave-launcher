@@ -60,7 +60,7 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <inheritdoc />
         public async Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
         {
-            IDownloadTransport transport = Validate(request);
+            Validate(request);
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(request.DestinationPath)));
@@ -70,7 +70,110 @@ namespace DreamWeave.Launcher.Core.Downloads
                 {
                     return existing;
                 }
+            }
+            catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new LauncherException(LauncherError.Cancelled, "Cancelled.", ex);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+                throw LauncherException.FromIo(ex, "preparing the download");
+            }
 
+            // The primary first, then each alternate in manifest order. Every source must produce the
+            // same size and SHA-256; a different hash from a mirror is a failure, never accepted. Each
+            // source has its own part file, so a read of one that is still unwinding cannot block the next.
+            DeleteSourceParts(request);
+            LauncherException last = null;
+            DownloadRequest previous = null;
+            int total = 1 + request.Alternates.Count;
+            for (int i = 0; i < total; i++)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw new LauncherException(LauncherError.Cancelled, "Cancelled.");
+                }
+
+                DownloadSource source = i == 0 ? new DownloadSource(request.Transport, request.Url, null) : request.Alternates[i - 1];
+                DownloadRequest attempt = request.ForSource(source, i, i < total - 1);
+                if (i > 0)
+                {
+                    // Free the previous source's partial file if it can be (a stalled read may still hold it).
+                    DiscardPart(previous);
+                    request.OnFallback?.Invoke(source.Label);
+                }
+
+                previous = attempt;
+                try
+                {
+                    DownloadResult result = await DownloadFromSourceAsync(attempt, progress, cancellationToken).ConfigureAwait(false);
+                    DeleteSourceParts(request);
+
+                    // The primary's own part (an abandoned read may have left it) is not wanted any more either.
+                    PartFiles.TryDelete(request.PartPath);
+                    PartFiles.TryDelete(request.SidecarPath);
+                    return result;
+                }
+                catch (LauncherException ex)
+                {
+                    ex.Data["transport"] = attempt.Transport;
+                    if (ex.Code == LauncherError.Cancelled || i >= total - 1 || !CanFallBack(ex.Code))
+                    {
+                        throw;
+                    }
+
+                    last = ex;
+                }
+            }
+
+            // Not reached while the last source throws its own error; kept as a safety net.
+            throw last ?? new LauncherException(LauncherError.Unknown, "No download source was available.");
+        }
+
+        /// <summary>Best-effort removal of every source's leftover part and sidecar (<c>&lt;dest&gt;.s*.part*</c>); a file still held is left alone.</summary>
+        private static void DeleteSourceParts(DownloadRequest request)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(Path.GetFullPath(request.DestinationPath));
+                if (!Directory.Exists(dir))
+                {
+                    return;
+                }
+
+                foreach (string file in Directory.GetFiles(dir, Path.GetFileName(request.DestinationPath) + ".s*.part*"))
+                {
+                    PartFiles.TryDelete(file);
+                }
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+            {
+            }
+        }
+        /// <summary>Failures another source could cure. Disk, permission and cancellation problems are not among them.</summary>
+        private static bool CanFallBack(LauncherError code)
+        {
+            switch (code)
+            {
+                case LauncherError.NetworkUnavailable:
+                case LauncherError.SourceHttpError:
+                case LauncherError.SourceQuotaExceeded:
+                case LauncherError.ResponseTooLarge:
+                case LauncherError.HashMismatch:
+                case LauncherError.SizeMismatch:
+                case LauncherError.ManifestInvalid:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        private async Task<DownloadResult> DownloadFromSourceAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
+        {
+            Validate(request);
+            IDownloadTransport transport = TransportFor(request);
+            try
+            {
                 long remaining = request.ExpectedSize - transport.GetResumableBytes(request);
                 long free = _disk.GetFreeBytes(_stagingDir);
                 if (free < remaining + FreeSpaceMargin)
@@ -104,7 +207,7 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
         }
 
-        private IDownloadTransport Validate(DownloadRequest request)
+        private void Validate(DownloadRequest request)
         {
             if (request == null)
             {
@@ -141,6 +244,11 @@ namespace DreamWeave.Launcher.Core.Downloads
                 throw new ArgumentException("Downloads must be saved in their component's own staging folder (" + expectedFolder + ").", nameof(request));
             }
 
+        }
+
+        /// <summary>The transport for this source; an unknown type is a manifest problem another source may cure.</summary>
+        private IDownloadTransport TransportFor(DownloadRequest request)
+        {
             IDownloadTransport transport;
             if (request.Transport == null || !_transports.TryGetValue(request.Transport, out transport))
             {
