@@ -1,6 +1,6 @@
 name: release
 
-# Tag push v*.*.* builds the exe and creates a DRAFT GitHub Release (never published by CI).
+# Tag push v*.*.* builds the exe and the setup installer and creates a DRAFT GitHub Release (never published by CI).
 # workflow_dispatch is a dry run: it runs every check and builds the assets, but creates no release.
 on:
   push:
@@ -42,18 +42,27 @@ jobs:
         shell: pwsh
         run: ./tools/release/check-build-output.ps1
 
-      - name: Assert tag equals assembly version
+      # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
+      - name: Build setup installer
         shell: pwsh
-        run: ./tools/release/assert-version.ps1 -Tag $env:TAG -ExePath $env:EXE_PATH
+        run: ./tools/release/build-setup.ps1 -ExePath $env:EXE_PATH -OutDir setup-out
+
+      - name: Assert tag equals assembly and setup version
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1).FullName
+          ./tools/release/assert-version.ps1 -Tag $env:TAG -ExePath $env:EXE_PATH -SetupPath $setup
 
       - name: Package release assets
         shell: pwsh
-        run: ./tools/release/package-release.ps1 -ExePath $env:EXE_PATH -OutDir release-assets
+        run: |
+          $setup = (Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1).FullName
+          ./tools/release/package-release.ps1 -SetupPath $setup -OutDir release-assets
 
       # Code signing is not done in v1: the launcher ships UNSIGNED. Signing is planned through
       # SignPath Foundation (https://signpath.org/) once the application is approved; see
       # Docs/code-signing-policy.md. When approved, sign here, BEFORE the packaging step above
-      # (so SHA256SUMS covers the signed exe). Do not add any manifest-signing key to CI.
+      # (so SHA256SUMS covers the signed exe; the setup installer is signed too once approved). Do not add any manifest-signing key to CI.
       #
       # - name: Sign with SignPath
       #   uses: signpath/github-action-submit-signing-request@<full commit sha>
@@ -106,6 +115,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" release-assets/DreamWeaveLauncher.exe release-assets/SHA256SUMS \
+          gh release create "$TAG" release-assets/DreamWeaveLauncher-Setup-*.exe release-assets/SHA256SUMS \
             --draft --verify-tag --title "DreamWeave Launcher $TAG" \
             --notes "Draft. Follow Docs/release-runbook.md before publishing: verify SHA256SUMS, update and sign the manifest, then publish."

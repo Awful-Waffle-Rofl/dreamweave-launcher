@@ -1,14 +1,18 @@
 # DreamWeave Launcher
 
-A single small Windows executable that installs, launches and uninstalls the
-client setup for the DreamWeave Asheron's Call emulator server.
+A small Windows launcher that installs, launches and cleans up the client setup
+for the DreamWeave Asheron's Call emulator server. It comes in a normal per-user
+Windows setup program (no administrator rights needed).
 
 **Not affiliated with WB Games or Turbine.** This is a community project.
 
 ## What it is
 
-One exe (target size around 1.5 MB) that acts as installer, launcher and
-uninstaller. The player ticks checkboxes for the pieces they need, the launcher
+The player runs `DreamWeaveLauncher-Setup-<version>.exe` from the GitHub Releases
+page. It installs the launcher (one small exe) under `%LOCALAPPDATA%\Programs`,
+adds a Start menu shortcut, and is removed from Windows Settings > Apps like any
+other program; uninstalling also removes saved passwords and launcher data. In
+the launcher the player ticks checkboxes for the pieces they need, the launcher
 downloads them, and then it starts `acclient.exe` with login arguments for
 DreamWeave.
 
@@ -31,7 +35,7 @@ DreamWeave.
   the file's SHA-256 before and after the change and keeps the original so the
   fix can be reverted. The patched file is produced on the player's own machine
   and is never distributed.
-- It has an uninstaller. Telemetry, if any is ever added, will be opt-in with a
+- It installs and uninstalls through a normal Inno Setup program. Telemetry, if any is ever added, will be opt-in with a
   published privacy policy.
 - Everything in this repository is under the MIT license. Code signing is
   planned through SignPath Foundation, with public CI builds.
@@ -41,6 +45,8 @@ No Asheron's Call logos or artwork are used in this repository.
 ## Repository layout
 
 - `src/Launcher.Core` - class library shared by the launcher and the tools.
+- `installer` - the Inno Setup 6 script for the per-user setup program, and the
+  privacy text it shows (kept in sync with `Docs/privacy.md` by a test).
 - `src/Launcher` - the WinForms executable (`DreamWeaveLauncher.exe`). Referenced
   assemblies are embedded with Costura.Fody.
 - `tools/ManifestTool` - console tool for generating keys and signing and
@@ -61,7 +67,9 @@ dotnet build DreamWeaveLauncher.sln -c Release
 dotnet test DreamWeaveLauncher.sln -c Release
 ```
 
-CI builds on Windows and fails if the launcher exe grows past 3 MB.
+CI builds on Windows, fails if the launcher exe grows past 3 MB, and builds the
+setup program with Inno Setup 6 (`tools/release/build-setup.ps1`; install Inno
+Setup 6 locally to run it).
 
 ## Docs
 

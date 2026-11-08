@@ -44,6 +44,17 @@ jobs:
           $extra = Get-ChildItem $dir -File | Where-Object { $allowed -notcontains $_.Name }
           if ($extra) { Write-Error "Unexpected files next to the exe: $($extra.Name -join ', ')"; exit 1 }
 
+      # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
+      - name: Build setup installer
+        shell: pwsh
+        run: ./tools/release/build-setup.ps1 -ExePath $env:EXE_PATH -OutDir setup-out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DreamWeaveLauncher-Setup
+          path: setup-out/DreamWeaveLauncher-Setup-*.exe
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v4
         with:
           name: DreamWeaveLauncher
