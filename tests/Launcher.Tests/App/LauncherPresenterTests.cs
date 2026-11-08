@@ -144,6 +144,9 @@ namespace DreamWeave.Launcher.Tests.App
             /// <summary>Clients returned by <see cref="Start"/>, in order.</summary>
             public List<DreamWeave.Launcher.Core.Launch.StartedClient> Clients { get; } = new List<DreamWeave.Launcher.Core.Launch.StartedClient>();
 
+            /// <summary>The owner (stand-in for the Process) of each client returned by <see cref="Start"/>, in order.</summary>
+            public List<CountingOwner> Owners { get; } = new List<CountingOwner>();
+
             /// <summary>Clients passed to <see cref="ReleaseLock"/>, in order.</summary>
             public List<DreamWeave.Launcher.Core.Launch.StartedClient> Released { get; } = new List<DreamWeave.Launcher.Core.Launch.StartedClient>();
 
@@ -158,7 +161,9 @@ namespace DreamWeave.Launcher.Tests.App
                 }
 
                 Starts.Add(new KeyValuePair<string, string>(acFolder, args));
-                var client = new DreamWeave.Launcher.Core.Launch.StartedClient(1000 + Starts.Count, new System.IntPtr(0x7000 + Starts.Count));
+                var owner = new CountingOwner();
+                Owners.Add(owner);
+                var client = new DreamWeave.Launcher.Core.Launch.StartedClient(1000 + Starts.Count, new System.IntPtr(0x7000 + Starts.Count), owner);
                 Clients.Add(client);
                 return client;
             }
@@ -169,6 +174,14 @@ namespace DreamWeave.Launcher.Tests.App
                 OnRelease?.Invoke(cancel);
                 return LockOutcome;
             }
+        }
+
+        /// <summary>Counts its disposals (the StartedClient's Process in production).</summary>
+        internal sealed class CountingOwner : System.IDisposable
+        {
+            public int Disposals { get; private set; }
+
+            public void Dispose() => Disposals++;
         }
 
         internal sealed class MemoryCredentials : ICredentialStore

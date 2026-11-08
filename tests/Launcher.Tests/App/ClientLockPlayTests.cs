@@ -78,6 +78,29 @@ namespace DreamWeave.Launcher.Tests.App
             Assert.AreSame(starter.Clients[1], starter.Released[1]);
         }
 
+        // Mutation checked: deleting the using around the StartedClient in StartCoreAsync leaves every
+        // owner undisposed and fails this test.
+        [TestMethod]
+        public void Play_DisposesTheStartedClient_AfterTheRelease_WhateverItReturns()
+        {
+            var normal = new LauncherPresenterTests.FakeStarter();
+            Presenter(normal).PlaySlotAsync(0, Rows("main", "pw"), false).GetAwaiter().GetResult();
+            Assert.AreEqual(1, normal.Owners[0].Disposals, "normal start");
+
+            var cancelled = new LauncherPresenterTests.FakeStarter { LockOutcome = ClientLockOutcome.Cancelled };
+            Presenter(cancelled).PlaySlotAsync(0, Rows("main", "pw"), false).GetAwaiter().GetResult();
+            Assert.AreEqual(1, cancelled.Owners[0].Disposals, "release cancelled");
+
+            var throwing = new LauncherPresenterTests.FakeStarter();
+            throwing.OnRelease = c =>
+            {
+                Assert.AreEqual(0, throwing.Owners[0].Disposals, "still open while the release runs");
+                throw new InvalidOperationException("scripted");
+            };
+            Assert.ThrowsExactly<InvalidOperationException>(() => Presenter(throwing).PlaySlotAsync(0, Rows("main", "pw"), false).GetAwaiter().GetResult());
+            Assert.AreEqual(1, throwing.Owners[0].Disposals, "release threw");
+        }
+
         // Mutation checked: dropping the ReportStatus call before the release fails this test.
         [TestMethod]
         public void Play_ShowsTheRowBeingStarted_WhileTheReleaseWaits()
