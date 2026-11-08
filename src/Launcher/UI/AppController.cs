@@ -257,20 +257,13 @@ namespace DreamWeave.Launcher.UI
             }
 
             _launcherScreen?.ShowStatus(UiText.OpeningDownloadPage);
-            ITelemetrySink t = _services.TelemetrySink;
-            t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Started);
-            Stopwatch clock = Stopwatch.StartNew();
-            LauncherError code = DownloadPageOpener.Open(_services.Processes, _gate.DownloadPage);
-            if (code == LauncherError.None)
+            LauncherError code = DownloadPageOpener.OpenAndRecord(_services.Processes, _services.TelemetrySink, _gate.DownloadPage);
+            if (code != LauncherError.None)
             {
-                t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
-            }
-            else
-            {
-                t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Failed, code, clock.Elapsed);
-                _launcherScreen?.ShowStatus(ErrorMessages.For(code));
+                _launcherScreen?.ShowStatus(DownloadPageOpener.FailureMessage(code, _gate.DownloadPage));
             }
         }
+
         /// <summary>
         /// Hands uninstall over to the setup program when its registered command (HKCU, Inno Setup's
         /// <c>{AppId}_is1</c> key, read only) passes <see cref="SetupUninstallLocator.TryResolve"/>, otherwise

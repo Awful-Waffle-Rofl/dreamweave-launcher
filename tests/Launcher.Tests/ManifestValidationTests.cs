@@ -57,6 +57,11 @@ namespace DreamWeave.Launcher.Tests
                 case "launcher-page-relative": m["launcher"]["downloadPage"] = "/releases/latest"; break;
                 case "launcher-page-ftp": m["launcher"]["downloadPage"] = "ftp://example.test/get"; break;
                 case "launcher-page-blank": m["launcher"]["downloadPage"] = "  "; break;
+                case "launcher-page-quote": m["launcher"]["downloadPage"] = "https://example.test/x\" -arg"; break;
+                case "launcher-page-crlf": m["launcher"]["downloadPage"] = "https://example.test/x\r\nHost: evil"; break;
+                case "launcher-page-space": m["launcher"]["downloadPage"] = "https://example.test/x y"; break;
+                case "launcher-page-tab": m["launcher"]["downloadPage"] = "https://example.test/x\ty"; break;
+                case "launcher-page-control": m["launcher"]["downloadPage"] = "https://example.test/x\u0001"; break;
                 case "launcher-page-not-a-url": m["launcher"]["downloadPage"] = "get it from the website"; break;
                 case "component-sha-bad": installer["sha256"] = new string('Z', 64); break;
                 case "component-sha-short": zip["sha256"] = "66E9"; break;
@@ -95,6 +100,11 @@ namespace DreamWeave.Launcher.Tests
         [DataRow("launcher-page-ftp")]
         [DataRow("launcher-page-blank")]
         [DataRow("launcher-page-not-a-url")]
+        [DataRow("launcher-page-quote")]
+        [DataRow("launcher-page-crlf")]
+        [DataRow("launcher-page-space")]
+        [DataRow("launcher-page-tab")]
+        [DataRow("launcher-page-control")]
         [DataRow("component-sha-bad")]
         [DataRow("component-sha-short")]
         [DataRow("file-sha-bad")]
@@ -161,6 +171,7 @@ namespace DreamWeave.Launcher.Tests
             Assert.AreEqual(12, info.Size);
             Assert.AreEqual("CN=Someone", info.AuthenticodeSubject);
         }
+
         [TestMethod]
         [DataRow("play acdreamweave.com")]
         [DataRow("\"play.acdreamweave.com\"")]

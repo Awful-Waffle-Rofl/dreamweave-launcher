@@ -10,9 +10,6 @@ namespace DreamWeave.Launcher.Core.Cleanup
     /// </summary>
     public static class CleanupLayout
     {
-        /// <summary>File name of the launcher exe.</summary>
-        public const string ExeFileName = "DreamWeaveLauncher.exe";
-
         /// <summary>True when two paths name the same location (full paths, case-insensitive).</summary>
         internal static bool SamePath(string a, string b)
         {

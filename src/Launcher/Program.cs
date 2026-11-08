@@ -6,7 +6,6 @@ using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Cleanup;
-using DreamWeave.Launcher.Core.Update;
 using DreamWeave.Launcher.UI;
 
 namespace DreamWeave.Launcher
@@ -72,7 +71,7 @@ namespace DreamWeave.Launcher
                     return (int)LauncherError.StateLocked;
                 }
 
-                return parsed.Mode == StartupMode.Cleanup ? RunCleanup(parsed) : RunInteractive(parsed, instance);
+                return parsed.Mode == StartupMode.Cleanup ? RunCleanup(parsed) : RunInteractive(instance);
             }
         }
 
@@ -103,7 +102,7 @@ namespace DreamWeave.Launcher
             return exit;
         }
 
-        private static int RunInteractive(StartupArgs parsed, SingleInstance instance)
+        private static int RunInteractive(SingleInstance instance)
         {
             AppPaths paths = AppPaths.CreateDefault();
             string running = ExePaths.Running();

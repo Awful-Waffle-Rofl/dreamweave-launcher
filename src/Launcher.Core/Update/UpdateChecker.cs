@@ -67,8 +67,8 @@ namespace DreamWeave.Launcher.Core.Update
     /// </summary>
     /// <remarks>
     /// The floor is the RUNNING version, not <see cref="State.LauncherState.LauncherVersionSeen"/>:
-    /// that field records the last version that ran (it detects a completed update), and a player
-    /// who deliberately runs an older exe must still be able to update it forward. Downgrade attacks
+    /// that field records the last version that ran (it only decides whether the first-time help starts expanded), and a player
+    /// who deliberately runs an older exe must still be offered the newer download page. Downgrade attacks
     /// are already blocked upstream, because the manifest is signed and its serial is monotonic.
     /// </remarks>
     public static class UpdateChecker

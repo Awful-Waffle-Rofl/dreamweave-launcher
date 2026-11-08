@@ -54,6 +54,13 @@ These were added under rule 2 and are safe to publish: a launcher that predates 
 - **`defaultSelected`** (already present) now also sets the starting checkbox of an optional
   component: `true` starts checked, `false` or absent unchecked. Required components are unchanged.
 
+## Reaching launchers built before downloadPage
+
+No public install predates `downloadPage` (v1.0.0 was never released), so this only matters for internal builds.
+
+- A launcher built before this change ignores `downloadPage`. The only way to reach it is to raise `launcher.minVersion`, which shows it the "download again from the website" banner and blocks Play.
+- Never publish a build of the current code as a bare exe at `launcher.url`. An old launcher would download it, swap it in and start it with `--updated`, which the current launcher rejects and exits silently, leaving the player with a launcher that does not start.
+
 ## Publishing checklist
 
 - Bump `serial`, keep `schema` at 1, and update `issued`.

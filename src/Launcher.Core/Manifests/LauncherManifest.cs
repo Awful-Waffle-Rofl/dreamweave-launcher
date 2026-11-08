@@ -187,14 +187,43 @@ namespace DreamWeave.Launcher.Core.Manifests
         /// </summary>
         public static bool IsValidDownloadPage(string url)
         {
-            Uri uri;
-            return !string.IsNullOrEmpty(url)
-                && url == url.Trim()
-                && Uri.TryCreate(url, UriKind.Absolute, out uri)
-                && uri.Scheme == Uri.UriSchemeHttps
-                && !string.IsNullOrEmpty(uri.Host);
+            Uri ignored;
+            return TryGetDownloadUri(url, out ignored);
+        }
+
+        /// <summary>
+        /// Parses <paramref name="url"/> as a download page: an absolute <c>https</c> URL with a host, containing
+        /// no whitespace, no double quote and no control character anywhere in the raw text (the .NET Framework
+        /// Uri parser accepts some of those, and the string reaches the shell). Open <c>uri.AbsoluteUri</c>
+        /// (the escaped form), never the raw string.
+        /// </summary>
+        public static bool TryGetDownloadUri(string url, out Uri uri)
+        {
+            uri = null;
+            if (string.IsNullOrEmpty(url))
+            {
+                return false;
+            }
+
+            foreach (char c in url)
+            {
+                if (c == '"' || char.IsWhiteSpace(c) || char.IsControl(c))
+                {
+                    return false;
+                }
+            }
+
+            Uri parsed;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out parsed) || parsed.Scheme != Uri.UriSchemeHttps || string.IsNullOrEmpty(parsed.Host))
+            {
+                return false;
+            }
+
+            uri = parsed;
+            return true;
         }
     }
+
     /// <summary>
     /// One installable component. <see cref="Kind"/> selects which fields apply:
     /// <see cref="ComponentKinds.Installer"/> uses Transport/Url/Size/Sha256/Elevate/Args/SatisfiedWhen;
