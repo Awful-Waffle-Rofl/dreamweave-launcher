@@ -116,6 +116,20 @@ namespace DreamWeave.Launcher.App
         public const string Installing = "Installing...";
         public const string AskingPermission = "Windows will ask for permission to write to the game folder.";
         public const string HandoffNotDetected = "The install has not been detected yet. Finish the installer, then click \"I finished\" again.";
+
+        public const string StepDownloading = "Downloading";
+
+        public const string StepDownloaded = "Downloaded";
+
+        public const string InstallerStillRunning = "The Asheron's Call installer still seems to be running. Finish the installer, then click \"I finished\".";
+
+        public const string StillRunningFormat = "Still running: {0}";
+
+        public const string CloseGameThenFinished = "Close Asheron's Call, then click \"I finished\".";
+
+        public const string InstallerClosedEarly = "The Asheron's Call installer closed before it finished. Click Retry to run it again.";
+
+        public const string InstallerHoldsGameFile = "A game file is still in use, probably by the Asheron's Call installer. Finish the installer, then click Retry.";
         public const string CancelledResumable = "Stopped. Finished downloads are kept, and the game installer download picks up where it left off next time.";
         public const string DoneTitle = "All set";
         public const string DoneBody = "Asheron's Call is ready. Click Next to log in.";

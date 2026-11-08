@@ -99,6 +99,46 @@ namespace DreamWeave.Launcher.Tests.App
         }
     }
 
+    /// <summary>A scripted process list for <see cref="DreamWeave.Launcher.Core.Install.InstallerProcessWatch"/>; empty by default.</summary>
+    internal sealed class FakeProcessTable : DreamWeave.Launcher.Core.Install.IProcessTable
+    {
+        private readonly object _gate = new object();
+        private List<DreamWeave.Launcher.Core.Install.ProcessEntry> _entries = new List<DreamWeave.Launcher.Core.Install.ProcessEntry>();
+
+        /// <summary>When true every snapshot fails, as a Toolhelp error would.</summary>
+        public bool Throw { get; set; }
+
+        /// <summary>How many snapshots were taken.</summary>
+        public int Snapshots { get; private set; }
+
+        /// <summary>Replaces the list: (pid, parent pid, image name) triples.</summary>
+        public void Set(params (int Pid, int Parent, string Name)[] entries)
+        {
+            lock (_gate)
+            {
+                _entries = new List<DreamWeave.Launcher.Core.Install.ProcessEntry>();
+                foreach (var e in entries)
+                {
+                    _entries.Add(new DreamWeave.Launcher.Core.Install.ProcessEntry(e.Pid, e.Parent, e.Name));
+                }
+            }
+        }
+
+        public IReadOnlyList<DreamWeave.Launcher.Core.Install.ProcessEntry> Snapshot()
+        {
+            lock (_gate)
+            {
+                Snapshots++;
+                if (Throw)
+                {
+                    throw new System.ComponentModel.Win32Exception(299);
+                }
+
+                return _entries.ToArray();
+            }
+        }
+    }
+
     /// <summary>Records start infos instead of starting anything.</summary>
     internal sealed class FakeProcessLauncher : IProcessLauncher
     {

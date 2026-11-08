@@ -135,5 +135,11 @@ namespace DreamWeave.Launcher.Core
 
         /// <summary>Installed game files no longer match after the install finished (another installer was probably still writing them).</summary>
         GameFilesChanged = 108,
+
+        /// <summary>A game file was still in use when the game data step ran right after the game installer: the installer was probably still running.</summary>
+        InstallerStillRunning = 109,
+
+        /// <summary>The game installer this session started was closed (or aborted) before the install was detected.</summary>
+        InstallerClosedEarly = 110,
     }
 }

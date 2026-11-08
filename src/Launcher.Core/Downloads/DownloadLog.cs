@@ -115,6 +115,21 @@ namespace DreamWeave.Launcher.Core.Downloads
             }
         }
 
+        /// <summary>
+        /// Writes one free-form line, <c>&lt;time&gt; &lt;kind&gt; &lt;text&gt;</c>, for install decisions worth
+        /// explaining later. <paramref name="text"/> gets the same clean-up as a record; never throws.
+        /// </summary>
+        public void Note(string kind, string text)
+        {
+            try
+            {
+                Write(DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture) + " " + Clean(kind) + " " + Clean(text));
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException || ex is NotSupportedException)
+            {
+            }
+        }
+
         /// <summary>Formats one line (no trailing newline).</summary>
         internal string Format(DownloadAttemptRecord r)
         {

@@ -58,6 +58,8 @@ namespace DreamWeave.Launcher.App
             { LauncherError.RegistryWriteFailed, "The Apps and Features entry could not be written or removed." },
             { LauncherError.UninstallIncomplete, "Uninstall finished, but some items could not be removed." },
             { LauncherError.GameFilesChanged, "Some game files changed after they were installed, usually because another installer was still running. Close any other installers and click Retry." },
+            { LauncherError.InstallerStillRunning, UiText.InstallerHoldsGameFile },
+            { LauncherError.InstallerClosedEarly, UiText.InstallerClosedEarly },
         };
 
         /// <summary>The player-facing message for <paramref name="code"/>; an unlisted value falls back to the Unknown message.</summary>
