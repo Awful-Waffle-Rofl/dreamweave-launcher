@@ -144,7 +144,7 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowLauncher()
         {
-            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(line => new FileDownloadLog(_services.Paths.LogFile).Note("launch", line)),_services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State))
+            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(line => new FileDownloadLog(_services.Paths.LogFile).Note("launch", line)), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State))
             {
                 Update = _gate,
             };
@@ -157,7 +157,7 @@ namespace DreamWeave.Launcher.UI
         }
 
         // Closing during Play all drops the rows not yet started. A client that is mid-start is never
-        // interrupted: the close waits for it, then goes ahead.
+        // interrupted: the close waits for it, then goes ahead. Only the wait for its lock release is cut short.
         private async void OnLauncherClosing(object sender, FormClosingEventArgs e)
         {
             LauncherPresenter presenter = _presenter;
@@ -167,6 +167,7 @@ namespace DreamWeave.Launcher.UI
             }
 
             presenter.CancelPending();
+            presenter.StopWaiting();
             if (!presenter.IsStartInFlight)
             {
                 return;

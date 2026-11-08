@@ -145,6 +145,7 @@ namespace DreamWeave.Launcher.App
         public const string UpdateUnavailable = "This launcher is too old to play on the server and no update could be found. Download the launcher again from the DreamWeave website.";
         public const string Updating = "Updating the launcher...";
         public const string GameStarted = "Asheron's Call is starting.";
+        public const string StartingSlotFormat = "Starting {0}...";
         public const string SecondClientMayBeRefused = "Started, but a second client may be refused. Close the other client to play this one.";
         public const string SlotMain = "Main";
         public const string SlotAlt1 = "Alt 1";

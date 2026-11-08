@@ -9,13 +9,13 @@ namespace DreamWeave.Launcher.Core.Launch
     /// <summary>What <see cref="ClientLockReleaser.Release"/> did.</summary>
     public enum ClientLockOutcome
     {
-        /// <summary>The started client's lock handle was closed: another client can start.</summary>
+        /// <summary>The started client's lock handle was closed and the lock is gone: another client can start.</summary>
         Released,
 
         /// <summary>The client did not create its lock within the timeout.</summary>
         NotFound,
 
-        /// <summary>The client exited before its lock was found.</summary>
+        /// <summary>The client exited before its lock was released.</summary>
         ClientExited,
 
         /// <summary>This Windows lacks an API the release needs (Windows 10 or later is required).</summary>
@@ -23,6 +23,42 @@ namespace DreamWeave.Launcher.Core.Launch
 
         /// <summary>A Windows call failed; the client keeps its lock.</summary>
         Failed,
+
+        /// <summary>The client's handle was closed, but another process still holds the lock.</summary>
+        HeldElsewhere,
+
+        /// <summary>The wait was cancelled (the launcher is closing) before the lock was found.</summary>
+        Cancelled,
+    }
+
+    /// <summary>
+    /// A client the launcher has just started: its id and the process handle from CreateProcess. The
+    /// release uses this handle rather than reopening the id, so a reused process id can never be
+    /// touched. Disposing it releases the handle.
+    /// </summary>
+    public sealed class StartedClient : IDisposable
+    {
+        private readonly IDisposable _owner;
+
+        /// <summary>Creates a started client over <paramref name="handle"/>, kept alive by <paramref name="owner"/> (the <see cref="Process"/>).</summary>
+        public StartedClient(int id, IntPtr handle, IDisposable owner = null)
+        {
+            Id = id;
+            Handle = handle;
+            _owner = owner;
+        }
+
+        /// <summary>The process id (for log lines only).</summary>
+        public int Id { get; }
+
+        /// <summary>The process handle returned by CreateProcess.</summary>
+        public IntPtr Handle { get; }
+
+        /// <inheritdoc />
+        public void Dispose()
+        {
+            _owner?.Dispose();
+        }
     }
 
     /// <summary>One handle in a process's own handle table (no object names, no other processes).</summary>
@@ -43,8 +79,9 @@ namespace DreamWeave.Launcher.Core.Launch
     }
 
     /// <summary>
-    /// The Windows calls <see cref="ClientLockReleaser"/> makes; the seam the tests fake. Every process
-    /// handle it returns was opened for one process id passed to <see cref="OpenProcess"/>.
+    /// The Windows calls <see cref="ClientLockReleaser"/> makes; the seam the tests fake. There is
+    /// deliberately no way to open a process by id: the only process handles used are the launcher's
+    /// own pseudo-handle and the CreateProcess handle of a client it started.
     /// </summary>
     public interface IClientHandleApi
     {
@@ -53,9 +90,6 @@ namespace DreamWeave.Launcher.Core.Launch
 
         /// <summary>A pseudo-handle for the launcher's own process.</summary>
         IntPtr CurrentProcess { get; }
-
-        /// <summary>Opens <paramref name="pid"/> for handle duplication and query only (no write, no VM, no terminate). Zero on failure.</summary>
-        IntPtr OpenProcess(int pid);
 
         /// <summary>True when the process behind <paramref name="process"/> has exited.</summary>
         bool HasExited(IntPtr process);
@@ -78,23 +112,31 @@ namespace DreamWeave.Launcher.Core.Launch
         /// <summary>Closes one of the launcher's own handles.</summary>
         void CloseOwn(IntPtr handle);
 
-        /// <summary>The last Windows error code of the calling thread.</summary>
+        /// <summary>The last Windows error code (or NTSTATUS) of the most recent failed call.</summary>
         int LastError { get; }
     }
 
     /// <summary>
     /// Lets a second acclient.exe start. The client refuses to run when the named semaphore
     /// <see cref="LockName"/> already exists (it calls CreateSemaphoreA with that name and checks for
-    /// ERROR_ALREADY_EXISTS), so after the launcher starts a client it closes that one handle inside
-    /// that one process. Owner ruling, a narrow exemption: no client file is modified, no code is
-    /// injected, only a process the launcher itself just started is touched, and nothing but the lock
-    /// handle is closed. It reads only the target's own handle table, matches by object identity
-    /// against the launcher's own handle to the named semaphore, and never queries object names.
+    /// ERROR_ALREADY_EXISTS), so after the launcher starts a client it closes that client's handle to
+    /// the lock. Owner ruling, a narrow exemption: no client file is modified, no code is injected,
+    /// only a process the launcher itself just started is touched (through its CreateProcess handle),
+    /// and nothing but the lock handle is closed. It reads only the target's own handle table, matches
+    /// by object identity against the launcher's own handle to the named semaphore, and never queries
+    /// object names.
     /// </summary>
     public sealed class ClientLockReleaser
     {
         /// <summary>The client's single-instance semaphore (acclient.exe, CreateSemaphoreA near VA 0x4122ae).</summary>
         public const string LockName = "Empyrean Client";
+
+        /// <summary>
+        /// Logged as the error when the launcher's own semaphore handle is missing from its own handle
+        /// table (no Windows call failed, so there is no real error code). Customer bit set: never a
+        /// Windows code.
+        /// </summary>
+        public const int OwnHandleNotListed = unchecked((int)0xE0000001);
 
         /// <summary>How long to wait for a started client to create its lock.</summary>
         public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(20);
@@ -104,7 +146,8 @@ namespace DreamWeave.Launcher.Core.Launch
 
         private readonly IClientHandleApi _api;
         private readonly Action<string> _log;
-        private readonly Action<TimeSpan> _sleep;
+        private readonly Func<Func<TimeSpan>> _clock;
+        private readonly Action<TimeSpan, CancellationToken> _sleep;
 
         /// <summary>Creates a releaser over the real Windows calls.</summary>
         public ClientLockReleaser(Action<string> log)
@@ -113,143 +156,188 @@ namespace DreamWeave.Launcher.Core.Launch
         }
 
         /// <summary>Creates a releaser over the given seams (tests). Null clock / sleep use the real ones.</summary>
-        public ClientLockReleaser(IClientHandleApi api, Action<string> log, Func<Func<TimeSpan>> clock, Action<TimeSpan> sleep)
+        public ClientLockReleaser(IClientHandleApi api, Action<string> log, Func<Func<TimeSpan>> clock, Action<TimeSpan, CancellationToken> sleep)
         {
             _api = api ?? throw new ArgumentNullException(nameof(api));
             _log = log ?? (line => { });
-            Clock = clock ?? (() =>
+            _clock = clock ?? (() =>
             {
                 Stopwatch watch = Stopwatch.StartNew();
                 return () => watch.Elapsed;
             });
-            _sleep = sleep ?? (t => Thread.Sleep(t));
+            _sleep = sleep ?? ((t, c) => c.WaitHandle.WaitOne(t));
         }
 
-        private Func<Func<TimeSpan>> Clock { get; }
-
         /// <summary>
-        /// Waits (up to <paramref name="timeout"/>, default <see cref="DefaultTimeout"/>) for the client
-        /// <paramref name="pid"/> to create its lock, then closes that one handle in that process. Never
-        /// throws; every outcome is written to the log.
+        /// Waits (up to <paramref name="timeout"/>, default <see cref="DefaultTimeout"/>) for
+        /// <paramref name="client"/> to create its lock, then closes its handle to it. A cancel stops the
+        /// wait between looks; once the lock has been found the close always completes. Never throws;
+        /// every outcome is written to the log. The client's process handle is used, never closed.
         /// </summary>
-        public ClientLockOutcome Release(int pid, TimeSpan? timeout = null)
+        public ClientLockOutcome Release(StartedClient client, TimeSpan? timeout = null, CancellationToken cancel = default(CancellationToken))
         {
-            ClientLockOutcome outcome;
+            if (client == null)
+            {
+                throw new ArgumentNullException(nameof(client));
+            }
+
             try
             {
-                outcome = ReleaseCore(pid, timeout ?? DefaultTimeout);
+                return ReleaseCore(client, timeout ?? DefaultTimeout, cancel);
             }
             catch (Exception ex) when (ex is DllNotFoundException || ex is EntryPointNotFoundException)
             {
-                Note(pid, "unsupported (" + ex.GetType().Name + ")");
-                outcome = ClientLockOutcome.Unsupported;
+                Note(client.Id, "unsupported (" + ex.GetType().Name + ")");
+                return ClientLockOutcome.Unsupported;
             }
             catch (Exception ex)
             {
                 // The client is already running; a failed release must never turn into a failed launch.
-                Note(pid, "failed step=exception type=" + ex.GetType().FullName);
-                outcome = ClientLockOutcome.Failed;
+                Note(client.Id, "failed step=exception type=" + ex.GetType().FullName);
+                return ClientLockOutcome.Failed;
             }
-
-            return outcome;
         }
 
-        private ClientLockOutcome ReleaseCore(int pid, TimeSpan timeout)
+        private ClientLockOutcome ReleaseCore(StartedClient client, TimeSpan timeout, CancellationToken cancel)
         {
+            int pid = client.Id;
             if (!_api.Supported)
             {
                 Note(pid, "unsupported (needs Windows 10 or later)");
                 return ClientLockOutcome.Unsupported;
             }
 
-            Func<TimeSpan> elapsed = Clock();
-            IntPtr process = _api.OpenProcess(pid);
-            if (process == IntPtr.Zero)
+            IntPtr process = client.Handle;
+            Func<TimeSpan> elapsed = _clock();
+            while (true)
             {
-                Note(pid, "failed step=open-process error=" + Code(_api.LastError));
-                return ClientLockOutcome.Failed;
-            }
-
-            try
-            {
-                while (true)
+                IntPtr own = _api.OpenSemaphore(LockName);
+                if (own != IntPtr.Zero)
                 {
-                    IntPtr own = _api.OpenSemaphore(LockName);
-                    if (own != IntPtr.Zero)
+                    List<IntPtr> found;
+                    string failure;
+                    int error;
+                    try
                     {
-                        IntPtr found;
-                        string failure;
-                        try
-                        {
-                            found = FindInTarget(process, own, out failure);
-                        }
-                        finally
-                        {
-                            // Before the close below: while the launcher holds its own handle the object
-                            // stays alive, and the next client would still find it.
-                            _api.CloseOwn(own);
-                        }
-
-                        if (failure != null)
-                        {
-                            Note(pid, "failed step=" + failure + " error=" + Code(_api.LastError));
-                            return ClientLockOutcome.Failed;
-                        }
-
-                        if (found != IntPtr.Zero)
-                        {
-                            if (!_api.CloseInProcess(process, found))
-                            {
-                                Note(pid, "failed step=close error=" + Code(_api.LastError));
-                                return ClientLockOutcome.Failed;
-                            }
-
-                            Note(pid, "released handle=0x" + found.ToInt64().ToString("x", CultureInfo.InvariantCulture) + " after=" + Seconds(elapsed()));
-                            return ClientLockOutcome.Released;
-                        }
+                        found = FindInTarget(process, own, out failure, out error);
+                    }
+                    finally
+                    {
+                        // Before the close below: while the launcher holds its own handle the object
+                        // stays alive, and the next client would still find it.
+                        _api.CloseOwn(own);
                     }
 
-                    if (_api.HasExited(process))
+                    if (failure != null)
                     {
-                        Note(pid, "client exited before its lock was found after=" + Seconds(elapsed()));
-                        return ClientLockOutcome.ClientExited;
+                        if (failure == "handle-table" && _api.HasExited(process))
+                        {
+                            Note(pid, "client exited before its lock was released after=" + Seconds(elapsed()));
+                            return ClientLockOutcome.ClientExited;
+                        }
+
+                        Note(pid, "failed step=" + failure + " error=" + Code(error));
+                        return ClientLockOutcome.Failed;
                     }
 
-                    if (elapsed() >= timeout)
+                    if (found.Count > 0)
                     {
-                        Note(pid, "not found after=" + Seconds(elapsed()));
-                        return ClientLockOutcome.NotFound;
+                        // Found: from here on the close is not interruptible.
+                        return Close(pid, process, found, elapsed);
                     }
-
-                    _sleep(PollInterval);
                 }
-            }
-            finally
-            {
-                _api.CloseOwn(process);
+
+                if (_api.HasExited(process))
+                {
+                    Note(pid, "client exited before its lock was found after=" + Seconds(elapsed()));
+                    return ClientLockOutcome.ClientExited;
+                }
+
+                if (elapsed() >= timeout)
+                {
+                    Note(pid, "not found after=" + Seconds(elapsed()));
+                    return ClientLockOutcome.NotFound;
+                }
+
+                if (cancel.IsCancellationRequested)
+                {
+                    Note(pid, "cancelled after=" + Seconds(elapsed()));
+                    return ClientLockOutcome.Cancelled;
+                }
+
+                _sleep(PollInterval, cancel);
             }
         }
 
+        private ClientLockOutcome Close(int pid, IntPtr process, List<IntPtr> found, Func<TimeSpan> elapsed)
+        {
+            var closed = new List<string>();
+            foreach (IntPtr value in found)
+            {
+                if (!_api.CloseInProcess(process, value))
+                {
+                    Note(pid, "failed step=close error=" + Code(_api.LastError));
+                    return ClientLockOutcome.Failed;
+                }
+
+                closed.Add("0x" + value.ToInt64().ToString("x", CultureInfo.InvariantCulture));
+            }
+
+            // The object outlives the close when any other process still holds it; the next client
+            // would then be refused anyway.
+            IntPtr again = _api.OpenSemaphore(LockName);
+            if (again != IntPtr.Zero)
+            {
+                _api.CloseOwn(again);
+                Note(pid, "closed handle=" + string.Join(",", closed) + " but the lock is held elsewhere after=" + Seconds(elapsed()));
+                return ClientLockOutcome.HeldElsewhere;
+            }
+
+            Note(pid, "released handle=" + string.Join(",", closed) + " after=" + Seconds(elapsed()));
+            return ClientLockOutcome.Released;
+        }
+
         /// <summary>
-        /// The target's handle to the same object as <paramref name="own"/>, or zero when it holds none
-        /// (yet). Only handles of the semaphore's own object type are duplicated, and each duplicate is
+        /// The target's handles to the same object as <paramref name="own"/> (empty when it holds none
+        /// yet). Only handles of the semaphore's own object type are duplicated, and each duplicate is
         /// closed before returning. <paramref name="failure"/> names the failed step, or is null.
         /// </summary>
-        private IntPtr FindInTarget(IntPtr process, IntPtr own, out string failure)
+        private List<IntPtr> FindInTarget(IntPtr process, IntPtr own, out string failure, out int error)
         {
             failure = null;
-            int? semaphoreType = TypeOf(own);
+            error = 0;
+            var found = new List<IntPtr>();
+            IReadOnlyList<ClientHandleEntry> mine = _api.HandleTable(_api.CurrentProcess);
+            if (mine == null)
+            {
+                failure = "own-type";
+                error = _api.LastError;
+                return found;
+            }
+
+            int? semaphoreType = null;
+            foreach (ClientHandleEntry entry in mine)
+            {
+                if (entry.Value == own)
+                {
+                    semaphoreType = entry.TypeIndex;
+                    break;
+                }
+            }
+
             if (semaphoreType == null)
             {
                 failure = "own-type";
-                return IntPtr.Zero;
+                error = OwnHandleNotListed;
+                return found;
             }
 
             IReadOnlyList<ClientHandleEntry> table = _api.HandleTable(process);
             if (table == null)
             {
                 failure = "handle-table";
-                return IntPtr.Zero;
+                error = _api.LastError;
+                return found;
             }
 
             foreach (ClientHandleEntry entry in table)
@@ -277,30 +365,11 @@ namespace DreamWeave.Launcher.Core.Launch
 
                 if (same)
                 {
-                    return entry.Value;
+                    found.Add(entry.Value);
                 }
             }
 
-            return IntPtr.Zero;
-        }
-
-        private int? TypeOf(IntPtr own)
-        {
-            IReadOnlyList<ClientHandleEntry> mine = _api.HandleTable(_api.CurrentProcess);
-            if (mine == null)
-            {
-                return null;
-            }
-
-            foreach (ClientHandleEntry entry in mine)
-            {
-                if (entry.Value == own)
-                {
-                    return entry.TypeIndex;
-                }
-            }
-
-            return null;
+            return found;
         }
 
         private void Note(int pid, string text)

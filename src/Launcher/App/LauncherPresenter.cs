@@ -16,15 +16,16 @@ namespace DreamWeave.Launcher.App
     /// <summary>Starts the game client; the seam over <see cref="GameLauncher"/>.</summary>
     internal interface IGameStarter
     {
-        /// <summary>Starts acclient.exe from <paramref name="acFolder"/> with <paramref name="args"/>; returns its process id.</summary>
+        /// <summary>Starts acclient.exe from <paramref name="acFolder"/> with <paramref name="args"/>; the caller disposes the result.</summary>
         /// <exception cref="LauncherException">As <see cref="GameLauncher.Launch"/>.</exception>
-        int Start(string acFolder, string args);
+        StartedClient Start(string acFolder, string args);
 
         /// <summary>
-        /// Blocks until the client <paramref name="pid"/> (just returned by <see cref="Start"/>) has had its
-        /// single-instance lock released, or the release gave up. Never throws.
+        /// Blocks until <paramref name="client"/> (exactly the object <see cref="Start"/> returned) has had
+        /// its single-instance lock released, the release gave up, or <paramref name="cancel"/> stopped the
+        /// wait. Never throws.
         /// </summary>
-        ClientLockOutcome ReleaseLock(int pid);
+        ClientLockOutcome ReleaseLock(StartedClient client, CancellationToken cancel);
     }
 
     /// <summary><see cref="IGameStarter"/> over the real <see cref="GameLauncher"/> and <see cref="ClientLockReleaser"/>.</summary>
@@ -39,14 +40,14 @@ namespace DreamWeave.Launcher.App
             _lock = new ClientLockReleaser(log);
         }
 
-        public int Start(string acFolder, string args)
+        public StartedClient Start(string acFolder, string args)
         {
             return _launcher.Launch(acFolder, args);
         }
 
-        public ClientLockOutcome ReleaseLock(int pid)
+        public ClientLockOutcome ReleaseLock(StartedClient client, CancellationToken cancel)
         {
-            return _lock.Release(pid);
+            return _lock.Release(client, null, cancel);
         }
     }
 
@@ -173,6 +174,8 @@ namespace DreamWeave.Launcher.App
         private bool _playingOne;
         private bool _batch;
         private CancellationTokenSource _batchCancel;
+        private volatile CancellationTokenSource _releaseCancel;
+        private volatile bool _closing;
 
         /// <summary>Number of client rows on the launcher screen (Main, Alt 1, Alt 2).</summary>
         public const int SlotCount = 3;
@@ -327,7 +330,38 @@ namespace DreamWeave.Launcher.App
                 return Task.FromResult(Blocked());
             }
 
-            return StartCoreAsync(user, password, remember);
+            return StartCoreAsync(0, user, password, remember);
+        }
+
+        /// <summary>
+        /// Receives a status line while a started client's lock release is being waited for
+        /// (<see cref="UiText.StartingSlotFormat"/>). Called on a thread-pool thread.
+        /// </summary>
+        public Action<string> StatusChanged { get; set; }
+
+        private static string SlotName(int slot)
+        {
+            switch (slot)
+            {
+                case 1:
+                    return UiText.SlotAlt1;
+                case 2:
+                    return UiText.SlotAlt2;
+                default:
+                    return UiText.SlotMain;
+            }
+        }
+
+        private void ReportStatus(string text)
+        {
+            try
+            {
+                StatusChanged?.Invoke(text);
+            }
+            catch (Exception)
+            {
+                // A status line never fails a start.
+            }
         }
 
         private PlayResult Blocked()
@@ -335,7 +369,7 @@ namespace DreamWeave.Launcher.App
             return new PlayResult(LauncherError.Cancelled, Update.BlocksPlay ? Update.BannerText : null, false);
         }
 
-        private async Task<PlayResult> StartCoreAsync(string user, string password, bool remember)
+        private async Task<PlayResult> StartCoreAsync(int slot, string user, string password, bool remember)
         {
             string rule = Validate(user, password);
             if (rule != null)
@@ -359,13 +393,33 @@ namespace DreamWeave.Launcher.App
                         throw new LauncherException(LauncherError.ClientNotFound, "No game folder.");
                     }
 
-                    int pid = _starter.Start(folder, args);
-                    bool saved = TryRemember(user, password, remember);
+                    using (StartedClient client = _starter.Start(folder, args))
+                    {
+                        bool saved = TryRemember(user, password, remember);
 
-                    // Awaited before this start completes, so Play all never starts the next client while
-                    // this one still holds the lock (the next client would be refused).
-                    lockOutcome = _starter.ReleaseLock(pid);
-                    return !saved;
+                        // Awaited before this start completes, so Play all never starts the next client
+                        // while this one still holds the lock (the next client would be refused). A window
+                        // close cancels only the wait, never a close already under way.
+                        ReportStatus(string.Format(System.Globalization.CultureInfo.InvariantCulture, UiText.StartingSlotFormat, SlotName(slot)));
+                        var release = new CancellationTokenSource();
+                        _releaseCancel = release;
+                        try
+                        {
+                            if (_closing)
+                            {
+                                release.Cancel();
+                            }
+
+                            lockOutcome = _starter.ReleaseLock(client, release.Token);
+                        }
+                        finally
+                        {
+                            _releaseCancel = null;
+                            release.Dispose();
+                        }
+
+                        return !saved;
+                    }
                 }).ConfigureAwait(false);
 
                 _telemetry.Record(TelemetrySteps.Launch, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
@@ -502,7 +556,7 @@ namespace DreamWeave.Launcher.App
             try
             {
                 await SaveSlotsAsync(inputs).ConfigureAwait(false);
-                PlayResult result = await StartCoreAsync(inputs[slot].Account, inputs[slot].Password, remember).ConfigureAwait(false);
+                PlayResult result = await StartCoreAsync(slot, inputs[slot].Account, inputs[slot].Password, remember).ConfigureAwait(false);
                 return new SlotResult(slot, result);
             }
             finally
@@ -576,7 +630,7 @@ namespace DreamWeave.Launcher.App
                             }
                         }
 
-                        result = await StartCoreAsync(inputs[i].Account, inputs[i].Password, remember).ConfigureAwait(false);
+                        result = await StartCoreAsync(i, inputs[i].Account, inputs[i].Password, remember).ConfigureAwait(false);
                         startedOne |= result.Error == LauncherError.None;
                     }
 
@@ -594,6 +648,22 @@ namespace DreamWeave.Launcher.App
             }
 
             return results;
+        }
+
+        /// <summary>
+        /// The window is closing: stops any wait for a started client's lock (now and for any start still
+        /// to come). A close of the lock that is already under way still completes.
+        /// </summary>
+        public void StopWaiting()
+        {
+            _closing = true;
+            try
+            {
+                _releaseCancel?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
         }
 
         /// <summary>Stops a Play all after the client currently starting (if any): later rows are not started.</summary>

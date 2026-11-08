@@ -29,12 +29,12 @@ namespace DreamWeave.Launcher.Tests.App
 
         private sealed class NoStart : IGameStarter
         {
-            public int Start(string acFolder, string args)
+            public DreamWeave.Launcher.Core.Launch.StartedClient Start(string acFolder, string args)
             {
-                return 1;
+                return new DreamWeave.Launcher.Core.Launch.StartedClient(1, IntPtr.Zero);
             }
 
-            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(int pid) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(DreamWeave.Launcher.Core.Launch.StartedClient client, System.Threading.CancellationToken cancel) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
         }
 
         private static void RunSta(Action body)

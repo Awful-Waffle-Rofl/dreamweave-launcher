@@ -19,9 +19,11 @@ namespace DreamWeave.Launcher.Tests.Launch
 
             public int NextId { get; set; } = 4242;
 
+            public StartedClient Last { get; private set; }
+
             public Exception Throw { get; set; }
 
-            public int Start(ProcessStartInfo startInfo)
+            public StartedClient Start(ProcessStartInfo startInfo)
             {
                 if (Throw != null)
                 {
@@ -29,7 +31,8 @@ namespace DreamWeave.Launcher.Tests.Launch
                 }
 
                 Started.Add(startInfo);
-                return NextId;
+                Last = new StartedClient(NextId, new IntPtr(NextId + 1));
+                return Last;
             }
         }
 
@@ -77,8 +80,9 @@ namespace DreamWeave.Launcher.Tests.Launch
         {
             var s = new FakeStarter();
             FakeFs fs;
-            int pid = Make(s, out fs).Launch(Folder + "\\", "-a \"x\" -v \"y\"");
-            Assert.AreEqual(4242, pid);
+            StartedClient client = Make(s, out fs).Launch(Folder + "\\", "-a \"x\" -v \"y\"");
+            Assert.AreEqual(4242, client.Id);
+            Assert.AreSame(s.Last, client, "the starter's own client (with its CreateProcess handle) is handed back, not rebuilt from the id");
             Assert.AreEqual(1, s.Started.Count);
             ProcessStartInfo psi = s.Started[0];
             Assert.AreEqual(Exe, psi.FileName);

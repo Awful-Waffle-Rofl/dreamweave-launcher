@@ -9,23 +9,36 @@ namespace DreamWeave.Launcher.Core.Launch
     /// release. It reads one process's own handle table (NtQueryInformationProcess with
     /// ProcessHandleInformation), never the system-wide table, and never queries object names
     /// (NtQueryObject is not used, so a synchronous pipe handle cannot hang it). Struct offsets follow
-    /// the launcher's own pointer size, which is the layout Windows returns to the caller.
+    /// the launcher's own pointer size, which is the layout Windows returns to the caller. It never opens a
+    /// process by id: the process handle comes from CreateProcess (<see cref="StartedClient"/>), which
+    /// already carries the duplicate-handle and full query rights that ProcessHandleInformation needs.
     /// </summary>
     public sealed class NativeClientHandleApi : IClientHandleApi
     {
-        private const uint ProcessDupHandle = 0x0040;
-        // ProcessHandleInformation needs the full query right: with PROCESS_QUERY_LIMITED_INFORMATION
-        // (0x1000) the live check got STATUS_ACCESS_DENIED (0xC0000022) on the started client.
-        private const uint ProcessQueryInformation = 0x0400;
         private const uint Synchronize = 0x00100000;
         private const uint DuplicateCloseSource = 0x1;
         private const uint DuplicateSameAccess = 0x2;
         private const uint StillActive = 259;
         private const int ProcessHandleInformation = 51;
         private const int StatusInfoLengthMismatch = unchecked((int)0xC0000004);
+        private const int StatusBufferTooSmall = unchecked((int)0xC0000023);
+        private const int StatusBufferOverflow = unchecked((int)0x80000005);
         private const int MaxTableBytes = 64 * 1024 * 1024;
 
+        private readonly int _initialTableBytes;
         private int _lastError;
+
+        /// <summary>Creates the real API.</summary>
+        public NativeClientHandleApi()
+            : this(32 * 1024)
+        {
+        }
+
+        /// <summary>Creates the real API with a given first buffer size for <see cref="HandleTable"/> (tests drive the growth loop with a tiny one).</summary>
+        internal NativeClientHandleApi(int initialTableBytes)
+        {
+            _initialTableBytes = Math.Max(16, initialTableBytes);
+        }
 
         /// <inheritdoc />
         public bool Supported
@@ -43,14 +56,6 @@ namespace DreamWeave.Launcher.Core.Launch
         public int LastError => _lastError;
 
         /// <inheritdoc />
-        public IntPtr OpenProcess(int pid)
-        {
-            IntPtr h = OpenProcessNative(ProcessDupHandle | ProcessQueryInformation, false, (uint)pid);
-            Capture(h != IntPtr.Zero);
-            return h;
-        }
-
-        /// <inheritdoc />
         public bool HasExited(IntPtr process)
         {
             return GetExitCodeProcess(process, out uint code) && code != StillActive;
@@ -59,14 +64,14 @@ namespace DreamWeave.Launcher.Core.Launch
         /// <inheritdoc />
         public IReadOnlyList<ClientHandleEntry> HandleTable(IntPtr process)
         {
-            int size = 32 * 1024;
+            int size = _initialTableBytes;
             while (size <= MaxTableBytes)
             {
                 IntPtr buffer = Marshal.AllocHGlobal(size);
                 try
                 {
                     int status = NtQueryInformationProcess(process, ProcessHandleInformation, buffer, size, out int needed);
-                    if (status == StatusInfoLengthMismatch)
+                    if (status == StatusInfoLengthMismatch || status == StatusBufferTooSmall || status == StatusBufferOverflow)
                     {
                         size = Math.Max(size * 2, needed + 4096);
                         continue;
@@ -169,9 +174,6 @@ namespace DreamWeave.Launcher.Core.Launch
             IntPtr m = GetModuleHandleW(module);
             return m != IntPtr.Zero && GetProcAddress(m, name) != IntPtr.Zero;
         }
-
-        [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)]
-        private static extern IntPtr OpenProcessNative(uint access, bool inherit, uint pid);
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetCurrentProcess();

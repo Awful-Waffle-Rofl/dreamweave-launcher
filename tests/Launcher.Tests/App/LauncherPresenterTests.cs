@@ -141,10 +141,16 @@ namespace DreamWeave.Launcher.Tests.App
             /// <summary>What <see cref="ReleaseLock"/> reports.</summary>
             public DreamWeave.Launcher.Core.Launch.ClientLockOutcome LockOutcome { get; set; } = DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
 
-            /// <summary>Process ids passed to <see cref="ReleaseLock"/>, in order.</summary>
-            public List<int> Released { get; } = new List<int>();
+            /// <summary>Clients returned by <see cref="Start"/>, in order.</summary>
+            public List<DreamWeave.Launcher.Core.Launch.StartedClient> Clients { get; } = new List<DreamWeave.Launcher.Core.Launch.StartedClient>();
 
-            public int Start(string acFolder, string args)
+            /// <summary>Clients passed to <see cref="ReleaseLock"/>, in order.</summary>
+            public List<DreamWeave.Launcher.Core.Launch.StartedClient> Released { get; } = new List<DreamWeave.Launcher.Core.Launch.StartedClient>();
+
+            /// <summary>Called inside <see cref="ReleaseLock"/> with its token.</summary>
+            public System.Action<System.Threading.CancellationToken> OnRelease { get; set; }
+
+            public DreamWeave.Launcher.Core.Launch.StartedClient Start(string acFolder, string args)
             {
                 if (Fail != LauncherError.None)
                 {
@@ -152,12 +158,15 @@ namespace DreamWeave.Launcher.Tests.App
                 }
 
                 Starts.Add(new KeyValuePair<string, string>(acFolder, args));
-                return 1000 + Starts.Count;
+                var client = new DreamWeave.Launcher.Core.Launch.StartedClient(1000 + Starts.Count, new System.IntPtr(0x7000 + Starts.Count));
+                Clients.Add(client);
+                return client;
             }
 
-            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(int pid)
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(DreamWeave.Launcher.Core.Launch.StartedClient client, System.Threading.CancellationToken cancel)
             {
-                Released.Add(pid);
+                Released.Add(client);
+                OnRelease?.Invoke(cancel);
                 return LockOutcome;
             }
         }
