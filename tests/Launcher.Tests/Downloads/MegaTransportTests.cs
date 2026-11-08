@@ -797,6 +797,58 @@ namespace DreamWeave.Launcher.Tests.Downloads
         }
 
         [TestMethod]
+        [Timeout(30000)]
+        [DataRow(1000, 100, DisplayName = "header wait equals the window (the production wiring)")]
+        [DataRow(900, 500, DisplayName = "watchdog check lands inside a chunk back-off")]
+        [DataRow(900, 50, DisplayName = "watchdog check lands just after a chunk back-off")]
+        public void AHostThatNeverAnswers_HitsTheFirstByteWindowOnce_NotOncePerChunkRetry(int headerMs, int backOffMs)
+        {
+            // A header timeout firing a little before the watchdog's next check is the race production has with
+            // its 1 s poll: before the first byte, neither a back-off nor its end may count as activity.
+            TimeSpan window = TimeSpan.FromSeconds(1);
+            var f = new MegaFixture(Size);
+            using (var storage = new RangeServer(f.Encrypted, async c =>
+            {
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, c.Stopping).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }))
+            using (var mirror = new FakeHttpServer((ctx, i) => Serve.FileAsync(ctx, f.Plain)))
+            using (var rig = new Rig(f, storage, Fast(inactivity: TimeSpan.FromSeconds(10), first: window), mirror, headerTimeout: TimeSpan.FromMilliseconds(headerMs)))
+            {
+                rig.Options.ChunkRetry = new RetryPolicy { MaxRetries = 3, Delay = (d, ct) => Task.Delay(backOffMs, ct) };
+                Stopwatch clock = Stopwatch.StartNew();
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                long elapsed = clock.ElapsedMilliseconds;
+                Assert.AreEqual(1, rig.Api.Calls);
+                Assert.IsTrue(elapsed < 1500, "failover took " + elapsed + " ms for a 1000 ms first-byte window");
+                CollectionAssert.AreEqual(f.Plain, File.ReadAllBytes(rig.Dest));
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
+        public void AHungRangeAmongTheLastChunks_IsCutAndRetried_WithoutRestarting()
+        {
+            var f = new MegaFixture(Size);
+            long last = Size - SmallChunk;
+            int hung = 0;
+            using (var storage = new RangeServer(f.Encrypted, c => c.From == last && Interlocked.Exchange(ref hung, 1) == 0 ? c.SendAsync(stallAfter: 4096) : c.SendAsync()))
+            using (var rig = new Rig(f, storage, SmallChunks()))
+            {
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                CollectionAssert.AreEqual(f.Plain, File.ReadAllBytes(rig.Dest));
+                Assert.AreEqual(1, rig.Api.Calls, "a hung last range restarted the whole download");
+                Assert.AreEqual(2, RequestsInChunk(storage, last), "exactly one extra request for the hung chunk");
+                Assert.IsTrue(RangeStarts(storage).Contains(last + 4096), "the retry did not continue from the cursor");
+            }
+        }
+
+        [TestMethod]
         public void AnInvalidLink_IsManifestInvalid()
         {
             var f = new MegaFixture(Size);

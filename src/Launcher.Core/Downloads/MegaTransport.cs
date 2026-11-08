@@ -302,7 +302,8 @@ namespace DreamWeave.Launcher.Core.Downloads
 
                     int workers = (int)Math.Min(_o.Connections, Math.Max(1, _chunks));
                     all = Task.WhenAll(Enumerable.Range(0, workers).Select(_ => Task.Run(WorkerAsync)).ToArray());
-                    TimeSpan poll = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMilliseconds(10).Ticks, Math.Min(TimeSpan.FromSeconds(1).Ticks, _o.InactivityTimeout.Ticks / 4)));
+                    TimeSpan poll = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMilliseconds(10).Ticks, Math.Min(TimeSpan.FromSeconds(1).Ticks, Math.Min(_o.InactivityTimeout.Ticks, _o.FirstProgressTimeout.Ticks) / 4)));
+                    long receivedAtExtension = -1;
                     while (true)
                     {
                         Task first = await Task.WhenAny(all, Task.Delay(poll)).ConfigureAwait(false);
@@ -318,9 +319,11 @@ namespace DreamWeave.Launcher.Core.Downloads
                         }
 
                         long now = _clock.ElapsedTicks;
-                        if (Volatile.Read(ref _backingOff) > 0)
+                        if (started && Volatile.Read(ref _backingOff) > 0)
                         {
-                            // A connection waiting out a chunk back-off (possibly a server's Retry-After) is not silence.
+                            // Once data has flowed, a connection waiting out a chunk back-off (possibly a server's
+                            // Retry-After) is not silence. Before the first byte it is: a host that never answers
+                            // must hit the first-byte window once, not once per chunk retry.
                             Interlocked.Exchange(ref _lastActivityTicks, now);
                         }
 
@@ -339,9 +342,31 @@ namespace DreamWeave.Launcher.Core.Downloads
                             }
                         }
 
-                        if (_outer.IsCancellationRequested || idleSeconds > limit.TotalSeconds)
+                        if (_outer.IsCancellationRequested)
                         {
-                            stalled = !_outer.IsCancellationRequested;
+                            break;
+                        }
+
+                        if (idleSeconds > limit.TotalSeconds)
+                        {
+                            // Near the end the last open ranges go silent together with the whole download, so the
+                            // gate above never cuts them. Cut every open range and give the retries one more window
+                            // before declaring the stall; another extension needs new bytes since the last one.
+                            long received = Interlocked.Read(ref _received);
+                            RangeState[] open = _ranges.Keys.Where(r => !r.Stalled).ToArray();
+                            if (started && open.Length > 0 && received > receivedAtExtension)
+                            {
+                                receivedAtExtension = received;
+                                foreach (RangeState range in open)
+                                {
+                                    range.Stall();
+                                }
+
+                                Interlocked.Exchange(ref _lastActivityTicks, now);
+                                continue;
+                            }
+
+                            stalled = true;
                             neverStarted = !started;
                             break;
                         }
@@ -502,7 +527,17 @@ namespace DreamWeave.Launcher.Core.Downloads
                     }
                     finally
                     {
-                        Interlocked.Exchange(ref _lastActivityTicks, _clock.ElapsedTicks);
+                        bool started;
+                        lock (_gate)
+                        {
+                            started = _started;
+                        }
+
+                        if (started)
+                        {
+                            Interlocked.Exchange(ref _lastActivityTicks, _clock.ElapsedTicks);
+                        }
+
                         Interlocked.Decrement(ref _backingOff);
                     }
 
