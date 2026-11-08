@@ -264,7 +264,7 @@ namespace DreamWeave.Launcher.UI
                     _presenter.LaunchWithDecal = _decal.Checked;
                     DecalChanged?.Invoke(this, EventArgs.Empty);
                 };
-                SetLeft(_decal);
+                Add(_decal);
             }
             else
             {

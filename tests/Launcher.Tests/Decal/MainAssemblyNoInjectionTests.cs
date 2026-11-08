@@ -31,6 +31,7 @@ namespace DreamWeave.Launcher.Tests.Decal
             "NtWriteVirtualMemory",
             "NtMapViewOfSection",
             "SetThreadContext",
+            "SetWindowsHookEx",
             "SetWindowsHookExA",
             "SetWindowsHookExW",
             "NtQueueApcThread",

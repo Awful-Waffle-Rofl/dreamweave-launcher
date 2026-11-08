@@ -74,6 +74,9 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.IsTrue(screen.DecalBox.Checked, "it reflects the saved preference");
                 Assert.AreEqual(UiText.LaunchWithDecal, screen.DecalBox.Text);
                 Assert.IsNull(screen.DecalLink, "no discovery link when Decal is already detected");
+                Assert.IsNotNull(screen.DecalBox.Parent, "the box is on the page");
+                Assert.IsTrue(screen.DecalBox.Visible);
+                Assert.IsNotNull(screen.RememberBox.Parent, "adding the box must not displace the Remember box");
                 screen.Dispose();
             });
         }
@@ -88,6 +91,8 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.IsNotNull(screen.DecalLink, "the discovery link is shown when Decal is not detected");
                 Assert.AreEqual(UiText.DecalGetItLink, screen.DecalLink.Text);
                 Assert.IsTrue(screen.DecalLink.Visible);
+                Assert.IsNotNull(screen.DecalLink.Parent, "the link is on the page");
+                Assert.IsNotNull(screen.RememberBox.Parent);
                 screen.Dispose();
             });
         }
