@@ -27,22 +27,10 @@ jobs:
       - name: Test
         run: dotnet test DreamWeaveLauncher.sln -c Release --no-build
 
-      - name: Check exe size
+      # installer/shipped-files.txt is the one list of files the build may produce and the setup ships.
+      - name: Check build output against the shipped-files list
         shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path src/Launcher/bin/Release -Recurse -Filter DreamWeaveLauncher.exe | Select-Object -First 1
-          if (-not $exe) { Write-Error 'DreamWeaveLauncher.exe not found'; exit 1 }
-          Write-Host "$($exe.FullName) = $($exe.Length) bytes"
-          if ($exe.Length -gt 3145728) { Write-Error "Exe exceeds 3 MB limit (3145728 bytes)"; exit 1 }
-          "EXE_PATH=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Check no unembedded files
-        shell: pwsh
-        run: |
-          $dir = Split-Path $env:EXE_PATH
-          $allowed = @('DreamWeaveLauncher.exe', 'DreamWeaveLauncher.exe.config', 'DreamWeaveLauncher.pdb')
-          $extra = Get-ChildItem $dir -File | Where-Object { $allowed -notcontains $_.Name }
-          if ($extra) { Write-Error "Unexpected files next to the exe: $($extra.Name -join ', ')"; exit 1 }
+        run: ./tools/release/check-build-output.ps1 -StageDir loose-out
 
       # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
       - name: Build setup installer
@@ -80,5 +68,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: DreamWeaveLauncher
-          path: ${{ env.EXE_PATH }}
+          path: loose-out
           if-no-files-found: error

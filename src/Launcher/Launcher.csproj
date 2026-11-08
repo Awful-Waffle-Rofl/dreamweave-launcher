@@ -7,30 +7,22 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\dreamweave.ico</ApplicationIcon>
     <Platforms>AnyCPU</Platforms>
-    <!-- Do not copy referenced assemblies' XML docs next to the exe (only the exe ships). -->
+    <!-- Dependency DLLs ship as ordinary files beside the exe (no packer). Keep referenced assemblies' XML docs and satellite resource folders out of the output. The shipped set is installer/shipped-files.txt. -->
     <AllowedReferenceRelatedFileExtensions>.pdb</AllowedReferenceRelatedFileExtensions>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Launcher.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Art and icons stay embedded: the Release output is only the exe, .config and .pdb. -->
+    <!-- Art and icons stay embedded in the exe. -->
     <EmbeddedResource Include="Assets\*.jpg;Assets\*.png;Assets\*.ico" LogicalName="Assets.%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The license notices for the shipped third-party DLLs travel beside the exe; a test keeps this equal to the shipped section of THIRD-PARTY-NOTICES.md. -->
+    <None Include="THIRD-PARTY-NOTICES.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Launcher.Core\Launcher.Core.csproj" />
   </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="Fody" Version="6.9.3" PrivateAssets="all" />
-    <PackageReference Include="Costura.Fody" Version="6.2.0" PrivateAssets="all" />
-  </ItemGroup>
-  <!--
-    Costura embeds every copy-local reference into the exe and removes the loose copies, but only
-    when it weaves. An incremental build (seen with SDK 10.0.302) copies the references back without
-    re-weaving, which would ship Launcher.Core.dll, Newtonsoft.Json.dll and friends beside the exe.
-    Delete them after every build so the output is the exe, .config and .pdb on every SDK.
-  -->
-  <Target Name="RemoveEmbeddedCopyLocals" AfterTargets="Build">
-    <Delete Files="@(ReferenceCopyLocalPaths->'$(OutDir)%(DestinationSubDirectory)%(Filename)%(Extension)')" />
-  </Target>
 </Project>

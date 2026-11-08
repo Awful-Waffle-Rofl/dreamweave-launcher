@@ -9,7 +9,7 @@ Windows setup program (no administrator rights needed).
 ## What it is
 
 The player runs `DreamWeaveLauncher-Setup-<version>.exe` from the GitHub Releases
-page. It installs the launcher (one small exe) under `%LOCALAPPDATA%\Programs`,
+page. It installs the launcher (one exe and two DLLs) under `%LOCALAPPDATA%\Programs`,
 adds a Start menu shortcut, and is removed from Windows Settings > Apps like any
 other program; uninstalling also removes saved passwords and launcher data. In
 the launcher the player ticks checkboxes for the pieces they need, the launcher
@@ -47,8 +47,9 @@ No Asheron's Call logos or artwork are used in this repository.
 - `src/Launcher.Core` - class library shared by the launcher and the tools.
 - `installer` - the Inno Setup 6 script for the per-user setup program, and the
   privacy text it shows (kept in sync with `Docs/privacy.md` by a test).
-- `src/Launcher` - the WinForms executable (`DreamWeaveLauncher.exe`). Referenced
-  assemblies are embedded with Costura.Fody.
+- `src/Launcher` - the WinForms executable (`DreamWeaveLauncher.exe`). It ships with
+  its dependency DLLs (`Launcher.Core.dll`, `Newtonsoft.Json.dll`) as ordinary files in the same folder; nothing is packed into the exe.
+  `installer/shipped-files.txt` is the one list of shipped files.
 - `tools/ManifestTool` - console tool for generating keys and signing and
   verifying the download manifest (`keygen`, `sign`, `verify`).
 - `manifest/manifest.sample.json` - a sample schema-1 manifest with the real
@@ -67,7 +68,7 @@ dotnet build DreamWeaveLauncher.sln -c Release
 dotnet test DreamWeaveLauncher.sln -c Release
 ```
 
-CI builds on Windows, fails if the launcher exe grows past 3 MB, and builds the
+CI builds on Windows, checks the build output against `installer/shipped-files.txt` (exe under 3 MB, shipped files under 4 MiB in total, no other files), and builds the
 setup program with Inno Setup 6 (`tools/release/build-setup.ps1`; install Inno
 Setup 6 locally to run it).
 
