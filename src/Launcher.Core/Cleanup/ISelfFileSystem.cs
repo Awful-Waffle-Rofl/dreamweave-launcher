@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-namespace DreamWeave.Launcher.Core.SelfInstall
+namespace DreamWeave.Launcher.Core.Cleanup
 {
     /// <summary>
-    /// The file operations self-install, uninstall and self-update perform, behind an interface so
+    /// The file operations cleanup and self-update perform, behind an interface so
     /// tests can inject a failure at any step. Production implementation: <see cref="SelfFileSystem"/>.
     /// Methods throw the raw <see cref="IOException"/> / <see cref="UnauthorizedAccessException"/>;
     /// callers classify them.
@@ -153,14 +153,14 @@ namespace DreamWeave.Launcher.Core.SelfInstall
                 {
                     DeleteTree(entry, preserveFile, failures);
                 }
-                else if (preserveFile == null || !SelfInstallLayout.SamePath(entry, preserveFile))
+                else if (preserveFile == null || !CleanupLayout.SamePath(entry, preserveFile))
                 {
                     string file = entry;
                     Try(() => DeleteFile(file), file, failures);
                 }
             }
 
-            if (preserveFile != null && SelfInstallLayout.IsInside(preserveFile, folder))
+            if (preserveFile != null && CleanupLayout.IsInside(preserveFile, folder))
             {
                 return;
             }

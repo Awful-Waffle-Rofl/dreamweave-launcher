@@ -6,8 +6,10 @@ using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Manifests;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.SelfInstall;
 using DreamWeave.Launcher.Core.Update;
+using DreamWeave.Launcher.Tests.Cleanup;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace DreamWeave.Launcher.Tests.SelfInstall
@@ -30,8 +32,9 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         {
             temp = new TempDir();
             paths = new AppPaths(temp.Path);
-            Directory.CreateDirectory(paths.InstallDir);
-            exe = SelfInstallLayout.InstalledExePath(paths);
+            string appDir = Path.Combine(temp.Path, "App");
+            Directory.CreateDirectory(appDir);
+            exe = Path.Combine(appDir, CleanupLayout.ExeFileName);
             File.WriteAllBytes(exe, OldBytes);
             fs = new FaultyFileSystem();
             processes = new FakeProcessLauncher();

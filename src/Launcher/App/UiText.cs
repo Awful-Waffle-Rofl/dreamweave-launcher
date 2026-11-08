@@ -175,12 +175,9 @@ namespace DreamWeave.Launcher.App
         public const string SettingsVersionFormat = "Version {0}";
         public const string SettingsFolderNoClient = "That folder does not contain acclient.exe.";
 
-        // ---- Start-up and self-install ----
+        // ---- Start-up ----
 
         public const string Loading = "Getting the latest download list...";
-        public const string SelfInstallPrompt = "Install DreamWeave Launcher on this PC? It adds a Start menu shortcut and an entry in Apps and Features.";
-        public const string SelfInstallFailed = "The launcher could not be installed. You can keep using it from where it is.";
-        public const string SelfInstallStartFailed = "DreamWeave Launcher was installed but could not be started. Open it from the Start menu.";
         public const string NeedsNewerLauncher = "This launcher is too old to install the current game files. Update the launcher to continue.";
 
         // ---- Uninstall ----

@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.Telemetry;
 
 namespace DreamWeave.Launcher.App
@@ -215,32 +215,6 @@ namespace DreamWeave.Launcher.App
             {
                 return Path.GetFullPath(p.MainModule.FileName);
             }
-        }
-
-        /// <summary>True when <paramref name="runningExe"/> IS the installed copy (full paths, case-insensitive).</summary>
-        public static bool IsInstalledCopy(string runningExe, AppPaths paths)
-        {
-            if (string.IsNullOrEmpty(runningExe) || paths == null)
-            {
-                return false;
-            }
-
-            string installed = SelfInstallLayout.InstalledExePath(paths);
-            return string.Equals(Normalize(runningExe), Normalize(installed), StringComparison.OrdinalIgnoreCase);
-        }
-
-        /// <summary>
-        /// The <c>CurrentExePath</c> for <see cref="UninstallOptions"/>: the installed exe's path from
-        /// <see cref="AppPaths"/> when the running exe is that copy, otherwise the running exe itself.
-        /// </summary>
-        public static string UninstallCurrentExePath(string runningExe, AppPaths paths)
-        {
-            return IsInstalledCopy(runningExe, paths) ? SelfInstallLayout.InstalledExePath(paths) : runningExe;
-        }
-
-        private static string Normalize(string path)
-        {
-            return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
     }
 }

@@ -9,7 +9,7 @@ using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Detection;
 using DreamWeave.Launcher.Core.Manifests;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.Telemetry;
 using DreamWeave.Launcher.Core.Update;
 
@@ -255,8 +255,7 @@ namespace DreamWeave.Launcher.UI
             ITelemetrySink t = _services.TelemetrySink;
             t.Record(TelemetrySteps.LauncherUpdate, TelemetryOutcome.Started);
             Stopwatch clock = Stopwatch.StartNew();
-            SelfInstallEnvironment env = _services.InstallEnvironment;
-            var updater = new SelfUpdater(_services.Paths, LauncherInfo.SemanticVersion, _services.RunningExePath, _services.Downloads, new WinTrustVerifier(), env.FileSystem, env.Processes);
+            var updater = new SelfUpdater(_services.Paths, LauncherInfo.SemanticVersion, _services.RunningExePath, _services.Downloads, new WinTrustVerifier(), _services.FileSystem, _services.Processes);
             var progress = new Progress<ProgressReport>(r => _launcherScreen?.ShowStatus(UiText.Updating + " " + ProgressText.Describe(r)));
             try
             {
@@ -280,24 +279,42 @@ namespace DreamWeave.Launcher.UI
         }
 
         /// <summary>
-        /// Starts this exe with <c>--uninstall --handover</c>, then (only once that start succeeded) flushes
-        /// and stops telemetry, releases the mutex and closes. The new process waits a bounded time for
-        /// the mutex before it touches anything, so its removal of the data folder starts only after this
-        /// process has made its last write there.
+        /// Hands uninstall over to the setup program when it is registered (HKCU, Inno Setup's
+        /// <c>{AppId}_is1</c> key, read only), otherwise (a development or portable run) to this exe started
+        /// with <c>--cleanup --handover</c>. Only once that start succeeded does it flush and stop telemetry,
+        /// release the mutexes and close. The new process waits for the single-instance mutex (cleanup) or
+        /// for the setup guard mutex to go (setup uninstaller) before it touches anything, so its removal
+        /// of the data folder starts only after this process has made its last write there.
         /// </summary>
         private void StartUninstall()
         {
-            try
+            string setupUninstall = SetupUninstallLocator.FindUninstallString(new UserRegistryReader());
+            ProcessStartInfo start;
+            if (setupUninstall != null)
             {
-                _services.InstallEnvironment.Processes.Start(new ProcessStartInfo(_services.RunningExePath, SelfInstallLayout.UninstallSwitch + " " + StartupArgs.HandoverSwitch)
+                string program, arguments;
+                LauncherCleanup.SplitCommandLine(setupUninstall, out program, out arguments);
+                start = new ProcessStartInfo(program, arguments) { UseShellExecute = true };
+            }
+            else
+            {
+                start = new ProcessStartInfo(_services.RunningExePath, SetupConstants.CleanupSwitch + " " + StartupArgs.HandoverSwitch)
                 {
                     UseShellExecute = false,
                     WorkingDirectory = Path.GetDirectoryName(_services.RunningExePath),
-                });
+                };
+            }
+
+            // The setup uninstaller refuses to run while the guard mutex exists, so let go of it first.
+            SetupGuard.Release();
+            try
+            {
+                _services.Processes.Start(start);
             }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is IOException)
             {
                 // Nothing was started: this launcher keeps running with its services intact.
+                SetupGuard.Hold();
                 _launcherScreen?.ShowStatus(ErrorMessages.For(LauncherError.Unknown));
                 return;
             }
@@ -308,7 +325,7 @@ namespace DreamWeave.Launcher.UI
             }
             finally
             {
-                // The uninstaller is already waiting on the mutex: hand it over even if the flush failed.
+                // The uninstaller is already waiting: hand it over even if the flush failed.
                 _instance?.Release();
                 _window.Close();
             }

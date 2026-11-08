@@ -7,7 +7,7 @@ using DreamWeave.Launcher.Core.Detection;
 using DreamWeave.Launcher.Core.Downloads;
 using DreamWeave.Launcher.Core.Manifests;
 using DreamWeave.Launcher.Core.Net;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.State;
 using DreamWeave.Launcher.Core.Telemetry;
 
@@ -35,14 +35,14 @@ namespace DreamWeave.Launcher.App
             TelemetrySink = new TelemetrySink(Telemetry);
             Downloads = new DownloadService(paths);
             Credentials = new WindowsCredentialStore();
-            InstallEnvironment = SelfInstallEnvironment.CreateDefault(paths);
-            InstallEnvironment.Credentials = Credentials;
+            FileSystem = new SelfFileSystem();
+            Processes = new ProcessLauncher();
             AcFileSystem = new RealAcFileSystem();
             Disk = new SystemDiskSpace();
             Locator = new AcInstallLocator(new RegistryReader(), AcFileSystem);
             Verifier = new FileVerifier(AcFileSystem, State);
             Evaluator = new ComponentEvaluator(Verifier);
-            Elevated = new ElevatedCopyRunner(InstallEnvironment.Processes, runningExePath);
+            Elevated = new ElevatedCopyRunner(Processes, runningExePath);
             FlushForShutdown = FlushTelemetry;
         }
 
@@ -62,7 +62,9 @@ namespace DreamWeave.Launcher.App
 
         public ICredentialStore Credentials { get; }
 
-        public SelfInstallEnvironment InstallEnvironment { get; }
+        public ISelfFileSystem FileSystem { get; }
+
+        public IProcessLauncher Processes { get; }
 
         public IAcFileSystem AcFileSystem { get; }
 

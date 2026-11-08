@@ -59,28 +59,6 @@ namespace DreamWeave.Launcher.Tests.App
     }
 
     [TestClass]
-    public class ExePathsTests
-    {
-        [TestMethod]
-        public void InstalledCopy_ComparedCaseInsensitivelyOnFullPath()
-        {
-            var paths = new AppPaths(@"C:\Users\p\AppData\Local");
-            Assert.IsTrue(ExePaths.IsInstalledCopy(@"c:\users\P\appdata\local\programs\dreamweave launcher\DREAMWEAVELAUNCHER.EXE", paths));
-            Assert.IsTrue(ExePaths.IsInstalledCopy(@"C:\Users\p\AppData\Local\Programs\DreamWeave Launcher\.\DreamWeaveLauncher.exe", paths));
-            Assert.IsFalse(ExePaths.IsInstalledCopy(@"C:\Users\p\Downloads\DreamWeaveLauncher.exe", paths));
-        }
-
-        [TestMethod]
-        public void UninstallCurrentExePath_UsesInstalledPathWhenRunningTheInstalledCopy()
-        {
-            var paths = new AppPaths(@"C:\Users\p\AppData\Local");
-            string installed = @"C:\Users\p\AppData\Local\Programs\DreamWeave Launcher\DreamWeaveLauncher.exe";
-            Assert.AreEqual(installed, ExePaths.UninstallCurrentExePath(@"c:\USERS\p\appdata\local\programs\dreamweave launcher\dreamweavelauncher.exe", paths));
-            Assert.AreEqual(@"C:\Users\p\Downloads\DreamWeaveLauncher.exe", ExePaths.UninstallCurrentExePath(@"C:\Users\p\Downloads\DreamWeaveLauncher.exe", paths));
-        }
-    }
-
-    [TestClass]
     public class ManifestServiceTests
     {
         private static ManifestLoadResult Result(LauncherManifest m, LauncherError status)

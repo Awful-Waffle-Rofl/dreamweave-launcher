@@ -107,7 +107,7 @@ namespace DreamWeave.Launcher.Core
         /// <summary>An unclassified failure.</summary>
         Unknown = 99,
 
-        // 10x: launcher self-install, uninstall and self-update.
+        // 10x: launcher self-update and cleanup (self-install is retired).
 
         /// <summary>A launcher update's Authenticode signature did not verify, or its signer is not the one the manifest names.</summary>
         UpdateSignatureInvalid = 100,
@@ -124,10 +124,12 @@ namespace DreamWeave.Launcher.Core
         /// <summary>A version string is not a valid semantic version.</summary>
         VersionInvalid = 104,
 
-        /// <summary>The Start-menu shortcut could not be created or removed.</summary>
+        // 105 and 106 are RETIRED with self-install (the launcher no longer writes a shortcut or a registry key).
+        // They stay reserved: never reuse these numbers for a new meaning.
+        /// <summary>RETIRED, never emitted: the Start-menu shortcut could not be created or removed.</summary>
         ShortcutFailed = 105,
 
-        /// <summary>The per-user uninstall registration (HKCU) could not be written or removed.</summary>
+        /// <summary>RETIRED, never emitted: the per-user uninstall registration (HKCU) could not be written or removed.</summary>
         RegistryWriteFailed = 106,
 
         /// <summary>Uninstall finished but could not remove everything; the result lists what was left behind.</summary>

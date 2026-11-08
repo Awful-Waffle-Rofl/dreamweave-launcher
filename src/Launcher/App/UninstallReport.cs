@@ -1,18 +1,18 @@
 using System.Collections.Generic;
 using DreamWeave.Launcher.Core;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 
 namespace DreamWeave.Launcher.App
 {
     /// <summary>
     /// The text the uninstall window shows for a result. Built only from the result's STRUCTURED fields
     /// (code, leftover folder paths, the credentials flag, the client outcome): never from
-    /// <see cref="UninstallResult.Failures"/>, whose lines carry exception text and account names.
+    /// <see cref="CleanupResult.Failures"/>, whose lines carry exception text and account names.
     /// </summary>
     internal static class UninstallReport
     {
         /// <summary>True when there is nothing to tell the player and the window should close at once.</summary>
-        public static bool CloseImmediately(UninstallResult result)
+        public static bool CloseImmediately(CleanupResult result)
         {
             return result != null
                 && result.Complete
@@ -22,7 +22,7 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>The lines to show, in order.</summary>
-        public static IReadOnlyList<string> Lines(UninstallResult result)
+        public static IReadOnlyList<string> Lines(CleanupResult result)
         {
             var lines = new List<string>();
             if (result == null)

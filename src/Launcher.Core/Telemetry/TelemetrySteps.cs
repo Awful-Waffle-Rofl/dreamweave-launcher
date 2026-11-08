@@ -22,7 +22,7 @@ namespace DreamWeave.Launcher.Core.Telemetry
         public const string Launch = "launch";
         /// <summary>Step id <c>launcher-update</c>.</summary>
         public const string LauncherUpdate = "launcher-update";
-        /// <summary>Step id <c>self-install</c>.</summary>
+        /// <summary>Step id <c>self-install</c>. RETIRED, do not emit: the launcher no longer installs itself. Kept so the step id stays valid for the telemetry contract.</summary>
         public const string SelfInstall = "self-install";
         /// <summary>Step id <c>uninstall</c>.</summary>
         public const string Uninstall = "uninstall";

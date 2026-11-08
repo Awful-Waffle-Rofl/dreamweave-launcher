@@ -231,7 +231,6 @@ namespace DreamWeave.Launcher.Tests
             using (var dir = new TempDir())
             {
                 var p = new AppPaths(dir.Path);
-                Assert.AreEqual(Path.Combine(dir.Path, "Programs", "DreamWeave Launcher"), p.InstallDir);
                 Assert.AreEqual(Path.Combine(dir.Path, "DreamWeave"), p.DataDir);
                 Assert.AreEqual(Path.Combine(p.DataDir, "staging"), p.StagingDir);
                 Assert.AreEqual(Path.Combine(p.DataDir, "state.json"), p.StateFile);

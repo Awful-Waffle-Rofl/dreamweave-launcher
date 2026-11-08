@@ -1,11 +1,12 @@
 using System;
+using DreamWeave.Launcher.Core.Cleanup;
 using System.IO;
 using System.Threading;
 
 namespace DreamWeave.Launcher.Core.SelfInstall
 {
     /// <summary>
-    /// The exe replacement shared by self-install (upgrade in place) and self-update. Windows lets a
+    /// The exe replacement used by self-update. Windows lets a
     /// RUNNING exe be renamed but not deleted or overwritten, so the swap is two renames:
     /// <c>target -&gt; target.old</c>, then <c>target.new -&gt; target</c>. Any failure puts the original
     /// back. The incoming bytes are written through a handle that is held from the first byte
@@ -20,7 +21,7 @@ namespace DreamWeave.Launcher.Core.SelfInstall
         /// </summary>
         public static FileStream WriteIncoming(ISelfFileSystem fs, Stream source, string targetPath, long expectedLength, IProgress<ProgressReport> progress, CancellationToken cancellationToken, string stepId, out string sha256)
         {
-            string newPath = targetPath + SelfInstallLayout.NewSuffix;
+            string newPath = targetPath + CleanupLayout.NewSuffix;
             fs.DeleteFile(newPath);
             FileStream held = fs.CreateHeldForMove(newPath);
             try
@@ -69,8 +70,8 @@ namespace DreamWeave.Launcher.Core.SelfInstall
         /// </exception>
         public static string Swap(ISelfFileSystem fs, string targetPath)
         {
-            string newPath = targetPath + SelfInstallLayout.NewSuffix;
-            string oldPath = targetPath + SelfInstallLayout.OldSuffix;
+            string newPath = targetPath + CleanupLayout.NewSuffix;
+            string oldPath = targetPath + CleanupLayout.OldSuffix;
             bool hadOriginal = fs.FileExists(targetPath);
             if (!hadOriginal)
             {
@@ -135,8 +136,8 @@ namespace DreamWeave.Launcher.Core.SelfInstall
         /// <exception cref="LauncherException"><see cref="LauncherError.UpdateRollbackFailed"/>.</exception>
         public static void Revert(ISelfFileSystem fs, string targetPath)
         {
-            string newPath = targetPath + SelfInstallLayout.NewSuffix;
-            string oldPath = targetPath + SelfInstallLayout.OldSuffix;
+            string newPath = targetPath + CleanupLayout.NewSuffix;
+            string oldPath = targetPath + CleanupLayout.OldSuffix;
             try
             {
                 fs.DeleteFile(newPath);

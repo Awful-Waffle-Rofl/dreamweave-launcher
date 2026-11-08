@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using DreamWeave.Launcher.Core.Detection;
 using DreamWeave.Launcher.Core.Manifests;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 
 namespace DreamWeave.Launcher.Tests.App
 {

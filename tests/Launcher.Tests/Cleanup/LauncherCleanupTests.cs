@@ -3,39 +3,35 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Text;
 using DreamWeave.Launcher.Core;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.Detection;
-using DreamWeave.Launcher.Core.SelfInstall;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
-namespace DreamWeave.Launcher.Tests.SelfInstall
+namespace DreamWeave.Launcher.Tests.Cleanup
 {
     [TestClass]
-    public class SelfUninstallerTests
+    public class LauncherCleanupTests
     {
-        private SelfInstallFixture fx;
-        private string exe;
+        private CleanupFixture fx;
+        private string installFolder;
         private string outsider;
 
         [TestInitialize]
         public void Setup()
         {
-            fx = new SelfInstallFixture();
-            new SelfInstaller(fx.Environment, "1.0.0").Install(fx.WriteDownloadedExe(Encoding.ASCII.GetBytes("exe")));
-            exe = fx.Environment.InstalledExePath;
+            fx = new CleanupFixture();
 
             Directory.CreateDirectory(Path.Combine(fx.Paths.StagingDir, "ac-client"));
             File.WriteAllText(fx.Paths.StateFile, "{}");
             File.WriteAllText(Path.Combine(fx.Paths.StagingDir, "ac-client", "setup.exe"), "x");
-            File.WriteAllText(exe + ".old", "stale");
 
-            // Things that are NOT ours and must survive: a sibling program, a sibling Start-menu entry, another app's key.
-            outsider = Path.Combine(fx.Paths.Root, "Programs", "Other App", "other.exe");
-            Directory.CreateDirectory(Path.GetDirectoryName(outsider));
+            // A sibling folder that stands in for the install folder and for another program's files:
+            // cleanup must leave all of it alone (the setup program owns the install folder).
+            installFolder = Path.Combine(fx.Root, "ProgramFiles", SetupConstants.InstallFolderName);
+            Directory.CreateDirectory(installFolder);
+            outsider = Path.Combine(installFolder, "DreamWeaveLauncher.exe");
             File.WriteAllText(outsider, "keep me");
-            File.WriteAllText(Path.Combine(fx.Environment.ProgramsFolder, "Other.lnk"), "keep me");
-            fx.Registry.SetValues(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\OtherApp", new System.Collections.Generic.Dictionary<string, object> { { "DisplayName", "Other" } });
 
             fx.Credentials.Save("alice", "pw1");
             fx.Credentials.Save("bob", "pw2");
@@ -44,113 +40,75 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         [TestCleanup]
         public void Cleanup() => fx.Dispose();
 
-        private UninstallResult Uninstall(bool removeAc = false, string running = null)
+        private CleanupResult Run(bool removeAc = false)
         {
-            return new SelfUninstaller(fx.Environment).Uninstall(new UninstallOptions { CurrentExePath = running ?? exe, RemoveAcClient = removeAc });
+            return new LauncherCleanup(fx.Environment).Run(new CleanupOptions { RemoveAcClient = removeAc });
         }
 
         [TestMethod]
-        public void Uninstall_RemovesEverythingOurs_AndNothingElse()
+        public void Run_RemovesCredentialsAndDataDir_AndNothingElse()
         {
-            UninstallResult r = Uninstall();
+            CleanupResult r = Run();
 
             Assert.IsTrue(r.Complete, string.Join("; ", r.Failures));
             Assert.AreEqual(LauncherError.None, r.Code);
             Assert.IsFalse(Directory.Exists(fx.Paths.DataDir), "DataDir removed");
-            Assert.IsFalse(File.Exists(fx.Environment.ShortcutPath), "shortcut removed");
-            Assert.IsNull(fx.Registry.GetValue(SelfInstallLayout.UninstallKeyPath, "DisplayName"), "uninstall key removed");
-            Assert.AreEqual(0, fx.Credentials.Saved.Count);
+            Assert.AreEqual(0, fx.Credentials.Saved.Count, "credentials removed");
             Assert.AreEqual(2, r.CredentialsRemoved);
-
-            // The running exe is the only thing left in InstallDir, handed to the self-delete helper.
-            CollectionAssert.AreEqual(new[] { exe }, Directory.GetFiles(fx.Paths.InstallDir));
-            Assert.IsTrue(r.SelfDeleteScheduled);
-            Assert.AreEqual(1, fx.SelfDelete.Calls.Count);
-            Assert.AreEqual(exe, fx.SelfDelete.Calls[0].Item1);
-            Assert.AreEqual(fx.Paths.InstallDir, fx.SelfDelete.Calls[0].Item2);
-
-            Assert.AreEqual("keep me", File.ReadAllText(outsider));
-            Assert.IsTrue(File.Exists(Path.Combine(fx.Environment.ProgramsFolder, "Other.lnk")));
-            Assert.AreEqual("Other", fx.Registry.GetValue(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\OtherApp", "DisplayName"));
-
+            Assert.AreEqual("keep me", File.ReadAllText(outsider), "the install folder is not cleanup's to touch");
             Assert.AreEqual(AcClientUninstallOutcome.NotRequested, r.AcClient);
             Assert.AreEqual(0, fx.Processes.Ran.Count, "the AC client is never touched by default");
         }
 
         [TestMethod]
-        public void Uninstall_FromOutsideInstallDir_RemovesInstallDirCompletely()
+        public void Run_SecondRun_IsHarmless()
         {
-            string elsewhere = fx.WriteDownloadedExe(Encoding.ASCII.GetBytes("dl"));
-            UninstallResult r = Uninstall(running: elsewhere);
-
-            Assert.IsTrue(r.Complete, string.Join("; ", r.Failures));
-            Assert.IsFalse(Directory.Exists(fx.Paths.InstallDir));
-            Assert.IsFalse(r.SelfDeleteScheduled);
-            Assert.AreEqual(0, fx.SelfDelete.Calls.Count);
-            Assert.IsTrue(File.Exists(elsewhere), "a copy outside InstallDir is not ours to delete");
-        }
-
-        [TestMethod]
-        public void Uninstall_SecondRun_IsHarmless()
-        {
-            Uninstall();
-            UninstallResult again = Uninstall();
+            Run();
+            CleanupResult again = Run();
             Assert.IsTrue(again.Complete, string.Join("; ", again.Failures));
         }
 
         [TestMethod]
-        public void Uninstall_ForeignShortcutWithOurName_IsKept()
-        {
-            File.WriteAllText(fx.Environment.ShortcutPath, @"C:\Somewhere\Else\thing.exe");
-            Uninstall();
-            Assert.IsTrue(File.Exists(fx.Environment.ShortcutPath));
-        }
-
-        [TestMethod]
-        public void Uninstall_SelfDeleteRefused_IsReported()
-        {
-            fx.SelfDelete.Result = false;
-            UninstallResult r = Uninstall();
-            Assert.IsFalse(r.Complete);
-            Assert.AreEqual(LauncherError.UninstallIncomplete, r.Code);
-            Assert.IsTrue(r.Failures.Any(f => f.Contains(exe)));
-        }
-
-        [TestMethod]
-        public void Uninstall_PartialFailures_ContinueAndAreReported()
+        public void Run_PartialFailures_ContinueAndAreReported()
         {
             fx.Credentials.FailList = true;
-            fx.Registry.FailWrites = true;
-            UninstallResult r = Uninstall();
+            CleanupResult r = Run();
 
-            Assert.AreEqual(2, r.Failures.Count, string.Join("; ", r.Failures));
+            Assert.AreEqual(1, r.Failures.Count, string.Join("; ", r.Failures));
+            Assert.IsTrue(r.CredentialsLeftOver);
             Assert.IsFalse(Directory.Exists(fx.Paths.DataDir), "later steps still ran");
-            Assert.IsFalse(File.Exists(fx.Environment.ShortcutPath));
         }
 
         [TestMethod]
-        public void Uninstall_UnexpectedFolders_AreRefused()
+        public void Run_FailedDataFolder_IsReportedAsAFolderPath()
         {
-            var env = fx.Environment;
-            var odd = new SelfInstallEnvironment
+            fx.FileSystem.TreeFailure = folder => string.Equals(folder, Path.GetFullPath(fx.Paths.DataDir), StringComparison.OrdinalIgnoreCase) ? folder + ": Access to the path is denied." : null;
+            CleanupResult r = Run();
+            Assert.IsFalse(r.Complete);
+            Assert.AreEqual(LauncherError.UninstallIncomplete, r.Code);
+            CollectionAssert.AreEqual(new[] { Path.GetFullPath(fx.Paths.DataDir) }, r.LeftoverFolders.ToArray());
+            Assert.IsFalse(r.CredentialsLeftOver);
+        }
+
+        [TestMethod]
+        public void Run_UnexpectedLeaf_IsRefused()
+        {
+            var odd = new CleanupEnvironment
             {
                 Paths = new BadPaths(fx.Root).Paths,
-                UserRegistry = env.UserRegistry,
-                MachineRegistry = env.MachineRegistry,
-                Shortcuts = env.Shortcuts,
-                ProgramsFolder = env.ProgramsFolder,
-                FileSystem = env.FileSystem,
-                Processes = env.Processes,
-                Credentials = env.Credentials,
-                SelfDelete = env.SelfDelete,
+                MachineRegistry = fx.Environment.MachineRegistry,
+                FileSystem = fx.Environment.FileSystem,
+                Processes = fx.Environment.Processes,
+                Credentials = fx.Environment.Credentials,
             };
 
-            Assert.ThrowsExactly<ArgumentException>(() => new SelfUninstaller(odd).Uninstall(new UninstallOptions()));
+            Assert.ThrowsExactly<ArgumentException>(() => new LauncherCleanup(odd).Run(new CleanupOptions()));
             Assert.IsTrue(Directory.Exists(fx.Paths.DataDir), "nothing was deleted");
+            Assert.AreEqual(2, fx.Credentials.Saved.Count, "credentials untouched too");
         }
 
         [TestMethod]
-        public void Uninstall_DoesNotFollowAJunctionOutOfDataDir()
+        public void Run_DoesNotFollowAJunctionOutOfDataDir()
         {
             string victim = Path.Combine(fx.Root, "victim");
             Directory.CreateDirectory(victim);
@@ -161,7 +119,7 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
                 Assert.Inconclusive("Could not create a junction on this machine.");
             }
 
-            UninstallResult r = Uninstall();
+            CleanupResult r = Run();
 
             Assert.IsTrue(r.Complete, string.Join("; ", r.Failures));
             Assert.IsFalse(Directory.Exists(fx.Paths.DataDir));
@@ -169,11 +127,11 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         }
 
         [TestMethod]
-        public void RemoveAcClient_RunsTheClientsOwnUninstallString()
+        public void RemoveAcClient_RunsTheClientsOwnUninstallString_Completed()
         {
             fx.MachineRegistry.Set(AcInstallLocator.UninstallRoot + "\\" + AcInstallLocator.UninstallGuid, "UninstallString", "MsiExec.exe /X{F0EE55BA-193D-4670-90C0-76E0E25F3A08}");
 
-            UninstallResult r = Uninstall(removeAc: true);
+            CleanupResult r = Run(removeAc: true);
 
             Assert.AreEqual(AcClientUninstallOutcome.Completed, r.AcClient);
             Assert.AreEqual(1, fx.Processes.Ran.Count);
@@ -190,7 +148,7 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             fx.MachineRegistry.AddUninstall("Decal", "Decal 2.9 for Asheron's Call", null);
             fx.MachineRegistry.Set(AcInstallLocator.UninstallRoot + "\\Decal", "UninstallString", "decal-uninstall.exe");
 
-            UninstallResult r = Uninstall(removeAc: true);
+            CleanupResult r = Run(removeAc: true);
 
             Assert.AreEqual(AcClientUninstallOutcome.Completed, r.AcClient);
             Assert.AreEqual(@"C:\Turbine\Asheron's Call\unins000.exe", fx.Processes.Ran.Single().FileName);
@@ -205,7 +163,7 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             fx.MachineRegistry.AddUninstall("B", "Asheron's Call", null);
             fx.MachineRegistry.Set(AcInstallLocator.UninstallRoot + "\\B", "UninstallString", "b.exe");
 
-            UninstallResult r = Uninstall(removeAc: true);
+            CleanupResult r = Run(removeAc: true);
 
             Assert.AreEqual(AcClientUninstallOutcome.NotFound, r.AcClient);
             Assert.AreEqual(0, fx.Processes.Ran.Count);
@@ -214,7 +172,7 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         [TestMethod]
         public void RemoveAcClient_NotInstalled_IsNotFound()
         {
-            Assert.AreEqual(AcClientUninstallOutcome.NotFound, Uninstall(removeAc: true).AcClient);
+            Assert.AreEqual(AcClientUninstallOutcome.NotFound, Run(removeAc: true).AcClient);
         }
 
         [TestMethod]
@@ -223,24 +181,54 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             fx.MachineRegistry.Set(AcInstallLocator.UninstallRoot + "\\" + AcInstallLocator.UninstallGuid, "UninstallString", "MsiExec.exe /X{x}");
             fx.Processes.RunFailure = psi => new Win32Exception(1223);
 
-            UninstallResult r = Uninstall(removeAc: true);
+            CleanupResult r = Run(removeAc: true);
 
             Assert.AreEqual(AcClientUninstallOutcome.Declined, r.AcClient);
             Assert.IsTrue(r.Complete, string.Join("; ", r.Failures));
         }
 
         [TestMethod]
-        public void RemoveAcClient_NonZeroExit_IsReported()
+        public void RemoveAcClient_NonZeroExit_IsFailed_AndOurOwnRemovalStillRan()
         {
             fx.MachineRegistry.Set(AcInstallLocator.UninstallRoot + "\\" + AcInstallLocator.UninstallGuid, "UninstallString", "MsiExec.exe /X{x}");
             fx.Processes.RunExitCode = psi => 1603;
 
-            UninstallResult r = Uninstall(removeAc: true);
+            CleanupResult r = Run(removeAc: true);
 
             Assert.AreEqual(AcClientUninstallOutcome.Failed, r.AcClient);
             Assert.AreEqual(1603, r.AcClientExitCode);
             Assert.IsFalse(r.Complete);
             Assert.IsFalse(Directory.Exists(fx.Paths.DataDir), "our own removal still ran");
+        }
+
+        [TestMethod]
+        public void RunSilent_NeverRunsTheAcUninstaller_EvenWhenOneIsRegistered()
+        {
+            fx.MachineRegistry.Set(AcInstallLocator.UninstallRoot + "\\" + AcInstallLocator.UninstallGuid, "UninstallString", "MsiExec.exe /X{x}");
+
+            CleanupResult r = new LauncherCleanup(fx.Environment).RunSilent();
+
+            Assert.IsNotNull(r);
+            Assert.AreEqual(AcClientUninstallOutcome.NotRequested, r.AcClient);
+            Assert.AreEqual(0, fx.Processes.Ran.Count, "silent mode must never run the AC uninstaller");
+            Assert.AreEqual(0, fx.Processes.Started.Count);
+            Assert.IsFalse(Directory.Exists(fx.Paths.DataDir));
+            Assert.AreEqual(0, fx.Credentials.Saved.Count);
+        }
+
+        [TestMethod]
+        public void RunSilent_RefusedFolder_ReturnsNullInsteadOfThrowing()
+        {
+            var odd = new CleanupEnvironment
+            {
+                Paths = new BadPaths(fx.Root).Paths,
+                MachineRegistry = fx.Environment.MachineRegistry,
+                FileSystem = fx.Environment.FileSystem,
+                Processes = fx.Environment.Processes,
+                Credentials = fx.Environment.Credentials,
+            };
+
+            Assert.IsNull(new LauncherCleanup(odd).RunSilent());
         }
 
         [TestMethod]
@@ -252,7 +240,7 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         public void SplitCommandLine_Table(string line, string program, string args)
         {
             string p, a;
-            SelfUninstaller.SplitCommandLine(line, out p, out a);
+            LauncherCleanup.SplitCommandLine(line, out p, out a);
             Assert.AreEqual(program, p);
             Assert.AreEqual(args, a);
         }

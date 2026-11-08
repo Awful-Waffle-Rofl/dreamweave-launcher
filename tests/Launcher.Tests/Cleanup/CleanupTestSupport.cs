@@ -4,89 +4,17 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Credentials;
 using DreamWeave.Launcher.Core.Downloads;
-using DreamWeave.Launcher.Core.SelfInstall;
+using DreamWeave.Launcher.Core.Cleanup;
 using DreamWeave.Launcher.Core.Update;
 using DreamWeave.Launcher.Tests.Detection;
-using Microsoft.Win32.SafeHandles;
 
-namespace DreamWeave.Launcher.Tests.SelfInstall
+namespace DreamWeave.Launcher.Tests.Cleanup
 {
-    internal sealed class FakeUserRegistry : IUserRegistry
-    {
-        public Dictionary<string, Dictionary<string, object>> Keys { get; } = new Dictionary<string, Dictionary<string, object>>(StringComparer.OrdinalIgnoreCase);
-
-        public bool FailWrites { get; set; }
-
-        public void SetValues(string subKeyPath, IReadOnlyDictionary<string, object> values)
-        {
-            if (FailWrites)
-            {
-                throw new LauncherException(LauncherError.RegistryWriteFailed, "fake registry write failure");
-            }
-
-            Dictionary<string, object> key;
-            if (!Keys.TryGetValue(subKeyPath, out key))
-            {
-                key = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-                Keys[subKeyPath] = key;
-            }
-
-            foreach (KeyValuePair<string, object> v in values)
-            {
-                key[v.Key] = v.Value;
-            }
-        }
-
-        public object GetValue(string subKeyPath, string valueName)
-        {
-            Dictionary<string, object> key;
-            object v;
-            return Keys.TryGetValue(subKeyPath, out key) && key.TryGetValue(valueName, out v) ? v : null;
-        }
-
-        public bool DeleteKeyTree(string subKeyPath)
-        {
-            if (FailWrites)
-            {
-                throw new LauncherException(LauncherError.RegistryWriteFailed, "fake registry delete failure");
-            }
-
-            string prefix = subKeyPath + "\\";
-            List<string> doomed = Keys.Keys.Where(k => string.Equals(k, subKeyPath, StringComparison.OrdinalIgnoreCase) || k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
-            foreach (string k in doomed)
-            {
-                Keys.Remove(k);
-            }
-
-            return doomed.Count > 0;
-        }
-    }
-
-    /// <summary>Writes a plain text file whose single line is the target, so tests never create real shell links.</summary>
-    internal sealed class FakeShortcutWriter : IShortcutWriter
-    {
-        public int Writes { get; private set; }
-
-        public void Write(string shortcutPath, string targetPath, string workingDirectory, string description)
-        {
-            Writes++;
-            Directory.CreateDirectory(Path.GetDirectoryName(shortcutPath));
-            File.WriteAllText(shortcutPath, targetPath);
-        }
-
-        public string ReadTarget(string shortcutPath)
-        {
-            return File.Exists(shortcutPath) ? File.ReadAllText(shortcutPath) : null;
-        }
-    }
-
     internal sealed class FakeProcessLauncher : IProcessLauncher
     {
         public List<ProcessStartInfo> Started { get; } = new List<ProcessStartInfo>();
@@ -119,19 +47,6 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
             }
 
             return RunExitCode(startInfo);
-        }
-    }
-
-    internal sealed class FakeSelfDeleteScheduler : ISelfDeleteScheduler
-    {
-        public List<Tuple<string, string>> Calls { get; } = new List<Tuple<string, string>>();
-
-        public bool Result { get; set; } = true;
-
-        public bool Schedule(string exePath, string folder)
-        {
-            Calls.Add(Tuple.Create(exePath, folder));
-            return Result;
         }
     }
 
@@ -260,25 +175,21 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
         }
     }
 
-    /// <summary>A temp root with AppPaths, a fake Start menu and every fake wired into a <see cref="SelfInstallEnvironment"/>.</summary>
-    internal sealed class SelfInstallFixture : IDisposable
+    /// <summary>A temp root with AppPaths and every fake wired into a <see cref="CleanupEnvironment"/>.</summary>
+    internal sealed class CleanupFixture : IDisposable
     {
         private readonly TempDir _temp = new TempDir();
 
-        public SelfInstallFixture()
+        public CleanupFixture()
         {
             Paths = new AppPaths(Path.Combine(_temp.Path, "LocalAppData"));
-            Environment = new SelfInstallEnvironment
+            Environment = new CleanupEnvironment
             {
                 Paths = Paths,
-                UserRegistry = Registry,
                 MachineRegistry = MachineRegistry,
-                Shortcuts = Shortcuts,
-                ProgramsFolder = Path.Combine(_temp.Path, "StartMenu", "Programs"),
                 FileSystem = FileSystem,
                 Processes = Processes,
                 Credentials = Credentials,
-                SelfDelete = SelfDelete,
             };
         }
 
@@ -286,13 +197,9 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
 
         public AppPaths Paths { get; }
 
-        public SelfInstallEnvironment Environment { get; }
-
-        public FakeUserRegistry Registry { get; } = new FakeUserRegistry();
+        public CleanupEnvironment Environment { get; }
 
         public FakeRegistry MachineRegistry { get; } = new FakeRegistry();
-
-        public FakeShortcutWriter Shortcuts { get; } = new FakeShortcutWriter();
 
         public FaultyFileSystem FileSystem { get; } = new FaultyFileSystem();
 
@@ -300,55 +207,6 @@ namespace DreamWeave.Launcher.Tests.SelfInstall
 
         public FakeCredentialStore Credentials { get; } = new FakeCredentialStore();
 
-        public FakeSelfDeleteScheduler SelfDelete { get; } = new FakeSelfDeleteScheduler();
-
-        /// <summary>Writes a fake "downloaded" launcher exe outside the install folder and returns its path.</summary>
-        public string WriteDownloadedExe(byte[] content, string name = "DreamWeaveLauncher (1).exe")
-        {
-            string dir = Path.Combine(Root, "Downloads");
-            Directory.CreateDirectory(dir);
-            string path = Path.Combine(dir, name);
-            File.WriteAllBytes(path, content);
-            return path;
-        }
-
         public void Dispose() => _temp.Dispose();
-    }
-
-    /// <summary>NTFS alternate data streams via CreateFileW (.NET Framework rejects ':' in FileStream paths).</summary>
-    internal static class AlternateStreams
-    {
-        private const uint GenericRead = 0x80000000;
-        private const uint GenericWrite = 0x40000000;
-        private const uint CreateAlways = 2;
-        private const uint OpenExisting = 3;
-
-        public static void Write(string path, string streamName, string content)
-        {
-            using (SafeFileHandle h = CreateFileW(path + ":" + streamName, GenericWrite, 0, IntPtr.Zero, CreateAlways, 0, IntPtr.Zero))
-            {
-                if (h.IsInvalid)
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                }
-
-                using (var fs = new FileStream(h, FileAccess.Write))
-                {
-                    byte[] b = Encoding.ASCII.GetBytes(content);
-                    fs.Write(b, 0, b.Length);
-                }
-            }
-        }
-
-        public static bool Exists(string path, string streamName)
-        {
-            using (SafeFileHandle h = CreateFileW(path + ":" + streamName, GenericRead, 1, IntPtr.Zero, OpenExisting, 0, IntPtr.Zero))
-            {
-                return !h.IsInvalid;
-            }
-        }
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern SafeFileHandle CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
     }
 }

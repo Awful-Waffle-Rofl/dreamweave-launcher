@@ -1,8 +1,8 @@
 using System.Diagnostics;
 
-namespace DreamWeave.Launcher.Core.SelfInstall
+namespace DreamWeave.Launcher.Core.Cleanup
 {
-    /// <summary>Starts processes for self-update relaunch, self-delete and the AC client's uninstaller. Production implementation: <see cref="ProcessLauncher"/>.</summary>
+    /// <summary>Starts processes for self-update relaunch and the AC client's uninstaller. Production implementation: <see cref="ProcessLauncher"/>.</summary>
     public interface IProcessLauncher
     {
         /// <summary>Starts the process and returns without waiting. Throws what <see cref="Process.Start(ProcessStartInfo)"/> throws.</summary>
