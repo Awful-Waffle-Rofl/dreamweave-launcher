@@ -449,6 +449,132 @@ namespace DreamWeave.Launcher.Tests.Install
             return result;
         }
 
+        // --- the game folder is pinned for the whole run (review F1) ----------------------------
+
+        [TestMethod]
+        public void AcFolderThatIsAJunctionToAValidInstall_IsRefused()
+        {
+            using (var f = new Fixture())
+            {
+                string link = Path.Combine(f.Root, "ac-link");
+                string reason;
+                if (!InstallData.TryMakeJunction(link, f.Ac, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                f.Stage("a.dat", A);
+
+                VerifiedPlacementResult r = f.Run(acFolder: link);
+
+                Assert.AreEqual(LauncherError.ReparsePointInPath, r.Code, r.Detail);
+                Assert.IsFalse(File.Exists(f.Target("a.dat")), "nothing may be written through the junction");
+            }
+        }
+
+        /// <summary>Runs the placement with a hook that tries to move <paramref name="victim"/> away and put a junction to <paramref name="attacker"/> in its place.</summary>
+        private static VerifiedPlacementResult RunWithSwap(Fixture f, string victim, string attacker, out Exception swapError)
+        {
+            Exception error = null;
+            var runner = new VerifiedPlacementRunner(new ManifestVerifier(new[] { _key.PublicKey }))
+            {
+                AfterPinned = ac =>
+                {
+                    try
+                    {
+                        Directory.Move(victim, victim + "-moved");
+                    }
+                    catch (Exception ex)
+                    {
+                        error = ex;
+                        return;
+                    }
+
+                    string reason;
+                    Assert.IsTrue(InstallData.TryMakeJunction(victim, attacker, out reason), reason);
+                },
+            };
+            VerifiedPlacementResult r = runner.Execute(f.Paths.Root, f.Ac, Overlay);
+            swapError = error;
+            return r;
+        }
+
+        [TestMethod]
+        public void SwappingTheGameFolderAfterValidation_IsBlocked()
+        {
+            using (var f = new Fixture())
+            {
+                string attacker = Path.Combine(f.Root, "attacker");
+                Directory.CreateDirectory(attacker);
+                File.WriteAllBytes(Path.Combine(attacker, "acclient.exe"), Client);
+                f.Stage("a.dat", A);
+
+                Exception swapError;
+                VerifiedPlacementResult r = RunWithSwap(f, f.Ac, attacker, out swapError);
+
+                Assert.IsNotNull(swapError, "the pinned game folder must not be movable");
+                Assert.IsTrue(swapError is IOException || swapError is UnauthorizedAccessException, swapError.ToString());
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(f.Target("a.dat")), "the write lands in the real game folder");
+                Assert.IsFalse(File.Exists(Path.Combine(attacker, "a.dat")), "nothing may be redirected");
+            }
+        }
+
+        [TestMethod]
+        public void SwappingASubfolderAfterValidation_IsBlocked()
+        {
+            using (var f = new Fixture())
+            {
+                Directory.CreateDirectory(f.Target("sub"));
+                string attacker = Path.Combine(f.Root, "attacker");
+                Directory.CreateDirectory(attacker);
+                f.Stage("sub/c.dat", C);
+
+                Exception swapError;
+                VerifiedPlacementResult r = RunWithSwap(f, f.Target("sub"), attacker, out swapError);
+
+                Assert.IsNotNull(swapError, "a pinned folder on the way to a target must not be movable");
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(C, File.ReadAllBytes(f.Target(@"sub\c.dat")));
+                Assert.AreEqual(0, Directory.GetFileSystemEntries(attacker).Length, "nothing may be redirected");
+            }
+        }
+
+        [TestMethod]
+        public void RenamingAParentOfTheGameFolderAfterValidation_IsBlocked()
+        {
+            using (var f = new Fixture())
+            {
+                // The game folder one level down, so its parent is a folder the test may try to rename.
+                string parent = Path.Combine(f.Root, "games");
+                string ac = Path.Combine(parent, "ac");
+                Directory.CreateDirectory(ac);
+                File.WriteAllBytes(Path.Combine(ac, "acclient.exe"), Client);
+                f.Stage("a.dat", A);
+                Exception renameError = null;
+                var runner = new VerifiedPlacementRunner(new ManifestVerifier(new[] { _key.PublicKey }))
+                {
+                    AfterPinned = pinned =>
+                    {
+                        try
+                        {
+                            Directory.Move(parent, parent + "-moved");
+                        }
+                        catch (Exception ex)
+                        {
+                            renameError = ex;
+                        }
+                    },
+                };
+
+                VerifiedPlacementResult r = runner.Execute(f.Paths.Root, ac, Overlay);
+
+                Assert.IsNotNull(renameError, "a parent of the pinned game folder must not be renamable");
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(Path.Combine(ac, "a.dat")));
+            }
+        }
+
         // --- locations: reparse points, network and device paths --------------------------------
 
         [TestMethod]

@@ -514,6 +514,89 @@ namespace DreamWeave.Launcher.Tests.Install
         }
 
         [TestMethod]
+        public void RemoveUnlisted_WithAJunctionInsideReady_NeverFollowsIt()
+        {
+            using (var f = new Fixture())
+            {
+                string outside = Path.Combine(f.Root, "outside");
+                Directory.CreateDirectory(outside);
+                File.WriteAllBytes(Path.Combine(outside, "precious.txt"), A);
+                string ready = VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats");
+                Directory.CreateDirectory(ready);
+                File.WriteAllBytes(Path.Combine(ready, "a.dat"), A);
+                File.WriteAllBytes(Path.Combine(ready, "stale.bin"), A);
+                string reason;
+                if (!InstallData.TryMakeJunction(Path.Combine(ready, "sub"), outside, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                ZipOverlayInstaller.RemoveUnlisted(ready, new System.Collections.Generic.List<ManifestFile> { InstallData.File("a.dat", A) });
+
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(Path.Combine(outside, "precious.txt")), "the junction's target must survive");
+                Assert.IsFalse(Directory.Exists(Path.Combine(ready, "sub")), "the link itself is removed");
+                CollectionAssert.AreEqual(new[] { Path.Combine(ready, "a.dat") }, Directory.GetFiles(ready, "*", SearchOption.AllDirectories));
+            }
+        }
+
+        [TestMethod]
+        public void CleanUp_WithAJunctionInsideReady_RemovesEverything_TargetSurvives()
+        {
+            using (var f = new Fixture())
+            {
+                string outside = Path.Combine(f.Root, "outside");
+                Directory.CreateDirectory(outside);
+                File.WriteAllBytes(Path.Combine(outside, "precious.txt"), A);
+                var request = new PlacementRequest(f.Paths.Root, f.Ac, "eor-dats");
+                Directory.CreateDirectory(request.ReadyFolder);
+                File.WriteAllBytes(Path.Combine(request.ReadyFolder, "a.dat"), A);
+                string reason;
+                if (!InstallData.TryMakeJunction(Path.Combine(request.ReadyFolder, "sub"), outside, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                request.CleanUp();
+
+                Assert.IsFalse(Directory.Exists(request.ReadyFolder), "nothing may be left orphaned");
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(Path.Combine(outside, "precious.txt")));
+            }
+        }
+
+        [TestMethod]
+        public void NothingToDo_RemovesAStaleReadyFolder()
+        {
+            using (var f = new Fixture())
+            {
+                File.WriteAllBytes(f.Target("a.dat"), A);
+                File.WriteAllBytes(f.Target("b.dat"), B);
+                Directory.CreateDirectory(Path.GetDirectoryName(ReadyFile(f, "a.dat")));
+                File.WriteAllBytes(ReadyFile(f, "a.dat"), A);
+
+                ZipOverlayResult r = f.Run();
+
+                Assert.AreEqual(InstallOutcome.NothingToDo, r.Outcome);
+                Assert.IsFalse(Directory.Exists(VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats")), "a left-over ready folder must not outlive a finished step");
+            }
+        }
+
+        [TestMethod]
+        public void UnwritableFolder_UnplaceableId_IsRefusedBeforeExtraction()
+        {
+            using (var f = new Fixture())
+            {
+                // No archive exists: only a refusal BEFORE extraction can report the id.
+                f.Component = InstallData.Overlay("EOR-Dats", InstallData.File("a.dat", A));
+                f.Manifest = InstallData.Manifest(f.Component);
+
+                var ex = Assert.ThrowsExactly<LauncherException>(() => RunDenied(f));
+
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, ex.Code, ex.Detail);
+                Assert.IsTrue(f.StagingEmpty());
+            }
+        }
+
+        [TestMethod]
         public void WritableFolder_InstallsDirectly_NeverAsksForPlacement_AndRemovesTheReadyFolder()
         {
             using (var f = new Fixture())

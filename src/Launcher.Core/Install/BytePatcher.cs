@@ -78,12 +78,10 @@ namespace DreamWeave.Launcher.Core.Install
 
             string full = AcPathSafety.ResolveForWrite(acFolder, c.Target);
             FileStream guard;
-            bool guarded = AcWriter.TryOpenGuard(full, what, out guard);
-            if (!guarded)
+            if (!AcWriter.TryOpenGuard(full, what, out guard))
             {
-                // Not even a read guard: the result can still be built from a plain read (the
-                // elevated helper takes its own guard before it places anything).
-                guard = OpenForRead(full, what);
+                // Not even a read guard: the file cannot be read, so the result cannot be built here.
+                throw new LauncherException(LauncherError.AccessDenied, "Windows denied access to " + what + ".");
             }
 
             if (guard == null)
@@ -121,6 +119,8 @@ namespace DreamWeave.Launcher.Core.Install
                 string current = Hasher.ComputeSha256Hex(data);
                 if (Hasher.FixedTimeEquals(current, toHash))
                 {
+                    // Already done: nothing may be left waiting for a placement.
+                    VerifiedPlacementRunner.ClearReady(_paths, c.Id);
                     return new BytePatchResult(InstallOutcome.NothingToDo, null);
                 }
 
@@ -159,7 +159,7 @@ namespace DreamWeave.Launcher.Core.Install
                     throw new LauncherException(LauncherError.PatchOutputMismatch, "The patched " + what + " would not match the published result, so it was left unchanged.");
                 }
 
-                if (!guarded || !AcWriter.CanCreateIn(Path.GetDirectoryName(full)))
+                if (!AcWriter.CanCreateIn(Path.GetDirectoryName(full)))
                 {
                     guard.Dispose();
                     return NeedsElevation(c, acFolder, data);
@@ -208,27 +208,6 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
-        /// <summary>Opens the target for reading only, sharing everything; null when it does not exist.</summary>
-        private static FileStream OpenForRead(string full, string what)
-        {
-            try
-            {
-                return new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 81920, FileOptions.None);
-            }
-            catch (Exception ex) when (ex is FileNotFoundException || ex is DirectoryNotFoundException)
-            {
-                return null;
-            }
-            catch (UnauthorizedAccessException ex)
-            {
-                throw new LauncherException(LauncherError.AccessDenied, "Windows denied access to " + what + ".", ex);
-            }
-            catch (IOException ex)
-            {
-                throw LauncherException.FromIo(ex, "reading " + what);
-            }
-        }
-
         /// <summary>
         /// Stages the already patched (or reverted) and verified bytes as
         /// <c>ready\&lt;target&gt;</c> and asks for an elevated placement. Nothing patch-specific
@@ -251,8 +230,7 @@ namespace DreamWeave.Launcher.Core.Install
 
             // The helper refuses any file it does not expect: start from an empty ready folder
             // (links removed first, so the delete never reaches through one).
-            VerifiedPlacementRunner.RemoveLinks(ready);
-            AcWriter.TryDeleteFolder(ready);
+            VerifiedPlacementRunner.ClearReady(_paths, c.Id);
             string staged = AcPathSafety.Resolve(ready, c.Target);
             try
             {

@@ -94,6 +94,8 @@ namespace DreamWeave.Launcher.Core.Install
 
             if (toWrite.Count == 0)
             {
+                // Already done: nothing may be left waiting for a placement.
+                VerifiedPlacementRunner.ClearReady(_paths, component.Id);
                 return new ZipOverlayResult(InstallOutcome.NothingToDo, new string[0], skipped, new string[0], null);
             }
 
@@ -102,6 +104,13 @@ namespace DreamWeave.Launcher.Core.Install
             using (AcWriter.GuardSet probe = AcWriter.Acquire(acFolder, toWrite.Select(f => f.Path)))
             {
                 needsElevation = probe == null;
+            }
+
+            // Known now: refuse before a long extraction that could never be placed. (Checked again
+            // at hand-off, for a folder that turns unwritable between the probe and the write.)
+            if (needsElevation)
+            {
+                RequirePlaceableId(component.Id);
             }
 
             // Free space: every staged copy at once, and the largest .dwtmp beside its target
@@ -140,10 +149,7 @@ namespace DreamWeave.Launcher.Core.Install
                     }
                 }
 
-                if (!VerifiedPlacementRunner.IsSafeComponentId(component.Id))
-                {
-                    throw new LauncherException(LauncherError.ElevatedTaskInvalid, "Component '" + component.Id + "' cannot be placed with administrator rights because its id is not a plain lowercase name.");
-                }
+                RequirePlaceableId(component.Id);
 
                 // The elevated helper refuses ANY file it does not expect, so leave exactly the files to write.
                 RemoveUnlisted(stagingFolder, toWrite);
@@ -417,17 +423,55 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
-        /// <summary>Deletes every file under <paramref name="readyFolder"/> that is not one of <paramref name="keep"/>.</summary>
-        private static void RemoveUnlisted(string readyFolder, List<ManifestFile> keep)
+        private static void RequirePlaceableId(string componentId)
+        {
+            if (!VerifiedPlacementRunner.IsSafeComponentId(componentId))
+            {
+                throw new LauncherException(LauncherError.ElevatedTaskInvalid, "Component '" + componentId + "' cannot be placed with administrator rights because its id is not a plain lowercase name.");
+            }
+        }
+
+        /// <summary>
+        /// Deletes every file under <paramref name="readyFolder"/> that is not one of
+        /// <paramref name="keep"/>. Never descends into a junction or link: a link is removed
+        /// itself (never what it points to).
+        /// </summary>
+        internal static void RemoveUnlisted(string readyFolder, List<ManifestFile> keep)
         {
             var wanted = new HashSet<string>(keep.Select(f => Path.GetFullPath(AcPathSafety.Resolve(readyFolder, f.Path))), StringComparer.OrdinalIgnoreCase);
             try
             {
-                foreach (string file in Directory.GetFiles(readyFolder, "*", SearchOption.AllDirectories))
+                if (!Directory.Exists(readyFolder))
                 {
-                    if (!wanted.Contains(Path.GetFullPath(file)))
+                    return;
+                }
+
+                var pending = new Stack<DirectoryInfo>();
+                pending.Push(new DirectoryInfo(readyFolder));
+                while (pending.Count > 0)
+                {
+                    foreach (FileSystemInfo entry in pending.Pop().GetFileSystemInfos())
                     {
-                        File.Delete(file);
+                        bool isDirectory = (entry.Attributes & FileAttributes.Directory) != 0;
+                        if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                        {
+                            if (isDirectory)
+                            {
+                                Directory.Delete(entry.FullName, false);
+                            }
+                            else
+                            {
+                                File.Delete(entry.FullName);
+                            }
+                        }
+                        else if (isDirectory)
+                        {
+                            pending.Push((DirectoryInfo)entry);
+                        }
+                        else if (!wanted.Contains(Path.GetFullPath(entry.FullName)))
+                        {
+                            File.Delete(entry.FullName);
+                        }
                     }
                 }
             }

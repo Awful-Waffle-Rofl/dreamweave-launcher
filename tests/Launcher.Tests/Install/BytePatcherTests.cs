@@ -293,6 +293,55 @@ namespace DreamWeave.Launcher.Tests.Install
         }
 
         [TestMethod]
+        public void NothingToDo_RemovesAStaleReadyFolder()
+        {
+            using (var f = new Fixture(Patched()))
+            {
+                string ready = VerifiedPlacementRunner.ReadyFolder(f.Paths, "palette-leak-fix");
+                Directory.CreateDirectory(ready);
+                File.WriteAllBytes(Path.Combine(ready, "acclient.exe"), Patched());
+
+                Assert.AreEqual(InstallOutcome.NothingToDo, f.Patcher.Apply(Component(), f.Ac).Outcome);
+                Assert.IsFalse(Directory.Exists(ready), "a left-over ready folder must not outlive a finished step");
+            }
+        }
+
+        [TestMethod]
+        public void UnreadableTarget_IsAccessDenied_NothingStaged()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                var me = System.Security.Principal.WindowsIdentity.GetCurrent().User;
+                var rule = new System.Security.AccessControl.FileSystemAccessRule(me, System.Security.AccessControl.FileSystemRights.ReadData, System.Security.AccessControl.AccessControlType.Deny);
+                System.Security.AccessControl.FileSecurity acl;
+                try
+                {
+                    acl = File.GetAccessControl(f.Exe);
+                    acl.AddAccessRule(rule);
+                    File.SetAccessControl(f.Exe, acl);
+                }
+                catch (System.Exception ex)
+                {
+                    Assert.Inconclusive("could not set a deny-read ACL: " + ex.Message);
+                    return;
+                }
+
+                try
+                {
+                    var ex = Assert.ThrowsExactly<LauncherException>(() => f.Patcher.Apply(Component(), f.Ac));
+                    Assert.AreEqual(LauncherError.AccessDenied, ex.Code, ex.Detail);
+                    Assert.IsTrue(InstallData.NoFilesUnder(f.Paths.StagingDir));
+                }
+                finally
+                {
+                    acl = File.GetAccessControl(f.Exe);
+                    acl.RemoveAccessRule(rule);
+                    File.SetAccessControl(f.Exe, acl);
+                }
+            }
+        }
+
+        [TestMethod]
         public void UnwritableFolder_WrongInput_IsRefusedBeforeAnythingIsStaged()
         {
             using (var f = new Fixture(InstallData.Bytes("some other client build")))

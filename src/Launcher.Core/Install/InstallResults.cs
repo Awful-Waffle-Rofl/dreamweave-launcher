@@ -57,6 +57,17 @@ namespace DreamWeave.Launcher.Core.Install
         /// </summary>
         public void CleanUp()
         {
+            // Links first, so a junction planted in the folder is removed itself and the delete
+            // neither reaches through it nor stops on it and leaves the staged files behind.
+            try
+            {
+                VerifiedPlacementRunner.RemoveLinks(ReadyFolder);
+            }
+            catch (LauncherException)
+            {
+                // Best effort, as the delete below.
+            }
+
             AcWriter.TryDeleteFolder(ReadyFolder);
         }
     }

@@ -48,10 +48,17 @@ namespace DreamWeave.Launcher.Core.Install
     /// unelevated installers (<see cref="AcWriter"/>).</item>
     /// <item>Before it has verified anything the helper WRITES NOTHING: it reads the cache file
     /// directly (<c>ManifestProvider.ReadCacheReadOnly</c>) and never opens the launcher's state
-    /// store. The elevated rollback floor is therefore the compiled-in
-    /// <see cref="TrustedKeys.MinimumSerial"/> plus the cache's own serial, not the state file's
-    /// highest serial; anyone able to roll the cache back can roll the (equally user-writable)
-    /// state file back too.</item>
+    /// store.</item>
+    /// <item>Replay posture (accepted): the elevated rollback floor is the compiled-in
+    /// <see cref="TrustedKeys.MinimumSerial"/> ONLY (<c>ReadCacheReadOnly</c> passes floor 0, and
+    /// the cache's own serial is no floor over itself); state.json, which holds the highest serial
+    /// seen, is deliberately not read. So an older manifest signed by a trusted key can be replayed
+    /// through <c>appRoot</c>. Anyone able to roll the cache back can roll the (equally
+    /// user-writable) state file back too, so reading it would add nothing.</item>
+    /// <item>The game folder is pinned for the whole run: the folder itself and every existing
+    /// folder on the way to a target must not be a junction or link, and each is held open with
+    /// delete sharing denied (so it cannot be renamed, deleted or swapped for a junction) and
+    /// checked to still be the folder its path names.</item>
     /// </list>
     /// <para>
     /// Patch logic never runs here: the unelevated <see cref="BytePatcher"/> builds the patched or
@@ -74,6 +81,12 @@ namespace DreamWeave.Launcher.Core.Install
         public const int MaxComponentIdLength = 64;
 
         private readonly ManifestVerifier _verifier;
+
+        /// <summary>
+        /// Test seam: runs after the game folder and the folders on the way to every target are
+        /// pinned, right before anything is written (the window a folder swap would use).
+        /// </summary>
+        internal Action<string> AfterPinned { get; set; }
 
         /// <summary>Creates a runner trusting <paramref name="verifier"/>'s keys (production: <see cref="ManifestVerifier.CreateProduction"/>).</summary>
         public VerifiedPlacementRunner(ManifestVerifier verifier)
@@ -169,6 +182,30 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
+        /// <summary>
+        /// Unelevated side: removes the ready folder of <paramref name="componentId"/> (links first,
+        /// never followed). A no-op without paths or for an id that is no folder name.
+        /// </summary>
+        internal static void ClearReady(AppPaths paths, string componentId)
+        {
+            if (paths == null || !Downloads.DownloadRequest.IsSafeFolderName(componentId))
+            {
+                return;
+            }
+
+            string ready = ReadyFolder(paths, componentId);
+            try
+            {
+                RemoveLinks(ready);
+            }
+            catch (LauncherException)
+            {
+                // Best effort, as the delete below.
+            }
+
+            AcWriter.TryDeleteFolder(ready);
+        }
+
         /// <summary>Verifies the request and places the staged files of <paramref name="componentId"/>.</summary>
         public VerifiedPlacementResult Execute(string appRoot, string acFolder, string componentId, CancellationToken cancellationToken = default(CancellationToken))
         {
@@ -197,6 +234,10 @@ namespace DreamWeave.Launcher.Core.Install
                     throw Invalid("The placement request names a folder that is not an Asheron's Call install.");
                 }
 
+                // The folder itself, and every folder above it: no junction or link (an install moved
+                // behind a junction is not supported elevated). Pinned below, so it stays that way.
+                AcPathSafety.RefuseReparsePointsInPath(ac, "Nothing was placed");
+
                 ManifestComponent component = manifest.Components.FirstOrDefault(c => string.Equals(c.Id, componentId, StringComparison.Ordinal));
                 if (component == null)
                 {
@@ -207,16 +248,20 @@ namespace DreamWeave.Launcher.Core.Install
                 string ready = ReadyFolder(paths, componentId);
                 List<string> staged = ListStaged(paths, ready);
 
-                switch (component.Kind)
+                using (var pins = new FolderPins())
                 {
-                    case ComponentKinds.ZipOverlay:
-                        PlaceOverlay(manifest, component, ready, staged, ac, cancellationToken);
-                        break;
-                    case ComponentKinds.BytePatch:
-                        PlacePatch(component, ready, staged, ac, cancellationToken);
-                        break;
-                    default:
-                        throw Invalid("Component '" + component.Id + "' has nothing that can be placed.");
+                    pins.Pin(ac);
+                    switch (component.Kind)
+                    {
+                        case ComponentKinds.ZipOverlay:
+                            PlaceOverlay(manifest, component, ready, staged, ac, pins, cancellationToken);
+                            break;
+                        case ComponentKinds.BytePatch:
+                            PlacePatch(component, ready, staged, ac, pins, cancellationToken);
+                            break;
+                        default:
+                            throw Invalid("Component '" + component.Id + "' has nothing that can be placed.");
+                    }
                 }
 
                 return new VerifiedPlacementResult(LauncherError.None, "Done.");
@@ -325,7 +370,17 @@ namespace DreamWeave.Launcher.Core.Install
             return found;
         }
 
-        private static void PlaceOverlay(LauncherManifest manifest, ManifestComponent component, string ready, List<string> staged, string acFolder, CancellationToken cancellationToken)
+        private void PinTargets(FolderPins pins, string acFolder, IEnumerable<string> relativePaths)
+        {
+            foreach (string rel in relativePaths)
+            {
+                pins.PinFoldersOnTheWay(acFolder, rel);
+            }
+
+            AfterPinned?.Invoke(acFolder);
+        }
+
+        private void PlaceOverlay(LauncherManifest manifest, ManifestComponent component, string ready, List<string> staged, string acFolder, FolderPins pins, CancellationToken cancellationToken)
         {
             var allowed = new Dictionary<string, ManifestFile>(StringComparer.OrdinalIgnoreCase);
             foreach (ManifestFile f in component.Files ?? new List<ManifestFile>())
@@ -345,6 +400,7 @@ namespace DreamWeave.Launcher.Core.Install
                 files.Add(f);
             }
 
+            PinTargets(pins, acFolder, files.Select(f => f.Path));
             var items = new List<KeyValuePair<ManifestFile, Stream>>();
             try
             {
@@ -379,7 +435,7 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
-        private static void PlacePatch(ManifestComponent component, string ready, List<string> staged, string acFolder, CancellationToken cancellationToken)
+        private void PlacePatch(ManifestComponent component, string ready, List<string> staged, string acFolder, FolderPins pins, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(component.Target) || !Hasher.IsSha256Hex(component.InputSha256) || !Hasher.IsSha256Hex(component.OutputSha256))
             {
@@ -392,6 +448,7 @@ namespace DreamWeave.Launcher.Core.Install
                 throw Invalid("A staged file is not the target of component '" + component.Id + "', so nothing was placed.");
             }
 
+            PinTargets(pins, acFolder, new[] { component.Target });
             string stagedHash;
             using (FileStream source = OpenVerifiedStaged(AcPathSafety.Resolve(ready, component.Target), component.Target, -1, new[] { component.OutputSha256, component.InputSha256 }, out stagedHash, cancellationToken))
             {
