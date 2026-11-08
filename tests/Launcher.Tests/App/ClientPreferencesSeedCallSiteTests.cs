@@ -90,6 +90,31 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void PlayAll_SeedsBeforeEachStartedRow_NoOpAfterTheFirstIsHarmless()
+        {
+            var seeder = new CountingSeeder();
+            var starter = new LauncherPresenterTests.FakeStarter();
+            LauncherPresenter p = Presenter(AppFixtures.Sample(), seeder, starter);
+
+            var inputs = new List<SlotInput>
+            {
+                new SlotInput("player1", "secret"),
+                new SlotInput("player2", "secret"),
+            };
+
+            IReadOnlyList<SlotResult> results = p.PlayAllAsync(inputs, false, null, System.TimeSpan.Zero).GetAwaiter().GetResult();
+
+            Assert.AreEqual(2, results.Count);
+            foreach (SlotResult r in results)
+            {
+                Assert.AreEqual(LauncherError.None, r.Result.Error);
+            }
+
+            Assert.AreEqual(2, starter.Starts.Count, "both rows started");
+            Assert.AreEqual(2, seeder.Calls, "the seeder ran before each row's start; the AlreadyPresent no-op after the first is harmless");
+        }
+
+        [TestMethod]
         public void BlockedPlay_DoesNotSeed()
         {
             LauncherManifest m = AppFixtures.Sample();

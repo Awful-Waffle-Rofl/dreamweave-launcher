@@ -172,15 +172,20 @@ namespace DreamWeave.Launcher.Core.ClientPrefs
         /// </summary>
         public ClientPreferencesSeedResult Seed()
         {
-            string target = TargetPath;
+            // target is computed INSIDE the try: Path.Combine can throw on a malformed Documents path,
+            // and that must become a Failed result, never an exception out of here.
+            string target = null;
             try
             {
+                target = TargetPath;
                 if (target == null)
                 {
                     Note("client-prefs skipped: the Documents folder could not be determined");
                     return ClientPreferencesSeedResult.Failed(null, new DirectoryNotFoundException("The Documents folder could not be determined."));
                 }
 
+                // Fast path: skip the work when the client already wrote its file. The exclusive create
+                // below is the real guard against overwriting, so this check only being a hint is fine.
                 if (_fileSystem.FileExists(target))
                 {
                     Note("client-prefs already present at " + target);
@@ -193,15 +198,32 @@ namespace DreamWeave.Launcher.Core.ClientPrefs
                     _fileSystem.CreateDirectory(folder);
                 }
 
-                _fileSystem.WriteAllBytes(target, DefaultPreferenceBytes());
+                _fileSystem.WriteNew(target, DefaultPreferenceBytes());
                 Note("client-prefs seeded windowed default at " + target);
                 return ClientPreferencesSeedResult.Seeded(target);
+            }
+            catch (IOException ex) when (IsFileAlreadyExists(ex))
+            {
+                // The file appeared between the fast-path check and the exclusive create (a client or a
+                // second launcher instance wrote it first). The existing file was NOT touched.
+                Note("client-prefs already present (create lost the race) at " + target);
+                return ClientPreferencesSeedResult.AlreadyPresent(target);
             }
             catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException || ex is NotSupportedException || ex is ArgumentException || ex is PathTooLongException)
             {
                 Note("client-prefs failed type=" + ex.GetType().Name);
                 return ClientPreferencesSeedResult.Failed(target, ex);
             }
+        }
+
+        private const int ErrorFileExists = 80;
+        private const int ErrorAlreadyExists = 183;
+
+        /// <summary>True when <paramref name="ex"/> is the "the file already exists" IOException an exclusive create throws.</summary>
+        private static bool IsFileAlreadyExists(IOException ex)
+        {
+            int code = ex.HResult & 0xFFFF;
+            return code == ErrorFileExists || code == ErrorAlreadyExists;
         }
 
         private void Note(string text)

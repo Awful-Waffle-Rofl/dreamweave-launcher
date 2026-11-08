@@ -16,8 +16,13 @@ namespace DreamWeave.Launcher.Core.ClientPrefs
         /// <summary>Creates <paramref name="path"/> and any missing parents. No-op when it already exists.</summary>
         void CreateDirectory(string path);
 
-        /// <summary>Writes exactly <paramref name="contents"/> to <paramref name="path"/>, creating or overwriting it, with no byte-order mark.</summary>
-        void WriteAllBytes(string path, byte[] contents);
+        /// <summary>
+        /// Creates <paramref name="path"/> and writes exactly <paramref name="contents"/> to it, with no
+        /// byte-order mark. The create is exclusive: when the file already exists it throws an
+        /// <see cref="IOException"/> (ERROR_FILE_EXISTS / ERROR_ALREADY_EXISTS) and the existing file is
+        /// never opened or truncated, so an existing file can never be overwritten here.
+        /// </summary>
+        void WriteNew(string path, byte[] contents);
     }
 
     /// <summary><see cref="IClientPreferencesFileSystem"/> over <see cref="System.IO"/>.</summary>
@@ -36,10 +41,16 @@ namespace DreamWeave.Launcher.Core.ClientPrefs
         }
 
         /// <inheritdoc />
-        public void WriteAllBytes(string path, byte[] contents)
+        public void WriteNew(string path, byte[] contents)
         {
-            // File.WriteAllBytes writes the array verbatim: no encoding, no byte-order mark.
-            File.WriteAllBytes(path, contents);
+            // FileMode.CreateNew never opens or truncates an existing file: it throws
+            // ERROR_FILE_EXISTS, so the never-overwrite guarantee is enforced by the OS, not by a
+            // prior existence check that could race. The bytes are written verbatim (no encoding, no BOM).
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(contents, 0, contents.Length);
+                stream.Flush();
+            }
         }
     }
 }
