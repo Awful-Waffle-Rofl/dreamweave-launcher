@@ -57,9 +57,10 @@ jobs:
           if (-not $found) { throw 'No setup exe found in setup-out' }
           [xml]$props = Get-Content -LiteralPath Directory.Build.props -Raw
           $ver = $props.SelectSingleNode('//Version').InnerText.Trim()
-          ./tools/release/assert-version.ps1 -Tag "v$ver" -ExePath $env:EXE_PATH -SetupPath $found.FullName
+          # Child processes, so each exit code is the script's own (a script that ends without `exit` leaves $LASTEXITCODE unset).
+          pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag "v$ver" -ExePath $env:EXE_PATH -SetupPath $found.FullName
           if ($LASTEXITCODE -ne 0) { throw "assert-version failed for the right tag (exit $LASTEXITCODE)" }
-          $wrong = pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag 'v9.9.9' -ExePath $env:EXE_PATH -SetupPath $found.FullName 2>&1
+          pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag 'v9.9.9' -ExePath $env:EXE_PATH -SetupPath $found.FullName *> $null
           if ($LASTEXITCODE -eq 0) { throw 'assert-version accepted a wrong tag' }
 
       - uses: actions/upload-artifact@v4
