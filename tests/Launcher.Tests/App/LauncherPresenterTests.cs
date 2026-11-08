@@ -138,7 +138,22 @@ namespace DreamWeave.Launcher.Tests.App
 
             public LauncherError Fail { get; set; }
 
-            public void Start(string acFolder, string args)
+            /// <summary>What <see cref="ReleaseLock"/> reports.</summary>
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome LockOutcome { get; set; } = DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
+
+            /// <summary>Clients returned by <see cref="Start"/>, in order.</summary>
+            public List<DreamWeave.Launcher.Core.Launch.StartedClient> Clients { get; } = new List<DreamWeave.Launcher.Core.Launch.StartedClient>();
+
+            /// <summary>The owner (stand-in for the Process) of each client returned by <see cref="Start"/>, in order.</summary>
+            public List<CountingOwner> Owners { get; } = new List<CountingOwner>();
+
+            /// <summary>Clients passed to <see cref="ReleaseLock"/>, in order.</summary>
+            public List<DreamWeave.Launcher.Core.Launch.StartedClient> Released { get; } = new List<DreamWeave.Launcher.Core.Launch.StartedClient>();
+
+            /// <summary>Called inside <see cref="ReleaseLock"/> with its token.</summary>
+            public System.Action<System.Threading.CancellationToken> OnRelease { get; set; }
+
+            public DreamWeave.Launcher.Core.Launch.StartedClient Start(string acFolder, string args)
             {
                 if (Fail != LauncherError.None)
                 {
@@ -146,7 +161,27 @@ namespace DreamWeave.Launcher.Tests.App
                 }
 
                 Starts.Add(new KeyValuePair<string, string>(acFolder, args));
+                var owner = new CountingOwner();
+                Owners.Add(owner);
+                var client = new DreamWeave.Launcher.Core.Launch.StartedClient(1000 + Starts.Count, new System.IntPtr(0x7000 + Starts.Count), owner);
+                Clients.Add(client);
+                return client;
             }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(DreamWeave.Launcher.Core.Launch.StartedClient client, System.Threading.CancellationToken cancel)
+            {
+                Released.Add(client);
+                OnRelease?.Invoke(cancel);
+                return LockOutcome;
+            }
+        }
+
+        /// <summary>Counts its disposals (the StartedClient's Process in production).</summary>
+        internal sealed class CountingOwner : System.IDisposable
+        {
+            public int Disposals { get; private set; }
+
+            public void Dispose() => Disposals++;
         }
 
         internal sealed class MemoryCredentials : ICredentialStore

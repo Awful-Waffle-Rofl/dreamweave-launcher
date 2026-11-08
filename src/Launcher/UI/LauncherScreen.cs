@@ -205,6 +205,7 @@ namespace DreamWeave.Launcher.UI
             : base(ScreenArt.Launcher)
         {
             _presenter = presenter ?? throw new ArgumentNullException(nameof(presenter));
+            _presenter.StatusChanged = ShowStatusFromWorker;
 
             TitleBlock title = UiKit.Heading(presenter.ServerName);
             title.Aside = presenter.ServerAddress;
@@ -282,6 +283,30 @@ namespace DreamWeave.Launcher.UI
         public void ShowStatus(string text)
         {
             _status.Text = text ?? string.Empty;
+        }
+
+        /// <summary>A status line from a thread-pool thread (the presenter's lock-release wait).</summary>
+        private void ShowStatusFromWorker(string text)
+        {
+            if (IsDisposed || !IsHandleCreated)
+            {
+                return;
+            }
+
+            try
+            {
+                BeginInvoke((Action)(() =>
+                {
+                    if (!IsDisposed)
+                    {
+                        ShowStatus(text);
+                    }
+                }));
+            }
+            catch (InvalidOperationException)
+            {
+                // The window is closing.
+            }
         }
 
         private async void LoadRows()
@@ -403,6 +428,10 @@ namespace DreamWeave.Launcher.UI
                 {
                     started = true;
                     notSaved |= r.PasswordNotSaved;
+                    if (!string.IsNullOrEmpty(r.Notice))
+                    {
+                        _rows[result.Slot].SetLaunchError(r.Notice);
+                    }
                 }
                 else if (r.Error == LauncherError.Cancelled)
                 {

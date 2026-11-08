@@ -9,30 +9,41 @@ namespace DreamWeave.Launcher.Core.Launch
     /// <summary>Starts a process; the seam that lets tests avoid launching the real client.</summary>
     public interface IProcessStarter
     {
-        /// <summary>Starts the process and returns its id. May throw <see cref="Win32Exception"/>.</summary>
-        int Start(ProcessStartInfo startInfo);
+        /// <summary>
+        /// Starts the process and returns it with its CreateProcess handle (the caller disposes it).
+        /// May throw <see cref="Win32Exception"/>.
+        /// </summary>
+        StartedClient Start(ProcessStartInfo startInfo);
     }
 
     /// <summary><see cref="IProcessStarter"/> over <see cref="Process.Start(ProcessStartInfo)"/>.</summary>
     public sealed class SystemProcessStarter : IProcessStarter
     {
         /// <inheritdoc />
-        public int Start(ProcessStartInfo startInfo)
+        public StartedClient Start(ProcessStartInfo startInfo)
         {
-            using (Process p = Process.Start(startInfo))
+            Process p = Process.Start(startInfo);
+            if (p == null)
             {
-                if (p == null)
-                {
-                    throw new Win32Exception(0, "The process did not start.");
-                }
+                throw new Win32Exception(0, "The process did not start.");
+            }
 
-                return p.Id;
+            try
+            {
+                // The handle CreateProcess returned (full access to the child), kept open by p until the
+                // StartedClient is disposed, so the id can never be reused under it.
+                return new StartedClient(p.Id, p.Handle, p);
+            }
+            catch
+            {
+                p.Dispose();
+                throw;
             }
         }
     }
 
     /// <summary>
-    /// Starts acclient.exe. Never kills, signals or otherwise touches other acclient processes, and
+    /// Starts acclient.exe. Never kills, signals or otherwise touches acclient processes it did not start, and
     /// never requests elevation. The argument string contains the account password in clear text and
     /// is therefore readable by other processes of the same Windows user; see Docs/launching.md.
     /// </summary>
@@ -61,10 +72,10 @@ namespace DreamWeave.Launcher.Core.Launch
 
         /// <summary>
         /// Starts <c>acclient.exe</c> from <paramref name="acFolder"/> with <paramref name="args"/>
-        /// and the folder as working directory. Returns the new process id.
+        /// and the folder as working directory. Returns the started client (the caller disposes it).
         /// </summary>
         /// <exception cref="LauncherException">ClientNotFound, AccessDenied, ClientRequiresElevation or LaunchFailed.</exception>
-        public int Launch(string acFolder, string args)
+        public StartedClient Launch(string acFolder, string args)
         {
             string exe = AcPathSafety.Resolve(acFolder, AcInstallLocator.ClientExeName);
             if (!fileSystem.FileExists(exe))

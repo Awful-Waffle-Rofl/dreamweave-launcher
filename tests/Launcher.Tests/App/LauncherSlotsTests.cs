@@ -35,7 +35,7 @@ namespace DreamWeave.Launcher.Tests.App
 
             public string FailFor { get; set; }
 
-            public void Start(string acFolder, string args)
+            public DreamWeave.Launcher.Core.Launch.StartedClient Start(string acFolder, string args)
             {
                 if (FailFor != null && args.Contains(FailFor))
                 {
@@ -43,7 +43,10 @@ namespace DreamWeave.Launcher.Tests.App
                 }
 
                 Args.Add(args);
+                return new DreamWeave.Launcher.Core.Launch.StartedClient(Args.Count, IntPtr.Zero);
             }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(DreamWeave.Launcher.Core.Launch.StartedClient client, System.Threading.CancellationToken cancel) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
         }
 
         private static LauncherPresenter Presenter(IGameStarter starter, LauncherPresenterTests.MemoryCredentials creds, ISlotAccountStore slots)
@@ -347,7 +350,13 @@ namespace DreamWeave.Launcher.Tests.App
                 _onStart = onStart;
             }
 
-            public void Start(string acFolder, string args) => _onStart();
+            public DreamWeave.Launcher.Core.Launch.StartedClient Start(string acFolder, string args)
+            {
+                _onStart();
+                return new DreamWeave.Launcher.Core.Launch.StartedClient(1, IntPtr.Zero);
+            }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(DreamWeave.Launcher.Core.Launch.StartedClient client, System.Threading.CancellationToken cancel) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
         }
 
         [TestMethod]
