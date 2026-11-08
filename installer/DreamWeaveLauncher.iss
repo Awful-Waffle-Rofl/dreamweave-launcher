@@ -20,14 +20,35 @@ AppVersion={#AppVersion}
 AppPublisher=DreamWeave
 AppPublisherURL=https://www.acdreamweave.com
 AppMutex=DreamWeaveLauncherSetupGuard
+; Per-user install, never elevated: the launcher started by the Run entry below therefore runs as the player.
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\DreamWeave Launcher
+; Upgrades: reuse the folder of the previous install (Inno's default; stated so a test can pin it).
+UsePreviousAppDir=yes
+; ONE-CLICK SETUP: no wizard page is ever shown. Only the progress page and two messages appear: .NET missing
+; (InitializeSetup in [Code]) and launcher already running (AppMutex). Each page is skipped by its own directive:
+;   DisableWelcomePage      the "Welcome to the Setup Wizard" page (Inno's default is already yes)
+;   DisableDirPage          "Select Destination Location"; /DIR= on the command line still sets the folder
+;   DisableProgramGroupPage "Select Start Menu Folder"
+;   DisableReadyPage        "Ready to Install"
+;   DisableFinishedPage     "Setup Completed"; Setup closes as soon as the install finishes
+;   DisableStartupPrompt    the "This will install... Do you wish to continue?" prompt (Inno's default is already yes)
+; Nothing else may add a page: no Tasks section, no InfoBeforeFile, InfoAfterFile or LicenseFile, no custom pages.
+DisableWelcomePage=yes
+DisableDirPage=yes
 DisableProgramGroupPage=yes
+DisableReadyPage=yes
+DisableFinishedPage=yes
+DisableStartupPrompt=yes
 SetupIconFile=..\src\Launcher\Assets\dreamweave.ico
 UninstallDisplayIcon={app}\DreamWeaveLauncher.exe
 MinVersion=10.0
-WizardStyle=modern
-InfoBeforeFile=privacy.txt
+; Progress window look: modern, forced dark (the launcher is dark). Forced dark ignores colours set from script,
+; so the exact launcher palette cannot be used; the logo sits on the style's own dark panel.
+WizardStyle=modern dark
+; The DreamWeave logo in the progress window header. Several sizes; Setup picks the best fit for the DPI
+; (58, 77, 97, 116, 124, 143 and 159 px are the image-area sizes at 100% to 250%).
+WizardSmallImageFile=wizard-small-58.png,wizard-small-77.png,wizard-small-97.png,wizard-small-116.png,wizard-small-124.png,wizard-small-143.png,wizard-small-159.png
 OutputBaseFilename=DreamWeaveLauncher-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
@@ -38,9 +59,6 @@ VersionInfoCompany=DreamWeave
 VersionInfoDescription=DreamWeave Launcher Setup
 VersionInfoCopyright=Copyright (c) 2026 Awful-Waffle-Rofl
 
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-
 [Files]
 ; One explicit line per file, no wildcards. Kept equal to the "ship" entries of shipped-files.txt by a test.
 Source: "{#ExeDir}\DreamWeaveLauncher.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -50,11 +68,15 @@ Source: "{#ExeDir}\Newtonsoft.Json.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
+; Both shortcuts are always created: there is no page on which to untick them.
 Name: "{autoprograms}\DreamWeave Launcher"; Filename: "{app}\DreamWeaveLauncher.exe"
-Name: "{autodesktop}\DreamWeave Launcher"; Filename: "{app}\DreamWeaveLauncher.exe"; Tasks: desktopicon
+Name: "{autodesktop}\DreamWeave Launcher"; Filename: "{app}\DreamWeaveLauncher.exe"
 
 [Run]
-Filename: "{app}\DreamWeaveLauncher.exe"; Description: "{cm:LaunchProgram,DreamWeave Launcher}"; Flags: nowait postinstall skipifsilent
+; Starts the launcher by itself once the files are installed. No postinstall (that flag is a checkbox on the
+; Setup Completed page, which is disabled); skipifsilent keeps /SILENT and /VERYSILENT installs headless;
+; runasoriginaluser keeps it unelevated.
+Filename: "{app}\DreamWeaveLauncher.exe"; Flags: nowait skipifsilent runasoriginaluser
 
 [InstallDelete]
 ; Legacy migration: the old self-installing launcher's Start menu shortcut.
@@ -137,24 +159,23 @@ begin
   end;
 end;
 
-function NextButtonClick(CurPageID: Integer): Boolean;
+// Always runs, with or without a directory page, including for a command-line /DIR=. A non-empty result stops
+// Setup with that text as the error. The launcher's cleanup deletes the data folder, which would delete the
+// uninstaller mid-run, so installing under it is refused.
+// DataDirShown is for display; the lowercased copies are only for the comparison.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Dir, DataDirShown, DataDirLower: String;
 begin
-  Result := True;
-  if CurPageID = wpSelectDir then
+  Result := '';
+  DataDirShown := ExpandConstant('{localappdata}\DreamWeave');
+  Dir := Lowercase(RemoveBackslash(WizardDirValue));
+  DataDirLower := Lowercase(RemoveBackslash(DataDirShown));
+  if (Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1) then
   begin
-    // The launcher's cleanup deletes this folder, which would delete the uninstaller mid-run.
-    // DataDirShown is for display; the lowercased copies are only for the comparison.
-    DataDirShown := ExpandConstant('{localappdata}\DreamWeave');
-    Dir := Lowercase(RemoveBackslash(WizardDirValue));
-    DataDirLower := Lowercase(RemoveBackslash(DataDirShown));
-    if (Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1) then
-    begin
-      // DRAFT: player-facing wording, pending orchestrator review.
-      SuppressibleMsgBox('Please choose a different folder. The launcher keeps its own data in ' + DataDirShown + ', and this folder would be erased when the launcher is uninstalled.',
-        mbError, MB_OK, IDOK);
-      Result := False;
-    end;
+    // DRAFT: player-facing wording, pending orchestrator review.
+    Result := 'Setup cannot install into ' + DataDirShown + '. The launcher keeps its own data there, and that folder would be erased when the launcher is uninstalled.' + #13#10 + #13#10 +
+      'Run setup again without choosing that folder.';
+    Log(Result);
   end;
 end;
