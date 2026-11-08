@@ -375,6 +375,8 @@ namespace DreamWeave.Launcher.UI
                         break;
                     case InstallEventKind.SourceChanged:
                         sourceNote.Text = ev.Text;
+                        // Colour only: a fallback (two lines) reads as a warning, the plain source line stays muted.
+                        sourceNote.ForeColor = (ev.Text ?? string.Empty).Contains(Environment.NewLine) ? Theme.Gold : Theme.Muted;
                         break;
                     case InstallEventKind.StepStatus:
                         current.Text = ev.Text;
