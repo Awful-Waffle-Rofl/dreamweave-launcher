@@ -1,6 +1,6 @@
 # Builds the per-user Inno Setup installer: <OutDir>\DreamWeaveLauncher-Setup-<version>.exe.
 # The version is read from <Version> in Directory.Build.props, the same way assert-version.ps1 does.
-# Needs Inno Setup 6 (preinstalled on GitHub's Windows runners). Fails clearly when it is missing;
+# Needs Inno Setup 6.6 or newer (WizardStyle=modern dark; preinstalled on GitHub's Windows runners). Fails clearly when it is missing;
 # it never installs anything.
 param(
     [Parameter(Mandatory = $true)][string]$ExePath,
@@ -69,6 +69,12 @@ $compileLog = New-Object System.Collections.Generic.List[string]
 if ($LASTEXITCODE -ne 0) { Write-Error "ISCC failed with exit code $LASTEXITCODE"; exit 1 }
 $engine = $compileLog | Where-Object { $_ -match 'Inno Setup\s+\d+\.\d+' } | Select-Object -First 1
 Write-Host "Inno Setup exact version line: $engine"
+# WizardStyle=modern dark needs Inno Setup 6.6.0 or newer. Parse the exact version from the compile output.
+if ($engine -notmatch 'Inno Setup\s+(\d+)\.(\d+)\.(\d+)') { Write-Error "Could not read the Inno Setup version from the compile output: '$engine'"; exit 1 }
+if (([int]$Matches[1] -lt 6) -or (([int]$Matches[1] -eq 6) -and ([int]$Matches[2] -lt 6))) {
+    Write-Error "Inno Setup 6.6 or newer is required (WizardStyle=modern dark), found $($Matches[1]).$($Matches[2]).$($Matches[3])."
+    exit 1
+}
 
 $setup = Join-Path $outAbs "DreamWeaveLauncher-Setup-$version.exe"
 if (-not (Test-Path -LiteralPath $setup)) { Write-Error "Expected output not found: $setup"; exit 1 }

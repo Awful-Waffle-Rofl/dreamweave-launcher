@@ -6,7 +6,7 @@ using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace DreamWeave.Launcher.Tests.Cleanup
 {
-    /// <summary>Pins installer/DreamWeaveLauncher.iss and installer/privacy.txt to the code and docs they mirror.</summary>
+    /// <summary>Pins installer/DreamWeaveLauncher.iss to the code it mirrors and to the one-click setup rules (no wizard pages).</summary>
     [TestClass]
     public class SetupScriptConsistencyTests
     {
@@ -109,29 +109,189 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             Assert.IsTrue(uninstallable == null || uninstallable == "yes", "Uninstallable must be absent or yes");
         }
 
+        /// <summary>The text of a Pascal function in [Code]: from its header to the next top-level function or procedure, or the end.</summary>
+        private static string CodeBlock(string iss, string header)
+        {
+            int start = iss.IndexOf(header, StringComparison.Ordinal);
+            Assert.IsTrue(start >= 0, "missing " + header);
+            Match next = Regex.Match(iss.Substring(start + header.Length), @"^(function|procedure) ", RegexOptions.Multiline);
+            return next.Success ? iss.Substring(start, header.Length + next.Index) : iss.Substring(start);
+        }
+
         [TestMethod]
-        public void DirPage_RejectsTheLauncherDataFolder()
+        public void DataFolderGuard_LivesInTheAlwaysRunHook_NotOnAWizardPage()
         {
             string iss = Iss();
-            StringAssert.Contains(iss, "function NextButtonClick(CurPageID: Integer): Boolean;");
-            StringAssert.Contains(iss, "CurPageID = wpSelectDir");
-            StringAssert.Contains(iss, "Lowercase(RemoveBackslash(WizardDirValue))");
-            StringAssert.Contains(iss, @"ExpandConstant('{localappdata}\DreamWeave')");
-            StringAssert.Contains(iss, @"DataDirShown := ExpandConstant('{localappdata}\DreamWeave');");
-            StringAssert.Contains(iss, "DataDirLower := Lowercase(RemoveBackslash(DataDirShown));");
-            StringAssert.Contains(iss, @"(Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1)");
-            StringAssert.Contains(iss, "' + DataDirShown + '", "the message must show the original-case path");
-            StringAssert.Contains(iss, "Result := False;");
+
+            // With the directory page disabled a page-bound hook never runs, so /DIR= under the data folder would get through.
+            StringAssert.Contains(iss, "function PrepareToInstall(var NeedsRestart: Boolean): String;");
+            Assert.IsFalse(iss.Contains("NextButtonClick"), "the guard must not hang off a wizard page");
+            Assert.IsFalse(iss.Contains("wpSelectDir"), "the guard must not depend on the directory page");
+
+            string guard = CodeBlock(iss, "function PrepareToInstall(");
+            StringAssert.Contains(guard, "Lowercase(RemoveBackslash(WizardDirValue))");
+            StringAssert.Contains(guard, @"DataDirShown := ExpandConstant('{localappdata}\DreamWeave');");
+            StringAssert.Contains(guard, "DataDirLower := Lowercase(RemoveBackslash(DataDirShown));");
+            StringAssert.Contains(guard, @"(Dir = DataDirLower) or (Pos(DataDirLower + '\', Dir) = 1)");
+            StringAssert.Contains(guard, "' + DataDirShown + '", "the message must show the original-case path");
+            StringAssert.Contains(guard, "Result := '';", "no error unless the folder is under the data folder");
+            StringAssert.Contains(guard, "Result := 'Setup cannot install into ' + DataDirShown + '. Run setup again without choosing that folder.';", "owner-approved wording");
+            Assert.IsFalse(guard.Contains("DRAFT"), "the wording is approved");
+            Assert.IsTrue(Regex.IsMatch(guard, @"\bthen\s+begin\s+(//[^\n]*\s+)*Result := '[^']*' \+ DataDirShown"), "the refusal text is the function result");
+        }
+
+        [TestMethod]
+        public void ReadyPage_IsAutoAdvancedByCurPageChanged_OnceOnly()
+        {
+            // Both obvious ways to drop the Ready to Install page were tried and BOTH FAILED at runtime, on the CI
+            // artifact run on a hidden desktop: DisableReadyPage=yes alone (Inno ignores it when no earlier page was
+            // shown, and here every earlier page is disabled) and a ShouldSkipPage hook returning wpReady (the page
+            // still appeared and nothing installed until Install was clicked). So Next is pressed on it by script.
+            string iss = Iss();
+            Assert.IsFalse(iss.Contains("function ShouldSkipPage"), "a ShouldSkipPage hook did not work for wpReady");
+
+            StringAssert.Contains(iss, "BM_CLICK = $00F5;");
+            StringAssert.Contains(iss, "function PostMessage(hWnd: HWND; Msg: UINT; wParam: Longint; lParam: Longint): BOOL;");
+            StringAssert.Contains(iss, "external 'PostMessageW@user32.dll stdcall';");
+
+            StringAssert.Contains(iss, "procedure CurPageChanged(CurPageID: Integer);");
+            string block = CodeBlock(iss, "procedure CurPageChanged(");
+            StringAssert.Contains(block, "if (CurPageID = wpReady) and (not ReadyPageAdvanced) then");
+            StringAssert.Contains(block, "PostMessage(WizardForm.NextButton.Handle, BM_CLICK, 0, 0);");
+
+            // One-shot guard: set before the click, declared as a Boolean global. Without it a Back click after the
+            // data-folder refusal would return to the Ready page and auto-click forever.
+            StringAssert.Contains(iss, "ReadyPageAdvanced: Boolean;");
+            Assert.IsTrue(Regex.IsMatch(block, @"ReadyPageAdvanced := True;\s+PostMessage\("), "the guard must be set before the click");
+
+            // The data-folder guard still runs.
+            StringAssert.Contains(iss, "function PrepareToInstall(var NeedsRestart: Boolean): String;");
+        }
+
+        [TestMethod]
+        public void NoDraftMarkersRemain()
+        {
+            Assert.IsFalse(Iss().Contains("DRAFT"), "player-facing wording is approved; no DRAFT marker");
+        }
+
+        [TestMethod]
+        public void BuildScript_RequiresInno66OrNewer()
+        {
+            string script = ReadRepoFile("tools", "release", "build-setup.ps1");
+            StringAssert.Contains(script, "Inno Setup 6.6 or newer is required");
+            StringAssert.Contains(script, "-lt 6");
+            Assert.IsTrue(Regex.IsMatch(script, @"\[int\]\$Matches\[2\] -lt 6"), "the minor version must be compared against 6");
         }
 
         [TestMethod]
         public void MessageBoxes_AreSuppressible()
         {
             // A plain MsgBox is not suppressed by /SUPPRESSMSGBOXES and would block a silent run.
+            // The data-folder refusal is returned from PrepareToInstall as an error string, so only the .NET gate shows a box.
             string iss = Iss();
             Assert.IsFalse(Regex.IsMatch(iss, @"(?<![A-Za-z])MsgBox\("), "use SuppressibleMsgBox");
-            Assert.AreEqual(2, Regex.Matches(iss, @"SuppressibleMsgBox\(").Count);
-            Assert.AreEqual(2, Regex.Matches(iss, @"MB_OK, IDOK\)").Count);
+            Assert.AreEqual(1, Regex.Matches(iss, @"SuppressibleMsgBox\(").Count);
+            Assert.AreEqual(1, Regex.Matches(iss, @"MB_OK, IDOK\)").Count);
+        }
+
+        [TestMethod]
+        public void NoWizardPages_EveryPageIsDisabled()
+        {
+            string iss = Iss();
+            foreach (string name in new[] { "DisableWelcomePage", "DisableDirPage", "DisableProgramGroupPage", "DisableReadyPage", "DisableFinishedPage", "DisableStartupPrompt" })
+            {
+                Assert.AreEqual("yes", Directive(iss, name), name + " must be yes (one-click setup)");
+            }
+        }
+
+        [TestMethod]
+        public void NothingAddsAPage_NoTasks_NoInfoOrLicenseFile_NoCustomPages()
+        {
+            string iss = Iss();
+            Assert.IsFalse(Regex.IsMatch(iss, @"^\[Tasks\]", RegexOptions.Multiline), "a Tasks section adds the Select Additional Tasks page");
+            Assert.IsFalse(Regex.IsMatch(iss, @"Tasks:\s", RegexOptions.None), "an entry still names a task");
+            Assert.IsFalse(Regex.IsMatch(iss, @"^\[(Components|Types)\]", RegexOptions.Multiline), "Types/Components add the Select Components page");
+            foreach (string name in new[] { "InfoBeforeFile", "InfoAfterFile", "LicenseFile", "Password", "UserInfoPage" })
+            {
+                Assert.IsNull(Directive(iss, name), name + " would add a wizard page");
+            }
+
+            Assert.IsFalse(Regex.IsMatch(iss, @"Create(InputQuery|InputOption|InputDir|InputFile|OutputMsg|OutputProgress|OutputMarquee|Custom|Download)Page"), "custom wizard page");
+            Assert.IsFalse(File.Exists(Path.Combine(RepoRoot(), "installer", "privacy.txt")), "the privacy page is gone; the launcher's welcome screen links the policy");
+        }
+
+        [TestMethod]
+        public void Shortcuts_AreAlwaysCreated_StartMenuAndDesktop()
+        {
+            string icons = Section(Iss(), "Icons");
+            StringAssert.Contains(icons, @"Name: ""{autoprograms}\DreamWeave Launcher""; Filename: ""{app}\DreamWeaveLauncher.exe""");
+            Assert.IsTrue(Regex.IsMatch(icons, @"^Name: ""\{autodesktop\}\\DreamWeave Launcher""; Filename: ""\{app\}\\DreamWeaveLauncher\.exe""\s*$", RegexOptions.Multiline), "desktop shortcut must be unconditional");
+        }
+
+        [TestMethod]
+        public void LauncherStartsAfterInstall_ButNotUnderSilentInstalls_AndNotElevated()
+        {
+            string run = Section(Iss(), "Run");
+            var entries = new System.Collections.Generic.List<string>();
+            foreach (string line in run.Split('\n'))
+            {
+                string entry = line.Trim();
+                if (entry.Length > 0 && !entry.StartsWith(";", StringComparison.Ordinal))
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            Assert.AreEqual(1, entries.Count, "exactly one [Run] entry");
+            Match flags = Regex.Match(entries[0], @"Flags:\s*([^;]*)$");
+            Assert.IsTrue(flags.Success, "no Flags: " + entries[0]);
+            string[] f = flags.Groups[1].Value.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            CollectionAssert.Contains(f, "nowait");
+            CollectionAssert.Contains(f, "skipifsilent");
+            CollectionAssert.Contains(f, "runasoriginaluser");
+            CollectionAssert.DoesNotContain(f, "postinstall");
+            StringAssert.StartsWith(entries[0], @"Filename: ""{app}\DreamWeaveLauncher.exe"";");
+            Assert.AreEqual("lowest", Directive(Iss(), "PrivilegesRequired"), "an elevated setup would start the launcher elevated");
+        }
+
+        [TestMethod]
+        public void Upgrades_ReuseThePreviousFolder_AndRespectTheMutex()
+        {
+            string iss = Iss();
+            Assert.AreEqual("yes", Directive(iss, "UsePreviousAppDir"));
+            Assert.AreEqual(SetupConstants.SetupMutexName, Directive(iss, "AppMutex"));
+            Assert.AreEqual("yes", Directive(iss, "DisableDirPage"), "no folder prompt on upgrade");
+        }
+
+        [TestMethod]
+        public void ProgressWindow_IsModernDark_WithTheLogoInEveryDpiSize()
+        {
+            string iss = Iss();
+            Assert.AreEqual("modern dark", Directive(iss, "WizardStyle"));
+            string list = Directive(iss, "WizardSmallImageFile");
+            Assert.IsNotNull(list, "WizardSmallImageFile");
+            string[] files = list.Split(',');
+            Assert.IsTrue(files.Length >= 2, "several sizes");
+            byte[] pngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+            foreach (string file in files)
+            {
+                string path = Path.Combine(RepoRoot(), "installer", file.Trim());
+                Assert.IsTrue(File.Exists(path), "missing wizard image " + path);
+                byte[] head = new byte[8];
+                using (FileStream fs = File.OpenRead(path))
+                {
+                    Assert.AreEqual(8, fs.Read(head, 0, 8));
+                }
+
+                CollectionAssert.AreEqual(pngSignature, head, file + " is not a PNG");
+            }
+        }
+
+        [TestMethod]
+        public void SetupWindowTitle_StaysDreamWeaveLauncherSetup()
+        {
+            Assert.AreEqual("DreamWeave Launcher", Directive(Iss(), "AppName"));
+            Assert.AreEqual("DreamWeave Launcher Setup", Directive(Iss(), "VersionInfoDescription"));
         }
 
         private static string Section(string iss, string name)
@@ -179,31 +339,13 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         [TestMethod]
         public void Script_IsAscii()
         {
-            foreach (string name in new[] { "DreamWeaveLauncher.iss", "privacy.txt" })
+            foreach (string name in new[] { "DreamWeaveLauncher.iss" })
             {
                 foreach (char c in ReadRepoFile("installer", name))
                 {
                     Assert.IsTrue(c == '\r' || c == '\n' || c == '\t' || (c >= ' ' && c < 127), name + " has a non-ASCII or control character: U+" + ((int)c).ToString("X4"));
                 }
             }
-        }
-
-        /// <summary>Markdown markers removed, blank lines dropped and runs of whitespace collapsed, so only the words are compared.</summary>
-        private static string Normalize(string text)
-        {
-            string t = text.Replace("\r\n", "\n");
-            t = Regex.Replace(t, @"^#+\s+", string.Empty, RegexOptions.Multiline);
-            t = t.Replace("`", string.Empty);
-            return Regex.Replace(t, @"\s+", " ").Trim();
-        }
-
-        [TestMethod]
-        public void PrivacyText_MatchesThePrivacyDoc()
-        {
-            Assert.AreEqual(
-                Normalize(ReadRepoFile("Docs", "privacy.md")),
-                Normalize(ReadRepoFile("installer", "privacy.txt")),
-                "installer/privacy.txt must carry the same words as Docs/privacy.md (headings without '#', no backticks).");
         }
     }
 }
