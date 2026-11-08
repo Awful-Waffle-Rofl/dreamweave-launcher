@@ -244,6 +244,8 @@ namespace DreamWeave.Launcher.Tests.App
                     Installers = new InstallerRunner(Starter),
                     PollInterval = TimeSpan.FromMilliseconds(20),
                     SettleInterval = TimeSpan.FromMilliseconds(30),
+                    ProcessPollInterval = TimeSpan.FromMilliseconds(10),
+                    ClosedEarlyWindow = TimeSpan.FromMilliseconds(30),
                     VerifyRetryDelay = TimeSpan.Zero,
                 };
             }
@@ -911,6 +913,78 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void TreeExits_FinishArrivesWithinOneSettlePlusOneProcessPoll()
+        {
+            // Scaled timings: the settle gap is long next to the process poll, so the old loop (one look per
+            // settle interval, then a second one a whole interval later) would take about two settle gaps.
+            TimeSpan settle = TimeSpan.FromMilliseconds(1000);
+            TimeSpan poll = TimeSpan.FromMilliseconds(50);
+            using (var rig = new Rig())
+            {
+                rig.Deps.SettleInterval = settle;
+                rig.Deps.ProcessPollInterval = poll;
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((4242, 900, "setup-root.exe"));
+                var exited = new Stopwatch();
+                long endedAt = -1;
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.HandoffEnded && Interlocked.Read(ref endedAt) < 0)
+                    {
+                        Interlocked.Exchange(ref endedAt, exited.ElapsedMilliseconds);
+                    }
+                });
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+                int seen = rig.Processes.Snapshots;
+                WaitUntil(() => rig.Processes.Snapshots >= seen + 3, "a few process polls");
+                Assert.IsFalse(Has(events, InstallEventKind.HandoffEnded), "finished while the installer tree ran");
+
+                // The installer closes just after a poll: the worst case for the old loop.
+                seen = rig.Processes.Snapshots;
+                WaitUntil(() => rig.Processes.Snapshots > seen, "the next poll");
+                exited.Start();
+                rig.Processes.Set();
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+
+                long ms = Interlocked.Read(ref endedAt);
+                Assert.IsTrue(ms >= settle.TotalMilliseconds - 100, "finished on a single file look: " + ms + " ms");
+                Assert.IsTrue(ms <= settle.TotalMilliseconds + poll.TotalMilliseconds + 400, "took longer than one settle plus one process poll: " + ms + " ms");
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void HelperAlive_WithStableFiles_NeverFinishesOnItsOwn_UnderTheShortSettle()
+        {
+            using (var rig = new Rig())
+            using (var cts = new CancellationTokenSource())
+            {
+                // Many short settle gaps pass with the files untouched: a COM-started helper alone still blocks.
+                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(50);
+                rig.Deps.ProcessPollInterval = TimeSpan.FromMilliseconds(10);
+                rig.Starter.Pid = 4242;
+                rig.Starter.OnStart = () => rig.Processes.Set((77, 600, "IDriver.exe"), (600, 4, "svchost.exe"));
+                var events = new Hooked(null);
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, cts.Token);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+                int seen = rig.Processes.Snapshots;
+                WaitUntil(() => rig.Processes.Snapshots >= seen + 40, "many process polls");
+                Thread.Sleep(500);
+                Assert.IsFalse(run.IsCompleted);
+                Assert.IsFalse(Has(events, InstallEventKind.HandoffEnded), "the hand-off ended while a helper ran");
+                Assert.IsFalse(OverlayStarted(events), "the overlay started while a helper ran");
+
+                // The helper goes: now it finishes on its own, promptly.
+                rig.Processes.Set((600, 4, "svchost.exe"));
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
         public void MegaQuota_InTheDownloadPhase_ShowsTheQuotaMessage_BeforeTheInstallerOpens()
         {
             using (var rig = new Rig())
@@ -1107,7 +1181,7 @@ namespace DreamWeave.Launcher.Tests.App
         {
             using (var rig = new Rig())
             {
-                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(500);
+                rig.Deps.ClosedEarlyWindow = TimeSpan.FromMilliseconds(500);
                 InstallSession session = StartedThenStopped(rig);
 
                 var second = new Hooked(null);
@@ -1146,7 +1220,7 @@ namespace DreamWeave.Launcher.Tests.App
         {
             using (var rig = new Rig())
             {
-                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(500);
+                rig.Deps.ClosedEarlyWindow = TimeSpan.FromMilliseconds(500);
                 InstallSession session = StartedThenStopped(rig);
 
                 var second = new Hooked(null);

@@ -32,6 +32,13 @@ namespace DreamWeave.Launcher.App
         SourceChanged,
         StepDone,
         StepSkipped,
+
+        /// <summary>
+        /// The game installer is about to be verified and started: raised BEFORE the launch call, so its
+        /// explanation is on screen through the integrity check, any Windows permission prompt and the
+        /// installer's own start-up. <see cref="HandoffStarted"/> follows once the process exists.
+        /// </summary>
+        HandoffStarting,
         HandoffStarted,
         HandoffNotDetected,
         HandoffEnded,
@@ -260,8 +267,22 @@ namespace DreamWeave.Launcher.App
         /// <summary>How often the installer hand-off polls detection.</summary>
         public TimeSpan PollInterval { get; set; } = InstallSession.HandoffPollInterval;
 
-        /// <summary>Gap between the two polls that must see identical files before the installer counts as finished copying.</summary>
-        public TimeSpan SettleInterval { get; set; } = TimeSpan.FromSeconds(10);
+        /// <summary>
+        /// Gap between the two looks that must see identical files before the installer counts as finished
+        /// copying. Both looks, and every process check between them, must find nothing of the installer
+        /// running; while anything of it runs no file look is taken at all, so this gap only starts once
+        /// the tracked tree and the InstallShield helpers are gone.
+        /// </summary>
+        public TimeSpan SettleInterval { get; set; } = TimeSpan.FromSeconds(2);
+
+        /// <summary>How often the finish wait re-checks the process list (one Toolhelp snapshot, no file access).</summary>
+        public TimeSpan ProcessPollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+
+        /// <summary>
+        /// For a Retry that resumes waiting on an installer an earlier run started: how long every poll
+        /// must see nothing of it, with no install detected, before it counts as closed early.
+        /// </summary>
+        public TimeSpan ClosedEarlyWindow { get; set; } = TimeSpan.FromSeconds(10);
 
         /// <summary>
         /// How long the installer may stay busy (still running, or its files still changing) before the
@@ -557,9 +578,11 @@ namespace DreamWeave.Launcher.App
         /// descendants, nor a known InstallShield helper (see <see cref="InstallerProcessWatch"/>);
         /// the started process exiting alone is never the signal, because the self-extractor exits early;</item>
         /// <item>the files this manifest cares about (every overlay file and every satisfiedWhen path that
-        /// exists) have settled: two polls, <see cref="InstallDependencies.SettleInterval"/> apart and
+        /// exists) have settled: two looks, <see cref="InstallDependencies.SettleInterval"/> apart and
         /// both made with no installer process running, with identical (size, last write) stamps and
-        /// every exclusive open succeeding.</item>
+        /// every exclusive open succeeding; the process list is also checked every
+        /// <see cref="InstallDependencies.ProcessPollInterval"/> in between, and any activity starts the
+        /// settle again.</item>
         /// </list>
         /// There is no carrying on regardless: after <see cref="InstallDependencies.SettleTimeout"/> the
         /// player is told what is still running, and the wait goes on. "I finished" runs one check at once
@@ -582,19 +605,26 @@ namespace DreamWeave.Launcher.App
             List<string> targets = relative.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: UiText.WaitingForInstallerFiles));
             Stopwatch clock = Stopwatch.StartNew();
+
+            // The last automatic file look, taken with nothing of the installer running, and the time since it.
             string previous = null;
+            var sincePrevious = new Stopwatch();
             bool poked = false;
             bool warned = false;
 
-            // One look: the files' stamps, or null while the installer (as far as this look allows) runs or a file is in use.
-            string Look(bool clickRelaxes, out InstallerActivity activity)
+            // One process check, then (when asked and nothing blocks) the files' stamps: null while blocked, when
+            // no file look was asked for, or when a file is in use.
+            string Look(bool clickRelaxes, bool takeFiles, out InstallerActivity activity, out bool blocked)
             {
                 activity = watch.Check();
-                bool blocked = activity == InstallerActivity.Tree
+                blocked = activity == InstallerActivity.Tree
                     || (!clickRelaxes && (activity == InstallerActivity.HelpersOnly || activity == InstallerActivity.Unknown));
-                return blocked ? null : SettleSnapshot(folder, targets);
+                return blocked || !takeFiles ? null : SettleSnapshot(folder, targets);
             }
 
+            // Two clocks: the process list is checked every ProcessPollInterval (cheap, so the wait notices the
+            // installer closing within one of those), and the files are looked at only once nothing of the
+            // installer runs, a SettleInterval apart. Any activity in between throws the first look away.
             while (true)
             {
                 ct.ThrowIfCancellationRequested();
@@ -605,39 +635,51 @@ namespace DreamWeave.Launcher.App
                 }
 
                 InstallerActivity activity = InstallerActivity.None;
+                bool blocked = false;
                 bool clicked = poked;
-                string snapshot = await Task.Run(() => Look(clicked, out activity), ct).ConfigureAwait(false);
-                if (snapshot != null && snapshot == previous && activity == InstallerActivity.None)
+                bool filesDue = clicked || previous == null || sincePrevious.Elapsed >= _deps.SettleInterval;
+                string snapshot = await Task.Run(() => Look(clicked, filesDue, out activity, out blocked), ct).ConfigureAwait(false);
+                if (blocked)
                 {
-                    return;
+                    previous = null;
                 }
-
-                if (poked && snapshot != null)
+                else if (filesDue)
                 {
-                    // "I finished" with the installer tree gone and the files openable: one confirming look a
-                    // short gap later, rather than make the player wait a full settle interval.
-                    await Task.Delay(_deps.PollInterval, ct).ConfigureAwait(false);
-                    InstallerActivity confirmActivity = InstallerActivity.None;
-                    string confirm = await Task.Run(() => Look(true, out confirmActivity), ct).ConfigureAwait(false);
-                    if (confirm != null && confirm == snapshot)
+                    if (snapshot != null && snapshot == previous && activity == InstallerActivity.None)
                     {
-                        if (confirmActivity == InstallerActivity.HelpersOnly)
-                        {
-                            _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: installer tree gone and files settled, InstallShield helper processes still running: " + string.Join(", ", watch.LastHelpers));
-                        }
-                        else if (confirmActivity == InstallerActivity.Unknown)
-                        {
-                            _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: files settled, the process list could not be read");
-                        }
-
                         return;
                     }
 
-                    snapshot = confirm;
+                    if (poked && snapshot != null)
+                    {
+                        // "I finished" with the installer tree gone and the files openable: one confirming look a
+                        // short gap later, rather than make the player wait a full settle interval.
+                        await Task.Delay(_deps.PollInterval, ct).ConfigureAwait(false);
+                        InstallerActivity confirmActivity = InstallerActivity.None;
+                        bool confirmBlocked = false;
+                        string confirm = await Task.Run(() => Look(true, true, out confirmActivity, out confirmBlocked), ct).ConfigureAwait(false);
+                        if (confirm != null && confirm == snapshot)
+                        {
+                            if (confirmActivity == InstallerActivity.HelpersOnly)
+                            {
+                                _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: installer tree gone and files settled, InstallShield helper processes still running: " + string.Join(", ", watch.LastHelpers));
+                            }
+                            else if (confirmActivity == InstallerActivity.Unknown)
+                            {
+                                _deps.InstallLog("installer-handoff component=" + installer.Id + " proceeding on I finished: files settled, the process list could not be read");
+                            }
+
+                            return;
+                        }
+
+                        snapshot = confirm;
+                    }
+
+                    // A look that allowed helpers must not pair with a later automatic look that does not.
+                    previous = poked ? null : snapshot;
+                    sincePrevious.Restart();
                 }
 
-                // A look that allowed helpers must not pair with a later automatic look that does not.
-                previous = poked ? null : snapshot;
                 if (poked)
                 {
                     _deps.InstallLog("installer-handoff component=" + installer.Id + " I finished refused: " + BlockerText(watch, snapshot));
@@ -650,7 +692,18 @@ namespace DreamWeave.Launcher.App
                     events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: StillRunningText(watch)));
                 }
 
-                Task delay = Task.Delay(_deps.SettleInterval, ct);
+                // Next process check one poll away, or sooner when the second file look falls due first.
+                TimeSpan wait = _deps.ProcessPollInterval;
+                if (!blocked && previous != null)
+                {
+                    TimeSpan untilFiles = _deps.SettleInterval - sincePrevious.Elapsed;
+                    if (untilFiles < wait)
+                    {
+                        wait = untilFiles < TimeSpan.Zero ? TimeSpan.Zero : untilFiles;
+                    }
+                }
+
+                Task delay = Task.Delay(wait, ct);
                 Task first = await Task.WhenAny(delay, poke).ConfigureAwait(false);
                 poked = first == poke;
                 if (poked)
@@ -918,10 +971,28 @@ namespace DreamWeave.Launcher.App
 
             DownloadResult file = staged.File;
 
+            // The explanation goes up BEFORE the launch call, never after it: Start hashes the large
+            // installer again and then returns from ShellExecute only once the process exists (after any
+            // Windows permission prompt), and reporting HandoffStarted only once it returned left the
+            // player looking at the file check and a live Cancel button for that whole time.
+            events.Report(new InstallEvent(InstallEventKind.HandoffStarting, c.Id, text: UiText.InstallerStarting));
+
             // InstallerRunner.Start re-hashes the staged installer through a deny-write handle and keeps
             // that handle open until the (elevated) process exists, so the bytes that run are the bytes verified.
             events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.Verifying));
-            InstallerProcess process = await Task.Run(() => _deps.Installers.Start(c, file.Path, progress, ct), ct).ConfigureAwait(false);
+            _deps.InstallLog("installer-handoff component=" + c.Id + " starting the installer");
+            InstallerProcess process;
+            try
+            {
+                process = await Task.Run(() => _deps.Installers.Start(c, file.Path, progress, ct), ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                events.Report(new InstallEvent(InstallEventKind.HandoffEnded, c.Id));
+                throw;
+            }
+
+            _deps.InstallLog("installer-handoff component=" + c.Id + " installer started");
             _launchedInstallers.Add(c.Id);
             using (process)
             {
@@ -958,7 +1029,7 @@ namespace DreamWeave.Launcher.App
         /// <para>
         /// <paramref name="resumed"/> is set only when a Retry resumes waiting on an installer an earlier
         /// run started and whose tree was still running then. Its tree is then known, so once every poll
-        /// across a whole <see cref="InstallDependencies.SettleInterval"/> saw nothing of it and a last
+        /// across a whole <see cref="InstallDependencies.ClosedEarlyWindow"/> saw nothing of it and a last
         /// detection still finds no install, the installer was closed before it finished: that fails
         /// (InstallerClosedEarly) instead of waiting forever, and the next Retry starts a new installer.
         /// </para>
@@ -995,7 +1066,7 @@ namespace DreamWeave.Launcher.App
                     }
                 }
 
-                if (goneFor != null && goneFor.Elapsed >= _deps.SettleInterval)
+                if (goneFor != null && goneFor.Elapsed >= _deps.ClosedEarlyWindow)
                 {
                     // One more look at the end of the window: the installer may have just finished.
                     found = await Task.Run(() => Detect(c, ct), ct).ConfigureAwait(false);
