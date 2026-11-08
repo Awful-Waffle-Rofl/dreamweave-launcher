@@ -683,6 +683,39 @@ namespace DreamWeave.Launcher.Tests.Install
         }
 
         [TestMethod]
+        public void LastCheck_WithoutSentinels_RefusesAPatchIntoAGameFolderTurnedIntoAJunction()
+        {
+            using (var f = new Fixture())
+            {
+                // The junction's target looks like a valid install, so only the last check can stop the write.
+                string attacker = Path.Combine(f.Root, "attacker");
+                Directory.CreateDirectory(attacker);
+                File.WriteAllBytes(Path.Combine(attacker, "acclient.exe"), Client);
+                f.Stage("acclient.exe", ClientPatched, Patch);
+                int error = -1;
+                var runner = new VerifiedPlacementRunner(new ManifestVerifier(new[] { _key.PublicKey }))
+                {
+                    PinSentinels = false,
+                    AfterPinned = ac =>
+                    {
+                        EmptyFolder(ac);
+                        error = InPlaceJunction.TryConvert(ac, attacker);
+                    },
+                };
+
+                VerifiedPlacementResult r = runner.Execute(f.Paths.Root, f.Ac, Patch);
+
+                if (error != 0)
+                {
+                    Assert.Inconclusive("the in-place conversion did not succeed here (error " + error + "), so the last check was not reached");
+                }
+
+                Assert.AreEqual(LauncherError.ReparsePointInPath, r.Code, r.Detail);
+                CollectionAssert.AreEqual(Client, File.ReadAllBytes(Path.Combine(attacker, "acclient.exe")), "nothing may be written through the converted folder");
+            }
+        }
+
+        [TestMethod]
         public void TrimFolder_KeepsTheDriveRootSeparator()
         {
             Assert.AreEqual(@"C:\", FolderPins.TrimFolder(@"C:\"));

@@ -193,6 +193,7 @@ namespace DreamWeave.Launcher.Core.Install
             }
             catch
             {
+                sentinel?.Dispose();
                 h.Dispose();
                 throw;
             }
