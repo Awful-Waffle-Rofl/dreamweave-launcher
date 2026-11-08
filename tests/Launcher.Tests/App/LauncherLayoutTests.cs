@@ -217,6 +217,15 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void FreshLauncher_NoSavedCredentials_RememberIsTickedByDefault()
+        {
+            WithScreen(null, false, (w, s) =>
+            {
+                Assert.IsTrue(s.RememberBox.Checked, "a new player starts with Remember passwords ticked");
+            });
+        }
+
+        [TestMethod]
         public void EditingAnAccount_UntickRemember_OnlyWhenNoRowKeepsASavedPassword()
         {
             var creds = new LauncherPresenterTests.MemoryCredentials();
