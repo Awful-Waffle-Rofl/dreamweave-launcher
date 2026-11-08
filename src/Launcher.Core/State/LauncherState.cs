@@ -35,6 +35,14 @@ namespace DreamWeave.Launcher.Core.State
         public string LauncherVersionSeen { get; set; }
 
         /// <summary>
+        /// The account name typed into each launcher slot (Main, Alt 1, Alt 2), in slot order. Optional:
+        /// a state file written before multi-client support has no such field and loads as an empty list.
+        /// Names only; passwords stay in the Windows credential store.
+        /// </summary>
+        [JsonProperty("slotAccounts")]
+        public List<string> SlotAccounts { get; set; } = new List<string>();
+
+        /// <summary>
         /// Cache of file hashes keyed by full path (case-insensitive): a file whose size and
         /// last-write time still match its entry is not re-hashed.
         /// </summary>

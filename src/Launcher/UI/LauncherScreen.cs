@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using DreamWeave.Launcher.App;
@@ -8,104 +9,194 @@ using DreamWeave.Launcher.Core;
 
 namespace DreamWeave.Launcher.UI
 {
+    /// <summary>
+    /// One client row: its name (Main, Alt 1, Alt 2), an account box, a password box and a Play button,
+    /// with an inline error line beneath. The account and password boxes are stacked so the row stays
+    /// narrow enough for the card.
+    /// </summary>
+    internal sealed class SlotRow : Control
+    {
+        private readonly Label _name;
+        private readonly TextBox _account;
+        private readonly TextBox _password;
+        private readonly FlatButton _play;
+        private readonly WrapLabel _error;
+        private string _validation;
+        private string _launch;
+
+        public SlotRow(string name)
+        {
+            SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
+            Margin = new Padding(0, 0, 0, 8);
+            TabStop = false;
+            _name = new Label { Text = name, AutoSize = false, Font = Theme.Slot, ForeColor = Theme.Gold, BackColor = Color.Transparent, UseMnemonic = false, TextAlign = ContentAlignment.MiddleLeft };
+            _account = UiKit.Input(UiText.AccountLabel, false, 50);
+            _password = UiKit.Input(UiText.PasswordLabel, true, 64);
+            _play = UiKit.Button(UiText.Play);
+            _play.Margin = new Padding(0);
+            _error = UiKit.Text(string.Empty);
+            _error.ForeColor = Theme.Err;
+            Controls.Add(_name);
+            Controls.Add(_account);
+            Controls.Add(_password);
+            Controls.Add(_play);
+            Controls.Add(_error);
+            _account.TextChanged += (s, e) => OnEdited();
+            _password.TextChanged += (s, e) => OnEdited();
+            _play.Click += (s, e) => PlayClicked?.Invoke(this, EventArgs.Empty);
+        }
+
+        /// <summary>Raised when the player edits either box.</summary>
+        public event EventHandler Edited;
+
+        /// <summary>Raised when this row's Play is clicked.</summary>
+        public event EventHandler PlayClicked;
+
+        public string Account
+        {
+            get => _account.Text;
+            set => _account.Text = value ?? string.Empty;
+        }
+
+        public string Password
+        {
+            get => _password.Text;
+            set => _password.Text = value ?? string.Empty;
+        }
+
+        public bool PlayEnabled
+        {
+            get => _play.Enabled;
+            set => _play.Enabled = value;
+        }
+
+        /// <summary>The inline error from checking the boxes (null: none).</summary>
+        public void SetValidation(string text)
+        {
+            _validation = text;
+            ShowError();
+        }
+
+        /// <summary>The inline error from the last start attempt (null: none).</summary>
+        public void SetLaunchError(string text)
+        {
+            _launch = text;
+            ShowError();
+        }
+
+        private void ShowError()
+        {
+            _error.Text = _launch ?? _validation ?? string.Empty;
+        }
+
+        private void OnEdited()
+        {
+            _launch = null;
+            Edited?.Invoke(this, EventArgs.Empty);
+        }
+
+        private int BoxHeight => _account.GetPreferredSize(new Size(Width, 0)).Height;
+
+        private int FieldsHeight => (2 * BoxHeight) + LogicalToDeviceUnits(4);
+
+        private int ErrorHeight(int width)
+        {
+            int h = _error.GetPreferredSize(new Size(Math.Max(1, width), 0)).Height;
+            return h > 0 ? h + LogicalToDeviceUnits(2) : 0;
+        }
+
+        public override Size GetPreferredSize(Size proposedSize)
+        {
+            int w = proposedSize.Width > 0 && proposedSize.Width < 100000 ? proposedSize.Width : Math.Max(1, Width);
+            return new Size(w, FieldsHeight + ErrorHeight(w));
+        }
+
+        protected override void OnLayout(LayoutEventArgs levent)
+        {
+            base.OnLayout(levent);
+            int nameW = LogicalToDeviceUnits(52);
+            int gap = LogicalToDeviceUnits(8);
+            Size play = _play.GetPreferredSize(new Size(Width, 0));
+            int fields = FieldsHeight;
+            int boxH = BoxHeight;
+            int boxX = nameW;
+            int boxW = Math.Max(1, Width - nameW - gap - play.Width - gap);
+            _name.SetBounds(0, 0, nameW, fields);
+            _account.SetBounds(boxX, 0, boxW, boxH);
+            _password.SetBounds(boxX, boxH + LogicalToDeviceUnits(4), boxW, boxH);
+            _play.SetBounds(Width - play.Width, (fields - play.Height) / 2, play.Width, play.Height);
+            int eh = ErrorHeight(Width);
+            _error.SetBounds(0, fields + LogicalToDeviceUnits(2), Width, Math.Max(0, eh - LogicalToDeviceUnits(2)));
+        }
+    }
+
     /// <summary>The log-in-and-play screen. All decisions are the <see cref="LauncherPresenter"/>'s.</summary>
-    internal sealed class LauncherScreen : TableLayoutPanel
+    internal sealed class LauncherScreen : Page
     {
         private readonly LauncherPresenter _presenter;
-        private readonly ComboBox _account;
-        private readonly TextBox _password;
-        private readonly CheckBox _remember;
-        private readonly Label _rule;
-        private readonly Label _help;
-        private readonly Label _status;
-        private readonly Button _play;
-        private readonly TableLayoutPanel _banner;
-        private readonly Label _bannerText;
-        private readonly Button _update;
-        private readonly Button _later;
+        private readonly SlotRow[] _rows = new SlotRow[LauncherPresenter.SlotCount];
+        private readonly ThemedCheckBox _remember;
+        private readonly TintedBox _info;
+        private readonly WrapLabel _status;
+        private readonly FlatButton _playAll;
+        private readonly TintedBox _banner;
+        private readonly WrapLabel _bannerText;
+        private readonly FlatButton _update;
+        private readonly FlatButton _later;
         private bool _laterClicked;
+        private bool _loading = true;
 
-        public LauncherScreen(LauncherPresenter presenter, bool firstRun, string notice)
+        public LauncherScreen(LauncherPresenter presenter, string notice)
+            : base(ScreenArt.Launcher)
         {
             _presenter = presenter ?? throw new ArgumentNullException(nameof(presenter));
-            Dock = DockStyle.Fill;
-            ColumnCount = 1;
-            Padding = new Padding(UiKit.Gutter);
-            AutoScroll = true;
-            ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            GrowStyle = TableLayoutPanelGrowStyle.AddRows;
 
-            AddRow(UiKit.Heading(presenter.ServerName));
-            Label address = UiKit.Text(presenter.ServerAddress);
-            address.Font = new Font(address.Font.FontFamily, address.Font.Size - 1);
-            address.ForeColor = SystemColors.GrayText;
-            AddRow(address);
+            TitleBlock title = UiKit.Heading(presenter.ServerName);
+            title.Aside = presenter.ServerAddress;
+            Add(title);
             if (!string.IsNullOrWhiteSpace(notice))
             {
-                AddRow(UiKit.Text(notice, true));
+                Add(UiKit.Text(notice, true));
             }
 
-            _banner = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill, Visible = false, BackColor = SystemColors.Info, Padding = new Padding(6) };
+            _banner = new TintedBox { Visible = false };
             _bannerText = UiKit.Text(string.Empty);
-            _update = UiKit.Button(UiText.Update, (s, e) => UpdateClicked?.Invoke(this, EventArgs.Empty));
+            _update = UiKit.Button(UiText.Update, (s, e) => UpdateClicked?.Invoke(this, EventArgs.Empty), true);
             _later = UiKit.Button(UiText.Later, (s, e) =>
             {
                 _laterClicked = true;
                 RefreshState();
             });
             _banner.Controls.Add(_bannerText);
-            _banner.Controls.Add(UiKit.ButtonRow(_update, _later));
-            AddRow(_banner);
+            _banner.Controls.Add(UiKit.ButtonRow(_later, _update));
+            Add(_banner);
 
-            AddRow(UiKit.Text(UiText.AccountLabel));
-            _account = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDown, MaxLength = 50 };
-            AddRow(_account);
-            AddRow(UiKit.Text(UiText.PasswordLabel));
-            _password = new TextBox { Dock = DockStyle.Fill, UseSystemPasswordChar = true, MaxLength = 64 };
-            AddRow(_password);
-            _remember = new CheckBox { Text = UiText.RememberPassword, AutoSize = true };
-            AddRow(_remember);
-            _rule = UiKit.Text(string.Empty);
-            _rule.ForeColor = Color.Firebrick;
-            AddRow(_rule);
+            _info = new TintedBox();
+            _info.Controls.Add(UiKit.Text(UiText.NewHereInfo));
+            Add(_info);
 
-            var firstTime = new LinkLabel { Text = UiText.FirstTimeLink, AutoSize = true };
-            AddRow(firstTime);
-            _help = UiKit.Text(UiText.FirstTimeHelp);
-            _help.Visible = firstRun;
-            AddRow(_help);
-            firstTime.LinkClicked += (s, e) => _help.Visible = !_help.Visible;
-
-            _status = UiKit.Text(string.Empty);
-            AddRow(_status);
-            Button settings = UiKit.Button(UiText.Settings, (s, e) => SettingsClicked?.Invoke(this, EventArgs.Empty));
-            _play = UiKit.Button(UiText.Play, OnPlay);
-            AddRow(UiKit.ButtonRow(settings, _play));
-
-            _account.TextChanged += (s, e) =>
+            string[] names = { UiText.SlotMain, UiText.SlotAlt1, UiText.SlotAlt2 };
+            for (int i = 0; i < _rows.Length; i++)
             {
-                ForgetFillIfRenamed(_account.Text);
-                Revalidate();
-            };
-            _password.TextChanged += (s, e) => Revalidate();
-            _account.SelectedIndexChanged += async (s, e) =>
-            {
-                string name = _account.SelectedItem as string;
-                ForgetFillIfRenamed(name);
-                string saved = await _presenter.GetSavedPasswordAsync(name);
-                if (IsDisposed || name == null || !string.Equals(name, _account.Text, StringComparison.OrdinalIgnoreCase))
-                {
-                    return;
-                }
+                int slot = i;
+                SlotRow row = new SlotRow(names[i]);
+                row.Edited += (s, e) => OnRowEdited(slot);
+                row.PlayClicked += (s, e) => OnPlaySlot(slot);
+                _rows[i] = row;
+                Add(row);
+            }
 
-                if (saved != null)
-                {
-                    _password.Text = saved;
-                    _remember.Checked = true;
-                    _presenter.MarkFilled(name);
-                }
-            };
-            LoadAccounts();
+            _remember = new ThemedCheckBox { Text = UiText.RememberPasswords };
+            SetLeft(_remember);
+            _status = UiKit.Muted(string.Empty);
+            Add(_status);
+
+            FlatButton settings = UiKit.Button(UiText.Settings, (s, e) => SettingsClicked?.Invoke(this, EventArgs.Empty));
+            _playAll = UiKit.Button(UiText.PlayAll, OnPlayAll, true);
+            SetButtons(settings, _playAll);
+
+            LoadRows();
             RefreshState();
         }
 
@@ -122,8 +213,15 @@ namespace DreamWeave.Launcher.UI
             _bannerText.Text = gate.BannerText ?? string.Empty;
             _update.Visible = gate.OffersUpdate;
             _later.Visible = gate.OffersLater;
-            _play.Enabled = _presenter.CanPlay;
-            _play.Text = _presenter.IsStarting ? UiText.Starting : UiText.Play;
+            bool can = _presenter.CanPlay;
+            foreach (SlotRow r in _rows)
+            {
+                r.PlayEnabled = can;
+            }
+
+            _playAll.Enabled = can;
+            _playAll.Text = _presenter.IsStarting ? UiText.Starting : UiText.PlayAll;
+            _info.Visible = !(_rows[0].Account.Length > 0 && _rows[0].Password.Length > 0);
         }
 
         /// <summary>Shows a status line (plain text).</summary>
@@ -132,82 +230,122 @@ namespace DreamWeave.Launcher.UI
             _status.Text = text ?? string.Empty;
         }
 
-        private async void LoadAccounts()
+        private async void LoadRows()
         {
-            IReadOnlyList<string> accounts = await _presenter.LoadAccountsAsync();
+            IReadOnlyList<SlotFill> fills = await _presenter.LoadSlotsAsync();
             if (IsDisposed)
             {
                 return;
             }
 
-            _account.Items.Clear();
-            foreach (string a in accounts)
+            for (int i = 0; i < _rows.Length && i < fills.Count; i++)
             {
-                _account.Items.Add(a);
+                _rows[i].Account = fills[i].Account;
+                if (fills[i].SavedPassword != null)
+                {
+                    _rows[i].Password = fills[i].SavedPassword;
+                    _remember.Checked = true;
+                }
             }
 
-            if (accounts.Count > 0 && string.IsNullOrEmpty(_account.Text))
-            {
-                _account.SelectedIndex = 0;
-            }
+            _loading = false;
+            Revalidate();
+            RefreshState();
         }
 
-        // Another account's saved password must never be sent for, or saved under, this name.
-        private void ForgetFillIfRenamed(string accountText)
+        private IReadOnlyList<SlotInput> Inputs()
         {
-            if (_presenter.AccountChanged(accountText))
+            return _rows.Select(r => new SlotInput(r.Account, r.Password)).ToList();
+        }
+
+        private void OnRowEdited(int slot)
+        {
+            if (_loading)
             {
-                _password.Text = string.Empty;
-                _remember.Checked = false;
+                return;
             }
+
+            // Another account's saved password must never be sent for, or saved under, this name.
+            if (_presenter.AccountChanged(slot, _rows[slot].Account))
+            {
+                _rows[slot].Password = string.Empty;
+                if (Enumerable.Range(0, _rows.Length).All(i => _presenter.FilledForSlot(i) == null))
+                {
+                    _remember.Checked = false;
+                }
+            }
+
+            Revalidate();
+            RefreshState();
         }
 
         private void Revalidate()
         {
-            if (_account.Text.Length == 0 && _password.Text.Length == 0)
+            string[] errors = _presenter.ValidateSlots(Inputs());
+            for (int i = 0; i < _rows.Length; i++)
             {
-                _rule.Text = string.Empty;
+                _rows[i].SetValidation(errors[i]);
+            }
+        }
+
+        private async void OnPlaySlot(int slot)
+        {
+            _status.Text = string.Empty;
+            foreach (SlotRow r in _rows)
+            {
+                r.SetLaunchError(null);
+            }
+
+            Task<SlotResult> play = _presenter.PlaySlotAsync(slot, Inputs(), _remember.Checked);
+            RefreshState();
+            SlotResult result = await play;
+            if (IsDisposed)
+            {
                 return;
             }
 
-            _rule.Text = _account.Text.Length == 0 || _password.Text.Length == 0 ? string.Empty : _presenter.Validate(_account.Text, _password.Text) ?? string.Empty;
+            ShowResult(result);
+            RefreshState();
         }
 
-        private async void OnPlay(object sender, EventArgs e)
+        private async void OnPlayAll(object sender, EventArgs e)
         {
             _status.Text = string.Empty;
-            string user = _account.Text;
-            string pass = _password.Text;
-            bool remember = _remember.Checked;
-            Task<PlayResult> play = _presenter.PlayAsync(user, pass, remember);
+            foreach (SlotRow r in _rows)
+            {
+                r.SetLaunchError(null);
+            }
+
+            var progress = new Progress<SlotResult>(ShowResult);
+            Task<IReadOnlyList<SlotResult>> run = _presenter.PlayAllAsync(Inputs(), _remember.Checked, progress);
             RefreshState();
-            PlayResult result = await play;
+            await run;
             if (IsDisposed)
             {
                 return;
             }
 
             RefreshState();
-            if (result.Error == LauncherError.InvalidCredentials)
+        }
+
+        private void ShowResult(SlotResult result)
+        {
+            if (IsDisposed)
             {
-                _rule.Text = result.Message;
                 return;
             }
 
-            _status.Text = result.Error == LauncherError.None
-                ? result.Message + (result.PasswordNotSaved ? " " + ErrorMessages.For(LauncherError.CredentialStoreUnavailable) : string.Empty)
-                : result.Message;
-            if (result.Error == LauncherError.None && remember && !_account.Items.Contains(user))
+            PlayResult r = result.Result;
+            SlotRow row = _rows[result.Slot];
+            if (r.Error == LauncherError.None)
             {
-                _account.Items.Add(user);
+                row.SetLaunchError(null);
+                _status.Text = r.Message + (r.PasswordNotSaved ? " " + ErrorMessages.For(LauncherError.CredentialStoreUnavailable) : string.Empty);
             }
-        }
-
-        private void AddRow(Control c)
-        {
-            RowCount++;
-            RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Controls.Add(c, 0, RowCount - 1);
+            else if (!string.IsNullOrEmpty(r.Message))
+            {
+                row.SetLaunchError(r.Message);
+            }
         }
     }
 }

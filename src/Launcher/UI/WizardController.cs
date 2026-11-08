@@ -63,21 +63,20 @@ namespace DreamWeave.Launcher.UI
             }
 
             var model = new WelcomeModel(Manifest, current);
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(UiText.WelcomeTitle));
-            UiKit.Add(stack, UiKit.Text(UiText.WelcomeIntro));
-            UiKit.Add(stack, UiKit.Text(UiText.WelcomeSources));
-            var optIn = new CheckBox { Text = UiText.TelemetryOptIn, Checked = model.TelemetryOptIn, AutoSize = true, MaximumSize = new System.Drawing.Size(560, 0), UseMnemonic = false };
+            Page stack = UiKit.NewScreen(ScreenArt.Welcome);
+            stack.Add(UiKit.Heading(UiText.WelcomeTitle));
+            stack.Add(UiKit.Text(UiText.WelcomeIntro));
+            stack.Add(UiKit.Text(UiText.WelcomeSources));
+            stack.Add(new Checklist(UiText.WelcomeNextHeading, UiText.WelcomeStepFolder, UiText.WelcomeStepDownloads, UiText.WelcomeStepLogin));
+            var optIn = new ThemedCheckBox { Text = UiText.TelemetryOptIn, Checked = model.TelemetryOptIn };
             optIn.CheckedChanged += (s, e) => model.TelemetryOptIn = optIn.Checked;
-            UiKit.Add(stack, optIn);
+            stack.Add(optIn);
             if (model.ShowPrivacyLink)
             {
-                var link = new LinkLabel { Text = UiText.Privacy, AutoSize = true };
-                link.LinkClicked += (s, e) => OpenUrl(model.PrivacyUrl);
-                UiKit.Add(stack, link);
+                stack.SetLeft(UiKit.Link(UiText.Privacy, () => OpenUrl(model.PrivacyUrl)));
             }
 
-            Button next = UiKit.Button(UiText.Next);
+            Button next = UiKit.Button(UiText.Next, null, true);
             next.Click += async (s, e) =>
             {
                 next.Enabled = false;
@@ -95,7 +94,7 @@ namespace DreamWeave.Launcher.UI
 
                 ShowLocation();
             };
-            UiKit.Add(stack, UiKit.ButtonRow(next));
+            stack.SetButtons(next);
             _window.ShowScreen(stack);
         }
 
@@ -104,23 +103,18 @@ namespace DreamWeave.Launcher.UI
         private async void ShowLocation()
         {
             var presenter = new LocationPresenter(_services.AcFileSystem, _services.Disk);
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(UiText.LocationTitle));
-            UiKit.Add(stack, UiKit.Text(UiText.LocationIntro));
-            var row = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            var path = new TextBox { Dock = DockStyle.Fill };
+            Page stack = UiKit.NewScreen(ScreenArt.Install);
+            stack.Add(UiKit.Heading(UiText.LocationTitle));
+            stack.Add(UiKit.Text(UiText.LocationIntro));
+            TextBox path = UiKit.Input();
             Button browse = UiKit.Button(UiText.Browse);
-            row.Controls.Add(path, 0, 0);
-            row.Controls.Add(browse, 1, 0);
-            UiKit.Add(stack, row);
-            Label check = UiKit.Add(stack, UiKit.Text(string.Empty));
-            Label space = UiKit.Add(stack, UiKit.Text(string.Empty));
+            stack.Add(UiKit.PathInput(path, browse));
+            Label check = stack.Add(UiKit.Text(string.Empty));
+            Label space = stack.Add(UiKit.Muted(string.Empty));
             Button back = UiKit.Button(UiText.Back, (s, e) => ShowWelcome());
-            Button next = UiKit.Button(UiText.Next);
+            Button next = UiKit.Button(UiText.Next, null, true);
             next.Enabled = false;
-            UiKit.Add(stack, UiKit.ButtonRow(back, next));
+            stack.SetButtons(back, next);
             _window.ShowScreen(stack);
 
             int version = 0;
@@ -141,6 +135,7 @@ namespace DreamWeave.Launcher.UI
                 }
 
                 check.Text = r.Item1.Message;
+                check.ForeColor = r.Item1.Usable ? Theme.Ok : Theme.Err;
                 space.Text = r.Item2;
                 next.Enabled = r.Item1.Usable;
             }
@@ -190,9 +185,9 @@ namespace DreamWeave.Launcher.UI
 
         private async void ShowComponents(IReadOnlyList<ComponentStatus> known)
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(UiText.ComponentsTitle));
-            Label checking = UiKit.Add(stack, UiKit.Text(UiText.Checking));
+            Page stack = UiKit.NewScreen(ScreenArt.Install);
+            stack.Add(UiKit.Heading(UiText.ComponentsTitle));
+            Label checking = stack.Add(UiKit.Muted(UiText.Checking));
             var errors = new ErrorPanel { ShowTryLater = true };
             _window.ShowScreen(stack);
 
@@ -213,7 +208,7 @@ namespace DreamWeave.Launcher.UI
 
                     LauncherError code = ex is LauncherException le ? le.Code : LauncherError.AccessDenied;
                     checking.Visible = false;
-                    UiKit.Add(stack, errors);
+                    stack.Add(errors);
                     errors.RetryClicked += (s, e) => ShowComponents(null);
                     errors.TryLaterClicked += (s, e) => _window.Close();
                     errors.ShowError(code, TelemetryStepFor(null));
@@ -230,9 +225,9 @@ namespace DreamWeave.Launcher.UI
             var selection = new ComponentSelection(Manifest, statuses, _load.DownloadsAllowed);
             var statusLabels = new Dictionary<string, Label>();
             Label blocked = UiKit.Text(string.Empty);
-            blocked.ForeColor = System.Drawing.Color.Firebrick;
+            blocked.ForeColor = Theme.Err;
             Button back = UiKit.Button(UiText.Back, (s, e) => ShowLocation());
-            Button next = UiKit.Button(UiText.Next);
+            Button next = UiKit.Button(UiText.Next, null, true);
             Button checkAgain = UiKit.Button(UiText.CheckAgain, (s, e) => ShowComponents(null));
 
             void Refresh()
@@ -240,6 +235,7 @@ namespace DreamWeave.Launcher.UI
                 foreach (ComponentRow r in selection.Rows)
                 {
                     statusLabels[r.Id].Text = r.SizeText + " - " + r.StatusText;
+                    statusLabels[r.Id].ForeColor = StatusColor(r);
                 }
 
                 string reason = selection.NextBlockedReason;
@@ -251,31 +247,29 @@ namespace DreamWeave.Launcher.UI
 
             foreach (ComponentRow r in selection.Rows)
             {
-                var box = new GroupBox { AutoSize = true, Dock = DockStyle.Fill, Padding = new Padding(8) };
-                var inner = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill };
-                var cb = new CheckBox { Text = r.Title, Checked = r.Checked, Enabled = r.CanToggle, AutoSize = true, UseMnemonic = false, Font = new System.Drawing.Font(box.Font, System.Drawing.FontStyle.Bold) };
+                var box = new RowBox();
+                var cb = new ThemedCheckBox { Text = r.Title, Checked = r.Checked, Enabled = r.CanToggle, Font = Theme.BodyBold };
                 string id = r.Id;
                 cb.CheckedChanged += (s, e) =>
                 {
                     selection.SetChecked(id, cb.Checked);
                     Refresh();
                 };
-                inner.Controls.Add(cb);
-                inner.Controls.Add(UiKit.Text(r.SourceText));
+                box.Controls.Add(cb);
+                box.Controls.Add(UiKit.Muted(r.SourceText));
                 Label status = UiKit.Text(string.Empty);
                 statusLabels[r.Id] = status;
-                inner.Controls.Add(status);
+                box.Controls.Add(status);
                 if (r.Note != null)
                 {
-                    inner.Controls.Add(UiKit.Text(r.Note));
+                    box.Controls.Add(UiKit.Muted(r.Note));
                 }
 
-                box.Controls.Add(inner);
-                UiKit.Add(stack, box);
+                stack.Add(box);
             }
 
-            UiKit.Add(stack, blocked);
-            UiKit.Add(stack, UiKit.ButtonRow(back, checkAgain, next));
+            stack.Add(blocked);
+            stack.SetButtons(back, checkAgain, next);
             next.Click += (s, e) =>
             {
                 IReadOnlyList<ComponentRow> chosen = selection.Selected;
@@ -295,30 +289,31 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowProgress(IReadOnlyList<ManifestComponent> components)
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(UiText.ProgressTitle));
-            var stepLabels = new Dictionary<string, Label>();
+            Page stack = UiKit.NewScreen(ScreenArt.Install);
+            stack.Add(UiKit.Heading(UiText.ProgressTitle));
+            var stepLabels = new Dictionary<string, StatusRow>();
             foreach (ManifestComponent c in components)
             {
-                stepLabels[c.Id] = UiKit.Add(stack, UiKit.Text((c.Title ?? c.Id) + " - " + UiText.StepPending));
+                stepLabels[c.Id] = stack.Add(new StatusRow { Title = c.Title ?? c.Id, Status = UiText.StepPending, StatusColor = Theme.Muted });
             }
 
-            Label current = UiKit.Add(stack, UiKit.Text(string.Empty));
-            Label sourceNote = UiKit.Add(stack, UiKit.Text(string.Empty));
-            var currentBar = UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Blocks, 1000));
-            var totalBar = UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Blocks, 1000));
+            Label current = stack.Add(UiKit.Text(string.Empty));
+            Label sourceNote = stack.Add(UiKit.Muted(string.Empty));
+            var currentBar = stack.Add(UiKit.Bar(ProgressBarStyle.Blocks, 1000));
+            var totalBar = stack.Add(UiKit.Bar(ProgressBarStyle.Blocks, 1000));
 
-            var handoff = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill, Visible = false };
-            handoff.Controls.Add(UiKit.Text(UiText.InstallerHandoff, true));
+            var handoff = new TintedBox { Visible = false };
+            handoff.Controls.Add(UiKit.Text(UiText.InstallerHandoff));
             Label notDetected = UiKit.Text(string.Empty);
+            notDetected.ForeColor = Theme.Err;
             handoff.Controls.Add(notDetected);
-            Button finished = UiKit.Button(UiText.IFinished);
+            Button finished = UiKit.Button(UiText.IFinished, null, true);
             handoff.Controls.Add(UiKit.ButtonRow(finished));
-            UiKit.Add(stack, handoff);
+            stack.Add(handoff);
 
-            var errors = UiKit.Add(stack, new ErrorPanel { ShowTryLater = true });
+            var errors = stack.Add(new ErrorPanel { ShowTryLater = true });
             Button cancel = UiKit.Button(UiText.Cancel);
-            UiKit.Add(stack, UiKit.ButtonRow(cancel));
+            stack.SetButtons(cancel);
             _window.ShowScreen(stack);
 
             var aggregate = new AggregateProgress(components);
@@ -358,7 +353,7 @@ namespace DreamWeave.Launcher.UI
                     return;
                 }
 
-                Label step;
+                StatusRow step;
                 stepLabels.TryGetValue(ev.ComponentId ?? string.Empty, out step);
                 switch (ev.Kind)
                 {
@@ -366,7 +361,8 @@ namespace DreamWeave.Launcher.UI
                         aggregate.Begin(ev.ComponentId);
                         if (step != null)
                         {
-                            step.Text = TitleOf(ev.ComponentId) + " - " + UiText.StepRunning;
+                            step.Status = UiText.StepRunning;
+                            step.StatusColor = Theme.Gold;
                         }
 
                         current.Text = string.Empty;
@@ -390,7 +386,8 @@ namespace DreamWeave.Launcher.UI
                         aggregate.Complete(ev.ComponentId);
                         if (step != null)
                         {
-                            step.Text = TitleOf(ev.ComponentId) + " - " + (ev.Kind == InstallEventKind.StepDone ? UiText.StepDone : UiText.StepSkipped);
+                            step.Status = ev.Kind == InstallEventKind.StepDone ? UiText.StepDone : UiText.StepSkipped;
+                            step.StatusColor = Theme.Ok;
                         }
 
                         currentBar.Value = 1000;
@@ -449,9 +446,10 @@ namespace DreamWeave.Launcher.UI
 
                 int failed = components.ToList().FindIndex(c => c.Id == result.ComponentId);
                 startIndex = failed < 0 ? 0 : failed;
-                if (result.ComponentId != null && stepLabels.TryGetValue(result.ComponentId, out Label failedLabel))
+                if (result.ComponentId != null && stepLabels.TryGetValue(result.ComponentId, out StatusRow failedLabel))
                 {
-                    failedLabel.Text = TitleOf(result.ComponentId) + " - " + UiText.StepFailed;
+                    failedLabel.Status = UiText.StepFailed;
+                    failedLabel.StatusColor = Theme.Err;
                 }
 
                 errors.ShowError(result.Error, TelemetryStepFor(result.ComponentId), result.FileDetails, result.SourceTransport);
@@ -475,12 +473,28 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowDone()
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(UiText.DoneTitle));
-            UiKit.Add(stack, UiKit.Text(UiText.DoneBody));
+            Page stack = UiKit.NewScreen(ScreenArt.Welcome);
+            stack.Add(UiKit.Heading(UiText.DoneTitle));
+            stack.Add(UiKit.Text(UiText.DoneBody));
             string folder = _acFolder;
-            UiKit.Add(stack, UiKit.ButtonRow(UiKit.Button(UiText.Next, (s, e) => _finished(folder))));
+            stack.SetButtons(UiKit.Button(UiText.Next, (s, e) => _finished(folder), true));
             _window.ShowScreen(stack);
+        }
+
+        private static System.Drawing.Color StatusColor(ComponentRow r)
+        {
+            if (!r.Checked && r.RowStatus != RowStatus.Done)
+            {
+                return Theme.Muted;
+            }
+
+            switch (r.RowStatus)
+            {
+                case RowStatus.Done: return Theme.Ok;
+                case RowStatus.NeedsRepair:
+                case RowStatus.Unknown: return Theme.Err;
+                default: return Theme.Muted;
+            }
         }
 
         private static string TelemetryStepFor(string componentId)

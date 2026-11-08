@@ -80,6 +80,7 @@ namespace DreamWeave.Launcher.UI
             }
 
             _load = load;
+            _window.SetLinks(load.Manifest.Links?.Discord);
             try
             {
                 await _services.Telemetry.ConfigureAsync(load.Manifest);
@@ -118,18 +119,18 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowLoading()
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(LauncherInfo.ProductName));
-            UiKit.Add(stack, UiKit.Text(UiText.Loading));
-            UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Marquee));
+            Page stack = UiKit.NewScreen(ScreenArt.Launcher);
+            stack.Add(UiKit.Heading(LauncherInfo.ProductName));
+            stack.Add(UiKit.Text(UiText.Loading));
+            stack.Add(UiKit.Bar(ProgressBarStyle.Marquee));
             _window.ShowScreen(stack);
         }
 
         private void ShowLoadFailed(LauncherError code)
         {
-            TableLayoutPanel stack = UiKit.Stack();
-            UiKit.Add(stack, UiKit.Heading(LauncherInfo.ProductName));
-            var errors = UiKit.Add(stack, new ErrorPanel { ShowTryLater = true });
+            Page stack = UiKit.NewScreen(ScreenArt.Launcher);
+            stack.Add(UiKit.Heading(LauncherInfo.ProductName));
+            var errors = stack.Add(new ErrorPanel { ShowTryLater = true });
             errors.RetryClicked += (s, e) => StartAsync();
             errors.TryLaterClicked += (s, e) => _window.Close();
             errors.ShowError(code, TelemetrySteps.Manifest);
@@ -144,11 +145,11 @@ namespace DreamWeave.Launcher.UI
 
         private void ShowLauncher()
         {
-            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder)
+            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State))
             {
                 Update = _gate,
             };
-            _launcherScreen = new LauncherScreen(_presenter, _firstRun, _services.Manifests.Manifest?.Notice);
+            _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice);
             _launcherScreen.UpdateClicked += (s, e) => ApplyUpdate();
             _launcherScreen.SettingsClicked += (s, e) => ShowSettings();
             _window.ShowScreen(_launcherScreen);
