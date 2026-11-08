@@ -24,6 +24,7 @@ namespace DreamWeave.Launcher.Core
             StagingDir = Path.Combine(DataDir, "staging");
             StateFile = Path.Combine(DataDir, "state.json");
             ManifestCacheFile = Path.Combine(DataDir, "manifest.cache.json");
+            LogFile = Path.Combine(DataDir, "launcher.log");
             LegacyManifestCacheFile = Path.Combine(DataDir, "manifest.json");
             LegacyManifestSigCacheFile = Path.Combine(DataDir, "manifest.json.sig");
         }
@@ -54,6 +55,12 @@ namespace DreamWeave.Launcher.Core
         /// (<c>DataDir\manifest.cache.json</c>, holding both as base64) so the pair can never be torn.
         /// </summary>
         public string ManifestCacheFile { get; }
+
+        /// <summary>
+        /// Rolling download log (<c>DataDir\launcher.log</c>, plus at most one <c>launcher.log.1</c>). It sits
+        /// in <see cref="DataDir"/>, which uninstall deletes whole.
+        /// </summary>
+        public string LogFile { get; }
 
         /// <summary>Pre-release two-file cache location (manifest bytes). Never read; deleted after a successful cache write.</summary>
         internal string LegacyManifestCacheFile { get; }

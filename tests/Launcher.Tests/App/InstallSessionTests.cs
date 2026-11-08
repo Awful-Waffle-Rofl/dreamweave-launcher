@@ -138,7 +138,10 @@ namespace DreamWeave.Launcher.Tests.App
 
             public Task<DownloadResult> DownloadAsync(DownloadRequest request, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
             {
+                // What DownloadService reports: the primary starts, fails, and the alternate takes over.
+                request.OnSourceStarted?.Invoke(new SourceAttempt(0, new DownloadSource(request.Transport, request.Url, request.SourceLabel), null));
                 request.OnFallback?.Invoke(_label);
+                request.OnSourceStarted?.Invoke(new SourceAttempt(1, new DownloadSource(Transports.Http, new Uri("https://mirror.example.test/a.exe"), _label), new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.")));
                 if (_fail != LauncherError.None)
                 {
                     var ex = new LauncherException(_fail, "scripted");
@@ -161,9 +164,38 @@ namespace DreamWeave.Launcher.Tests.App
             var events = new Collector();
             InstallRunResult r = new InstallSession(_deps, m, _acFolder).RunAsync(m.Components, events, CancellationToken.None).GetAwaiter().GetResult();
             Assert.AreEqual(LauncherError.None, r.Error);
-            InstallEvent changed = events.All.Single(e => e.Kind == InstallEventKind.SourceChanged);
+            InstallEvent changed = events.All.Last(e => e.Kind == InstallEventKind.SourceChanged);
             Assert.AreEqual("ac-client", changed.ComponentId);
-            Assert.AreEqual("Trying another source: Original Turbine installer, from the Internet Archive", changed.Text);
+            Assert.AreEqual("Trying another source: Original Turbine installer, from the Internet Archive" + Environment.NewLine + "The previous source did not work: mega.nz stopped sending data.", changed.Text);
+        }
+
+        [TestMethod]
+        public void EveryDownload_ShowsItsPrimarySourceBeforeAnyFallback()
+        {
+            InstallClient(ClientBytes);
+            _deps.Downloads = new FallbackDownloader("Mirror");
+            ManifestComponent c = Installer();
+            c.SourceLabel = "Original Turbine installer (mega.nz)";
+            var m = AppFixtures.Manifest(c);
+            var events = new Collector();
+            new InstallSession(_deps, m, _acFolder).RunAsync(m.Components, events, CancellationToken.None).GetAwaiter().GetResult();
+            List<InstallEvent> sources = events.All.Where(e => e.Kind == InstallEventKind.SourceChanged).ToList();
+            Assert.AreEqual(2, sources.Count);
+            Assert.AreEqual("Downloading from: Original Turbine installer (mega.nz)", sources[0].Text);
+            StringAssert.StartsWith(sources[1].Text, "Trying another source: Mirror");
+        }
+
+        [TestMethod]
+        public void FallbackReason_IsPlainWords_ForDamagedQuotaAndUnusableSources()
+        {
+            ManifestComponent c = Installer();
+            var mirror = new DownloadSource(Transports.Http, new Uri("https://mirror.example.test/a.exe"), "Mirror");
+            string Reason(LauncherError code) => InstallSession.SourceText(c, new SourceAttempt(1, mirror, new LauncherException(code, "technical detail 123 bytes"))).Split(new[] { Environment.NewLine }, StringSplitOptions.None)[1];
+            Assert.AreEqual("The previous source did not work: the file it sent was damaged or incomplete.", Reason(LauncherError.HashMismatch));
+            Assert.AreEqual("The previous source did not work: the file it sent was damaged or incomplete.", Reason(LauncherError.SizeMismatch));
+            Assert.AreEqual("The previous source did not work: its free download limit has been reached for your connection.", Reason(LauncherError.SourceQuotaExceeded));
+            Assert.AreEqual("The previous source did not work: this launcher cannot use that source.", Reason(LauncherError.ManifestInvalid));
+            Assert.AreEqual("The previous source did not work: technical detail 123 bytes", Reason(LauncherError.NetworkUnavailable));
         }
 
         [TestMethod]
@@ -174,7 +206,7 @@ namespace DreamWeave.Launcher.Tests.App
             var m = AppFixtures.Manifest(Installer());
             var events = new Collector();
             new InstallSession(_deps, m, _acFolder).RunAsync(m.Components, events, CancellationToken.None).GetAwaiter().GetResult();
-            Assert.AreEqual("Trying another source: Asheron's Call client", events.All.Single(e => e.Kind == InstallEventKind.SourceChanged).Text);
+            StringAssert.StartsWith(events.All.Last(e => e.Kind == InstallEventKind.SourceChanged).Text, "Trying another source: Asheron's Call client" + Environment.NewLine);
         }
 
         [TestMethod]

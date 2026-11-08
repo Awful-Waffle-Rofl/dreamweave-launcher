@@ -16,4 +16,6 @@ Your account name and saved passwords stay on your PC, in Windows Credential Man
 
 Turning diagnostics off deletes any events that have not been sent yet; events already received are kept for up to 90 days, then deleted. You can change this at any time in Settings.
 
+The launcher also keeps a small download log on your PC (`%LOCALAPPDATA%\DreamWeave\launcher.log`) to help with "why was this slow or failing" questions. It lists which download source was tried and how it went, is never sent anywhere, holds no account name or password, and is removed when you uninstall.
+
 Questions: ask in the DreamWeave Discord.
