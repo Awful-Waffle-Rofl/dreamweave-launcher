@@ -311,6 +311,84 @@ namespace DreamWeave.Launcher.Tests.App
         private static string[] Started(Hooked e) => e.All.Where(x => x.Kind == InstallEventKind.StepStarted).Select(x => x.ComponentId).ToArray();
 
         [TestMethod]
+        public void WritableFolder_FullPlan_NeverRequestsElevation()
+        {
+            using (var rig = new Rig())
+            {
+                var requests = new ConcurrentQueue<PlacementRequest>();
+                rig.Deps.RunElevated = request =>
+                {
+                    requests.Enqueue(request);
+                    return LauncherError.Unknown;
+                };
+
+                InstallRunResult r = rig.Run(new Hooked(null));
+
+                Assert.AreEqual(LauncherError.None, r.Error, r.ComponentId);
+                Assert.AreEqual(0, requests.Count, "a writable game folder must never ask for administrator rights");
+                Assert.IsFalse(Directory.Exists(VerifiedPlacementRunner.ReadyFolder(rig.Deps.Paths, "eor-dats")));
+                Assert.IsFalse(Directory.Exists(VerifiedPlacementRunner.ReadyFolder(rig.Deps.Paths, "palette-leak-fix")));
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void UnwritableFolder_ReadyFolderIsKeptAfterAFailedPlacement_AndRemovedAfterASuccessfulOne()
+        {
+            using (var rig = new Rig())
+            {
+                // The client is already installed (stock dats); only the game data step runs.
+                File.WriteAllBytes(Path.Combine(rig.Ac, "acclient.exe"), Exe);
+                File.WriteAllBytes(rig.Dat, StockDat);
+                List<ManifestComponent> plan = rig.Manifest.Components.Where(c => c.Id == "eor-dats").ToList();
+                string ready = VerifiedPlacementRunner.ReadyFolder(rig.Deps.Paths, "eor-dats");
+                string reason;
+                DenyWrite deny = DenyWrite.TryApply(rig.Ac, out reason);
+                if (deny == null)
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                try
+                {
+                    var requests = new ConcurrentQueue<PlacementRequest>();
+                    rig.Deps.RunElevated = request =>
+                    {
+                        requests.Enqueue(request);
+                        return LauncherError.HashMismatch;
+                    };
+
+                    InstallRunResult failed = new InstallSession(rig.Deps, rig.Manifest, rig.Ac).RunAsync(plan, new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
+
+                    Assert.AreEqual(LauncherError.HashMismatch, failed.Error, failed.Error + " at " + failed.ComponentId + ": " + string.Join(" | ", failed.FileDetails));
+                    Assert.AreEqual(1, requests.Count);
+                    Assert.AreEqual("eor-dats", requests.Single().ComponentId);
+                    Assert.AreEqual(rig.Deps.Paths.Root, requests.Single().AppRoot);
+                    CollectionAssert.AreEqual(EorDat, File.ReadAllBytes(Path.Combine(ready, "client_portal.dat")), "the verified copy stays for the retry");
+
+                    // The retry's helper "places" the staged file (as the elevated process would) and succeeds.
+                    rig.Deps.RunElevated = request =>
+                    {
+                        deny.Dispose();
+                        deny = null;
+                        File.Copy(Path.Combine(request.ReadyFolder, "client_portal.dat"), rig.Dat, true);
+                        return LauncherError.None;
+                    };
+
+                    InstallRunResult ok = new InstallSession(rig.Deps, rig.Manifest, rig.Ac).RunAsync(plan, new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
+
+                    Assert.AreEqual(LauncherError.None, ok.Error, ok.ComponentId);
+                    CollectionAssert.AreEqual(EorDat, File.ReadAllBytes(rig.Dat));
+                    Assert.IsFalse(Directory.Exists(ready), "removed once the placement is borne out");
+                }
+                finally
+                {
+                    deny?.Dispose();
+                }
+            }
+        }
+
+        [TestMethod]
         public void FullSelectedPlan_RunsEveryStepInOrder_AndEndsSatisfied()
         {
             using (var rig = new Rig())

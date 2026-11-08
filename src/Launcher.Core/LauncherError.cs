@@ -101,7 +101,7 @@ namespace DreamWeave.Launcher.Core
         /// <summary>A byte patch produced bytes whose SHA-256 differs from the manifest's output hash; the target was not changed.</summary>
         PatchOutputMismatch = 84,
 
-        /// <summary>An elevated-copy task file is unreadable or names something the verified manifest does not allow.</summary>
+        /// <summary>A <c>--place-verified</c> request is malformed, or names or stages something the verified manifest does not allow.</summary>
         ElevatedTaskInvalid = 85,
 
         /// <summary>An unclassified failure.</summary>

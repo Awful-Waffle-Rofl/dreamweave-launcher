@@ -42,7 +42,7 @@ namespace DreamWeave.Launcher.App
             Locator = new AcInstallLocator(new RegistryReader(), AcFileSystem);
             Verifier = new FileVerifier(AcFileSystem, State);
             Evaluator = new ComponentEvaluator(Verifier);
-            Elevated = new ElevatedCopyRunner(Processes, runningExePath);
+            Elevated = new ElevatedPlacementRunner(Processes, runningExePath);
             FlushForShutdown = FlushTelemetry;
         }
 
@@ -76,7 +76,7 @@ namespace DreamWeave.Launcher.App
 
         public ComponentEvaluator Evaluator { get; }
 
-        public ElevatedCopyRunner Elevated { get; }
+        public ElevatedPlacementRunner Elevated { get; }
 
         /// <summary>Builds the services. Blocking (opens the state file): call it off any UI thread.</summary>
         /// <exception cref="LauncherException">When the state file cannot be opened (StateLocked, AccessDenied, ...).</exception>

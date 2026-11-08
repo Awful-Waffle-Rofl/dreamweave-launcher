@@ -1,60 +1,82 @@
 using System;
 using System.ComponentModel;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
+using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace DreamWeave.Launcher.Tests.App
 {
     [TestClass]
-    public class ElevatedCopyRunnerTests
+    public class ElevatedPlacementRunnerTests
     {
         private const string Exe = @"C:\Users\p\AppData\Local\Programs\DreamWeave Launcher\DreamWeaveLauncher.exe";
-        private const string Task = @"C:\Users\p\AppData\Local\DreamWeave\staging\elevated-task-1.json";
+        private static readonly PlacementRequest Request = new PlacementRequest(@"C:\Users\p\AppData\Local", @"C:\Turbine\Asheron's Call", "eor-dats");
 
         [TestMethod]
-        public void StartsSelfWithRunasAndQuotedTask_ThenCleansUp()
+        public void StartsSelfWithRunas_AndExactlyTheFixedPlacementCommand()
         {
             var processes = new FakeProcessLauncher { ExitCode = 0 };
-            int cleaned = 0;
-            LauncherError result = new ElevatedCopyRunner(processes, Exe).Run(Task, () => cleaned++);
+            LauncherError result = new ElevatedPlacementRunner(processes, Exe).Run(Request);
             Assert.AreEqual(LauncherError.None, result);
-            Assert.AreEqual(1, cleaned);
             Assert.AreEqual(1, processes.Ran.Count);
             Assert.AreEqual(Exe, processes.Ran[0].FileName);
             Assert.AreEqual("runas", processes.Ran[0].Verb);
             Assert.IsTrue(processes.Ran[0].UseShellExecute);
-            Assert.AreEqual("--elevated-copy \"" + Task + "\"", processes.Ran[0].Arguments);
+            Assert.AreEqual(@"--place-verified ""C:\Users\p\AppData\Local"" ""C:\Turbine\Asheron's Call"" eor-dats", processes.Ran[0].Arguments);
         }
 
         [TestMethod]
-        public void ExitCode_IsTheLauncherError_AndCleanUpStillRuns()
+        public void ExitCode_IsTheLauncherError()
         {
             var processes = new FakeProcessLauncher { ExitCode = (int)LauncherError.HashMismatch };
-            int cleaned = 0;
-            Assert.AreEqual(LauncherError.HashMismatch, new ElevatedCopyRunner(processes, Exe).Run(Task, () => cleaned++));
-            Assert.AreEqual(1, cleaned);
-            Assert.AreEqual(LauncherError.Unknown, ElevatedCopyRunner.ExitCodeToError(-5));
+            Assert.AreEqual(LauncherError.HashMismatch, new ElevatedPlacementRunner(processes, Exe).Run(Request));
+            Assert.AreEqual(LauncherError.Unknown, ElevatedPlacementRunner.ExitCodeToError(-5));
         }
 
         [TestMethod]
-        public void DeclinedUac_IsElevationDeclined_AndCleansUp()
+        public void DeclinedUac_IsElevationDeclined()
         {
             var processes = new FakeProcessLauncher { Throw = new Win32Exception(1223) };
-            int cleaned = 0;
-            Assert.AreEqual(LauncherError.ElevationDeclined, new ElevatedCopyRunner(processes, Exe).Run(Task, () => cleaned++));
-            Assert.AreEqual(1, cleaned);
+            Assert.AreEqual(LauncherError.ElevationDeclined, new ElevatedPlacementRunner(processes, Exe).Run(Request));
         }
 
         [TestMethod]
-        public void TaskPathWithQuote_IsRefusedWithoutStarting()
+        public void Run_NeverDeletesTheStagedFiles()
+        {
+            using (var dir = new TempDir())
+            {
+                var request = new PlacementRequest(dir.Path, @"C:\ac", "eor-dats");
+                Directory.CreateDirectory(request.ReadyFolder);
+                File.WriteAllBytes(Path.Combine(request.ReadyFolder, "a.dat"), new byte[] { 1 });
+                Assert.AreEqual(LauncherError.HashMismatch, new ElevatedPlacementRunner(new FakeProcessLauncher { ExitCode = (int)LauncherError.HashMismatch }, Exe).Run(request));
+                Assert.IsTrue(File.Exists(Path.Combine(request.ReadyFolder, "a.dat")), "kept after a failure so a retry can reuse it");
+            }
+        }
+
+        [TestMethod]
+        [DataRow(@"C:\a""b", @"C:\ac", "eor-dats")]
+        [DataRow(@"C:\a", "C:\\ac\nx", "eor-dats")]
+        [DataRow(@"C:\a", @"C:\ac", "EOR-DATS")]
+        [DataRow(@"C:\a", @"C:\ac", "eor-dats --evil")]
+        [DataRow(@"C:\a", @"C:\ac", "-x")]
+        [DataRow(" ", @"C:\ac", "eor-dats")]
+        public void MalformedRequest_IsRefusedWithoutStarting(string appRoot, string acFolder, string componentId)
         {
             var processes = new FakeProcessLauncher();
-            Assert.AreEqual(LauncherError.ElevatedTaskInvalid, new ElevatedCopyRunner(processes, Exe).Run("C:\\a\"b.json", null));
+            Assert.AreEqual(LauncherError.ElevatedTaskInvalid, new ElevatedPlacementRunner(processes, Exe).Run(new PlacementRequest(appRoot, acFolder, componentId)));
             Assert.AreEqual(0, processes.Ran.Count);
+        }
+
+        [TestMethod]
+        public void TrailingBackslash_IsDoubled_SoTheQuoteIsNotEscaped()
+        {
+            Assert.AreEqual(@"""D:\\""", ElevatedPlacementRunner.Quote(@"D:\"));
+            Assert.AreEqual(@"""C:\x""", ElevatedPlacementRunner.Quote(@"C:\x"));
         }
     }
 

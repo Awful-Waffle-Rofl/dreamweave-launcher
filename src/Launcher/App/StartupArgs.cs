@@ -10,8 +10,8 @@ namespace DreamWeave.Launcher.App
         /// <summary>No switch: the normal interactive launcher.</summary>
         Normal = 0,
 
-        /// <summary><c>--elevated-copy &lt;task&gt;</c>: the elevated helper. No UI.</summary>
-        ElevatedCopy = 1,
+        /// <summary><c>--place-verified "&lt;appRoot&gt;" "&lt;acFolder&gt;" &lt;componentId&gt;</c>: the elevated helper. No UI.</summary>
+        PlaceVerified = 1,
 
         /// <summary>
         /// <c>--cleanup [--silent]</c>: remove saved passwords and launcher data (and, if asked, the AC client).
@@ -22,15 +22,15 @@ namespace DreamWeave.Launcher.App
         /// <summary><c>--updated</c>: a freshly swapped-in launcher; finish the update, then start normally.</summary>
         Updated = 3,
 
-        /// <summary>A switch this launcher does not know, or <c>--elevated-copy</c> without its task path.</summary>
+        /// <summary>A switch this launcher does not know (the retired <c>--elevated-copy</c> included), or <c>--place-verified</c> without exactly its three arguments.</summary>
         Invalid = 4,
     }
 
     /// <summary>Parsed command line.</summary>
     internal sealed class StartupArgs
     {
-        /// <summary>Switch that runs the elevated copy helper.</summary>
-        public const string ElevatedCopySwitch = "--elevated-copy";
+        /// <summary>Switch that runs the elevated verified-placement helper.</summary>
+        public const string PlaceVerifiedSwitch = "--place-verified";
 
         /// <summary>
         /// Extra argument of <c>--cleanup</c> when the launcher's own Settings started it: the
@@ -44,10 +44,12 @@ namespace DreamWeave.Launcher.App
         /// <summary>How long <c>--cleanup --silent</c> waits for the previous launcher to release the single-instance mutex.</summary>
         public static readonly TimeSpan SilentWait = TimeSpan.FromSeconds(15);
 
-        private StartupArgs(StartupMode mode, string taskPath, bool handover = false, bool silent = false)
+        private StartupArgs(StartupMode mode, string[] placement, bool handover = false, bool silent = false)
         {
             Mode = mode;
-            TaskPath = taskPath;
+            AppRoot = placement?[0];
+            AcFolder = placement?[1];
+            ComponentId = placement?[2];
             IsHandover = handover;
             IsSilent = silent;
         }
@@ -71,8 +73,14 @@ namespace DreamWeave.Launcher.App
         /// <summary>The selected mode.</summary>
         public StartupMode Mode { get; }
 
-        /// <summary><see cref="StartupMode.ElevatedCopy"/> only: the task file path.</summary>
-        public string TaskPath { get; }
+        /// <summary><see cref="StartupMode.PlaceVerified"/> only: the launcher data root.</summary>
+        public string AppRoot { get; }
+
+        /// <summary><see cref="StartupMode.PlaceVerified"/> only: the game folder.</summary>
+        public string AcFolder { get; }
+
+        /// <summary><see cref="StartupMode.PlaceVerified"/> only: the component id.</summary>
+        public string ComponentId { get; }
 
         /// <summary>
         /// Whether this mode takes the single-instance mutex. The elevated helper never does (its parent
@@ -93,10 +101,10 @@ namespace DreamWeave.Launcher.App
             }
 
             string first = args[0];
-            if (string.Equals(first, ElevatedCopySwitch, StringComparison.Ordinal))
+            if (string.Equals(first, PlaceVerifiedSwitch, StringComparison.Ordinal))
             {
-                return args.Length >= 2 && !string.IsNullOrWhiteSpace(args[1])
-                    ? new StartupArgs(StartupMode.ElevatedCopy, args[1])
+                return args.Length == 4 && !string.IsNullOrWhiteSpace(args[1]) && !string.IsNullOrWhiteSpace(args[2]) && !string.IsNullOrWhiteSpace(args[3])
+                    ? new StartupArgs(StartupMode.PlaceVerified, new[] { args[1], args[2], args[3] })
                     : new StartupArgs(StartupMode.Invalid, null);
             }
 

@@ -5,7 +5,6 @@ using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Newtonsoft.Json.Linq;
 
 namespace DreamWeave.Launcher.Tests.Install
 {
@@ -289,8 +288,9 @@ namespace DreamWeave.Launcher.Tests.Install
                     }
 
                     ZipOverlayResult r = f.Run();
-                    string expectedParent = DreamWeave.Launcher.Core.Downloads.DownloadRequest.ComponentFolder(f.Paths.StagingDir, "eor-dats");
-                    Assert.AreEqual(expectedParent, Path.GetDirectoryName(r.StagingFolder));
+                    string expected = Path.Combine(DreamWeave.Launcher.Core.Downloads.DownloadRequest.ComponentFolder(f.Paths.StagingDir, "eor-dats"), "ready");
+                    Assert.AreEqual(expected, r.Placement.ReadyFolder);
+                    Assert.AreEqual(expected, VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats"));
                     r.CleanUp();
                 }
             }
@@ -403,41 +403,211 @@ namespace DreamWeave.Launcher.Tests.Install
             }
         }
 
+        private ZipOverlayResult RunDenied(Fixture f)
+        {
+            string reason;
+            using (DenyWrite deny = DenyWrite.TryApply(f.Ac, out reason))
+            {
+                if (deny == null)
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                return f.Run();
+            }
+        }
+
+        private static string ReadyFile(Fixture f, string rel) => Path.Combine(VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats"), rel);
+
         [TestMethod]
-        public void UnwritableFolder_ReturnsElevationTask_WithoutHashes()
+        public void UnwritableFolder_StagesVerifiedFilesAtTheFixedPath_AndAsksForPlacement()
         {
             using (var f = new Fixture())
             {
                 File.WriteAllBytes(f.Target("a.dat"), OldA);
                 InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
-                ZipOverlayResult r;
-                string reason;
-                using (DenyWrite deny = DenyWrite.TryApply(f.Ac, out reason))
-                {
-                    if (deny == null)
-                    {
-                        Assert.Inconclusive(reason);
-                    }
 
-                    r = f.Run();
-                }
+                ZipOverlayResult r = RunDenied(f);
 
                 Assert.AreEqual(InstallOutcome.ElevationRequired, r.Outcome);
-                CollectionAssert.AreEqual(OldA, File.ReadAllBytes(f.Target("a.dat")));
-                Assert.IsTrue(File.Exists(r.TaskPath));
-                string json = File.ReadAllText(r.TaskPath);
-                Assert.IsFalse(json.Contains(InstallData.Hash(A)) || json.Contains(InstallData.Hash(B)), "the task must carry no hashes");
-                JObject task = JObject.Parse(json);
-                Assert.AreEqual(ElevatedTask.CurrentFormat, (string)task["format"]);
-                Assert.AreEqual(2, task["items"][0]["files"].Count());
-                foreach (ElevatedTaskFile tf in r.Task.Items[0].Files)
-                {
-                    Assert.IsTrue(File.Exists(tf.Staged), "staged copies must survive the hand-off");
-                }
+                CollectionAssert.AreEqual(OldA, File.ReadAllBytes(f.Target("a.dat")), "nothing in the game folder may change before the placement");
+                Assert.AreEqual(f.Paths.Root, r.Placement.AppRoot);
+                Assert.AreEqual(f.Ac, r.Placement.AcFolder);
+                Assert.AreEqual("eor-dats", r.Placement.ComponentId);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(ReadyFile(f, "a.dat")));
+                CollectionAssert.AreEqual(B, File.ReadAllBytes(ReadyFile(f, "b.dat")));
+                CollectionAssert.AreEquivalent(new[] { ReadyFile(f, "a.dat"), ReadyFile(f, "b.dat") }, Directory.GetFiles(r.Placement.ReadyFolder, "*", SearchOption.AllDirectories), "exactly the files to write, and no task file anywhere");
+                Assert.AreEqual(0, Directory.GetFiles(f.Paths.StagingDir, "*.json", SearchOption.AllDirectories).Length, "there is no task file any more");
 
                 r.CleanUp();
-                Assert.IsFalse(File.Exists(r.TaskPath));
-                Assert.IsFalse(Directory.Exists(r.StagingFolder));
+                Assert.IsFalse(Directory.Exists(r.Placement.ReadyFolder));
+            }
+        }
+
+        [TestMethod]
+        public void UnwritableFolder_StagesOnlyFilesThatNeedWriting_AndDropsStaleOnes()
+        {
+            using (var f = new Fixture())
+            {
+                File.WriteAllBytes(f.Target("a.dat"), A);
+                Directory.CreateDirectory(Path.GetDirectoryName(ReadyFile(f, "a.dat")));
+                File.WriteAllBytes(ReadyFile(f, "a.dat"), A);
+                File.WriteAllBytes(ReadyFile(f, "left-over.dll"), A);
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+
+                ZipOverlayResult r = RunDenied(f);
+
+                Assert.AreEqual(InstallOutcome.ElevationRequired, r.Outcome);
+                CollectionAssert.AreEqual(new[] { ReadyFile(f, "b.dat") }, Directory.GetFiles(r.Placement.ReadyFolder, "*", SearchOption.AllDirectories));
+            }
+        }
+
+        [TestMethod]
+        public void RetryAfterAFailedPlacement_ReusesVerifiedReadyFiles_AndReplacesBadOnes()
+        {
+            using (var f = new Fixture())
+            {
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+                ZipOverlayResult first = RunDenied(f);
+                Assert.AreEqual(InstallOutcome.ElevationRequired, first.Outcome);
+
+                // The placement failed: the caller keeps the ready folder. One copy still verifies, one was damaged.
+                var stamp = new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+                File.SetLastWriteTimeUtc(ReadyFile(f, "a.dat"), stamp);
+                byte[] badB = (byte[])B.Clone();
+                badB[1] ^= 0x01;
+                File.WriteAllBytes(ReadyFile(f, "b.dat"), badB);
+
+                ZipOverlayResult second = RunDenied(f);
+
+                Assert.AreEqual(InstallOutcome.ElevationRequired, second.Outcome);
+                Assert.AreEqual(stamp, File.GetLastWriteTimeUtc(ReadyFile(f, "a.dat")), "a verified copy is reused, not extracted again");
+                CollectionAssert.AreEqual(B, File.ReadAllBytes(ReadyFile(f, "b.dat")), "a damaged copy is extracted again");
+            }
+        }
+
+        [TestMethod]
+        public void LeftOverJunctionInReady_IsRemoved_NeverFollowed()
+        {
+            using (var f = new Fixture())
+            {
+                string outside = Path.Combine(f.Root, "outside");
+                Directory.CreateDirectory(outside);
+                File.WriteAllBytes(Path.Combine(outside, "precious.txt"), A);
+                string ready = VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats");
+                Directory.CreateDirectory(ready);
+                string reason;
+                if (!InstallData.TryMakeJunction(Path.Combine(ready, "sub"), outside, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+
+                ZipOverlayResult r = RunDenied(f);
+
+                Assert.AreEqual(InstallOutcome.ElevationRequired, r.Outcome);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(Path.Combine(outside, "precious.txt")), "tidying must never reach through a link");
+                Assert.IsFalse(Directory.Exists(Path.Combine(ready, "sub")), "the link itself is removed");
+                CollectionAssert.AreEquivalent(new[] { ReadyFile(f, "a.dat"), ReadyFile(f, "b.dat") }, Directory.GetFiles(ready, "*", SearchOption.AllDirectories));
+            }
+        }
+
+        [TestMethod]
+        public void RemoveUnlisted_WithAJunctionInsideReady_NeverFollowsIt()
+        {
+            using (var f = new Fixture())
+            {
+                string outside = Path.Combine(f.Root, "outside");
+                Directory.CreateDirectory(outside);
+                File.WriteAllBytes(Path.Combine(outside, "precious.txt"), A);
+                string ready = VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats");
+                Directory.CreateDirectory(ready);
+                File.WriteAllBytes(Path.Combine(ready, "a.dat"), A);
+                File.WriteAllBytes(Path.Combine(ready, "stale.bin"), A);
+                string reason;
+                if (!InstallData.TryMakeJunction(Path.Combine(ready, "sub"), outside, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                ZipOverlayInstaller.RemoveUnlisted(ready, new System.Collections.Generic.List<ManifestFile> { InstallData.File("a.dat", A) });
+
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(Path.Combine(outside, "precious.txt")), "the junction's target must survive");
+                Assert.IsFalse(Directory.Exists(Path.Combine(ready, "sub")), "the link itself is removed");
+                CollectionAssert.AreEqual(new[] { Path.Combine(ready, "a.dat") }, Directory.GetFiles(ready, "*", SearchOption.AllDirectories));
+            }
+        }
+
+        [TestMethod]
+        public void CleanUp_WithAJunctionInsideReady_RemovesEverything_TargetSurvives()
+        {
+            using (var f = new Fixture())
+            {
+                string outside = Path.Combine(f.Root, "outside");
+                Directory.CreateDirectory(outside);
+                File.WriteAllBytes(Path.Combine(outside, "precious.txt"), A);
+                var request = new PlacementRequest(f.Paths.Root, f.Ac, "eor-dats");
+                Directory.CreateDirectory(request.ReadyFolder);
+                File.WriteAllBytes(Path.Combine(request.ReadyFolder, "a.dat"), A);
+                string reason;
+                if (!InstallData.TryMakeJunction(Path.Combine(request.ReadyFolder, "sub"), outside, out reason))
+                {
+                    Assert.Inconclusive(reason);
+                }
+
+                request.CleanUp();
+
+                Assert.IsFalse(Directory.Exists(request.ReadyFolder), "nothing may be left orphaned");
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(Path.Combine(outside, "precious.txt")));
+            }
+        }
+
+        [TestMethod]
+        public void NothingToDo_RemovesAStaleReadyFolder()
+        {
+            using (var f = new Fixture())
+            {
+                File.WriteAllBytes(f.Target("a.dat"), A);
+                File.WriteAllBytes(f.Target("b.dat"), B);
+                Directory.CreateDirectory(Path.GetDirectoryName(ReadyFile(f, "a.dat")));
+                File.WriteAllBytes(ReadyFile(f, "a.dat"), A);
+
+                ZipOverlayResult r = f.Run();
+
+                Assert.AreEqual(InstallOutcome.NothingToDo, r.Outcome);
+                Assert.IsFalse(Directory.Exists(VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats")), "a left-over ready folder must not outlive a finished step");
+            }
+        }
+
+        [TestMethod]
+        public void UnwritableFolder_UnplaceableId_IsRefusedBeforeExtraction()
+        {
+            using (var f = new Fixture())
+            {
+                // No archive exists: only a refusal BEFORE extraction can report the id.
+                f.Component = InstallData.Overlay("EOR-Dats", InstallData.File("a.dat", A));
+                f.Manifest = InstallData.Manifest(f.Component);
+
+                var ex = Assert.ThrowsExactly<LauncherException>(() => RunDenied(f));
+
+                Assert.AreEqual(LauncherError.ElevatedTaskInvalid, ex.Code, ex.Detail);
+                Assert.IsTrue(f.StagingEmpty());
+            }
+        }
+
+        [TestMethod]
+        public void WritableFolder_InstallsDirectly_NeverAsksForPlacement_AndRemovesTheReadyFolder()
+        {
+            using (var f = new Fixture())
+            {
+                InstallData.Zip(f.Zip, InstallData.Entry("a.dat", A), InstallData.Entry("b.dat", B));
+
+                ZipOverlayResult r = f.Run();
+
+                Assert.AreEqual(InstallOutcome.Completed, r.Outcome);
+                Assert.IsNull(r.Placement);
+                Assert.IsFalse(Directory.Exists(VerifiedPlacementRunner.ReadyFolder(f.Paths, "eor-dats")));
             }
         }
 

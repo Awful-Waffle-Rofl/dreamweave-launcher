@@ -124,6 +124,60 @@ namespace DreamWeave.Launcher.Tests.Install
     }
 
     /// <summary>
+    /// Turns an existing folder into a junction IN PLACE (FSCTL_SET_REPARSE_POINT on the folder
+    /// itself, no rename). Windows allows this only on an empty folder.
+    /// </summary>
+    internal static class InPlaceJunction
+    {
+        private const uint GenericWrite = 0x40000000;
+        private const uint ShareAll = 0x7;
+        private const uint OpenExisting = 3;
+        private const uint BackupSemantics = 0x02000000;
+        private const uint OpenReparsePoint = 0x00200000;
+        private const uint FsctlSetReparsePoint = 0x000900A4;
+        private const uint MountPointTag = 0xA0000003;
+
+        /// <summary>0 on success, otherwise the Win32 error of the open or the conversion.</summary>
+        public static int TryConvert(string folder, string target)
+        {
+            string substitute = @"\??\" + Path.GetFullPath(target);
+            string print = Path.GetFullPath(target);
+            byte[] sub = Encoding.Unicode.GetBytes(substitute);
+            byte[] prn = Encoding.Unicode.GetBytes(print);
+            int pathBytes = sub.Length + 2 + prn.Length + 2;
+            int dataLength = 8 + pathBytes;
+            var buffer = new byte[8 + dataLength];
+            BitConverter.GetBytes(MountPointTag).CopyTo(buffer, 0);
+            BitConverter.GetBytes((ushort)dataLength).CopyTo(buffer, 4);
+            BitConverter.GetBytes((ushort)0).CopyTo(buffer, 8);
+            BitConverter.GetBytes((ushort)sub.Length).CopyTo(buffer, 10);
+            BitConverter.GetBytes((ushort)(sub.Length + 2)).CopyTo(buffer, 12);
+            BitConverter.GetBytes((ushort)prn.Length).CopyTo(buffer, 14);
+            sub.CopyTo(buffer, 16);
+            prn.CopyTo(buffer, 16 + sub.Length + 2);
+
+            using (Microsoft.Win32.SafeHandles.SafeFileHandle h = CreateFile(folder, GenericWrite, ShareAll, IntPtr.Zero, OpenExisting, BackupSemantics | OpenReparsePoint, IntPtr.Zero))
+            {
+                if (h.IsInvalid)
+                {
+                    return System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                }
+
+                uint returned;
+                return DeviceIoControl(h, FsctlSetReparsePoint, buffer, (uint)buffer.Length, IntPtr.Zero, 0, out returned, IntPtr.Zero)
+                    ? 0
+                    : System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+        private static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string lpFileName, uint dwDesiredAccess, uint dwShareMode, IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool DeviceIoControl(Microsoft.Win32.SafeHandles.SafeFileHandle hDevice, uint dwIoControlCode, byte[] lpInBuffer, uint nInBufferSize, IntPtr lpOutBuffer, uint nOutBufferSize, out uint lpBytesReturned, IntPtr lpOverlapped);
+    }
+
+    /// <summary>
     /// A COPY of %WINDIR%\System32\ping.exe running <c>-t 127.0.0.1</c> from a temp folder: a real
     /// running executable whose image is mapped. Dispose kills only that process.
     /// </summary>
