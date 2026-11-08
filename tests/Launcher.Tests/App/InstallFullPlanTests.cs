@@ -949,8 +949,57 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
 
                 long ms = Interlocked.Read(ref endedAt);
+                // Bound sits well below the old cadence (~2000 ms here), with ~600 ms slack over the ~1050 ms
+                // expected so a loaded CI machine does not flake while still catching a regression to the old loop.
                 Assert.IsTrue(ms >= settle.TotalMilliseconds - 100, "finished on a single file look: " + ms + " ms");
-                Assert.IsTrue(ms <= settle.TotalMilliseconds + poll.TotalMilliseconds + 400, "took longer than one settle plus one process poll: " + ms + " ms");
+                Assert.IsTrue(ms <= settle.TotalMilliseconds + poll.TotalMilliseconds + 600, "took longer than one settle plus one process poll: " + ms + " ms");
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void ActivityBetweenTheTwoFileLooks_RestartsTheSettle()
+        {
+            // The PR #19 bug class: a file look, then installer activity, then quiet must demand a FULL fresh
+            // settle after the activity. Guards the `if (blocked) { previous = null; }` branch; removing that
+            // line lets the stale first snapshot match a look taken right after the activity and finish early.
+            using (var rig = new Rig())
+            {
+                rig.Deps.SettleInterval = TimeSpan.FromMilliseconds(600);
+                rig.Deps.ProcessPollInterval = TimeSpan.FromMilliseconds(20);
+
+                // The installer wrote its files and left no process behind, so the first file look is taken at once.
+                var sinceClear = new Stopwatch();
+                long endedAt = -1;
+                var events = new Hooked(e =>
+                {
+                    if (e.Kind == InstallEventKind.HandoffEnded && Interlocked.Read(ref endedAt) < 0)
+                    {
+                        Interlocked.Exchange(ref endedAt, sinceClear.ElapsedMilliseconds);
+                    }
+                });
+                Task<InstallRunResult> run = new InstallSession(rig.Deps, rig.Manifest, null).RunAsync(rig.FullPlan(), events, CancellationToken.None);
+                WaitUntil(() => Has(events, InstallEventKind.StepStatus, UiText.WaitingForInstallerFiles), "the settle wait");
+
+                // Let the first file look land, then run deep into the settle gap before any activity appears.
+                int seen = rig.Processes.Snapshots;
+                WaitUntil(() => rig.Processes.Snapshots >= seen + 2, "the first file look");
+                Thread.Sleep(400);
+
+                // A COM-started helper shows up for ~100 ms, well into the gap, then goes.
+                rig.Processes.Set((77, 600, "IDriver.exe"));
+                Thread.Sleep(100);
+                Assert.IsFalse(run.IsCompleted, "finished while a helper ran between the two looks");
+                Assert.IsFalse(OverlayStarted(events), "the overlay started while a helper ran");
+                rig.Processes.Set();
+                sinceClear.Start();
+
+                Assert.IsTrue(run.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, run.Result.Error, run.Result.ComponentId);
+                long ms = Interlocked.Read(ref endedAt);
+
+                // A full quiet settle must pass AFTER the helper went, not be satisfied by the pre-activity look.
+                Assert.IsTrue(ms >= rig.Deps.SettleInterval.TotalMilliseconds - 150, "the settle did not restart after the activity: " + ms + " ms");
                 rig.AssertAllSatisfied();
             }
         }

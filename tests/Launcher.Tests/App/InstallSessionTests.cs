@@ -251,6 +251,18 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void ShippedInstallDependencies_HaveTheExpectedFinishWaitDefaults()
+        {
+            // Every other test overrides these, so the values the player actually gets are pinned only here.
+            var deps = new InstallDependencies();
+            Assert.AreEqual(TimeSpan.FromSeconds(2), deps.SettleInterval, "SettleInterval");
+            Assert.AreEqual(TimeSpan.FromMilliseconds(500), deps.ProcessPollInterval, "ProcessPollInterval");
+            Assert.AreEqual(TimeSpan.FromSeconds(10), deps.ClosedEarlyWindow, "ClosedEarlyWindow");
+            Assert.AreEqual(TimeSpan.FromSeconds(2), deps.PollInterval, "PollInterval (detection poll)");
+            Assert.AreEqual(TimeSpan.FromMinutes(5), deps.SettleTimeout, "SettleTimeout");
+        }
+
+        [TestMethod]
         public void InstallerExplanation_IsRaisedBeforeTheLaunchCall_AndStaysUpWhileItBlocks()
         {
             var m = AppFixtures.Manifest(Installer());

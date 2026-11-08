@@ -680,15 +680,17 @@ namespace DreamWeave.Launcher.App
                     sincePrevious.Restart();
                 }
 
+                // A file look happened only when one was due and nothing of the installer blocked it.
+                bool filesLooked = filesDue && !blocked;
                 if (poked)
                 {
-                    _deps.InstallLog("installer-handoff component=" + installer.Id + " I finished refused: " + BlockerText(watch, snapshot));
+                    _deps.InstallLog("installer-handoff component=" + installer.Id + " I finished refused: " + BlockerText(watch, snapshot, filesLooked));
                     events.Report(new InstallEvent(InstallEventKind.HandoffNotDetected, installer.Id, text: StillRunningText(watch)));
                 }
                 else if (!warned && clock.Elapsed >= _deps.SettleTimeout)
                 {
                     warned = true;
-                    _deps.InstallLog("installer-handoff component=" + installer.Id + " settle timeout: " + BlockerText(watch, snapshot));
+                    _deps.InstallLog("installer-handoff component=" + installer.Id + " settle timeout: " + BlockerText(watch, snapshot, filesLooked));
                     events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: StillRunningText(watch)));
                 }
 
@@ -767,7 +769,7 @@ namespace DreamWeave.Launcher.App
             return UiText.InstallerStillRunning + " " + string.Format(System.Globalization.CultureInfo.InvariantCulture, UiText.StillRunningFormat, string.Join(", ", names));
         }
 
-        private static string BlockerText(InstallerProcessWatch watch, string snapshot)
+        private static string BlockerText(InstallerProcessWatch watch, string snapshot, bool filesLooked)
         {
             List<string> names = BlockingNames(watch);
             if (names.Count > 0)
@@ -778,6 +780,13 @@ namespace DreamWeave.Launcher.App
             if (watch.LastReason.Length > 0)
             {
                 return watch.LastReason;
+            }
+
+            // Most polls take no file look now (the files are only looked at once a settle gap is due), so an
+            // empty process list with no look is the installer gone and the files mid-settle, not a locked file.
+            if (!filesLooked)
+            {
+                return "game files still settling";
             }
 
             return snapshot == null ? "a game file is still in use" : "game files still changing";
