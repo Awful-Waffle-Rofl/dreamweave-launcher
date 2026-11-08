@@ -303,12 +303,17 @@ namespace DreamWeave.Launcher.UI
             var totalBar = stack.Add(UiKit.Bar(ProgressBarStyle.Blocks, 1000));
 
             var handoff = new TintedBox { Visible = false };
-            handoff.Controls.Add(UiKit.Text(UiText.InstallerHandoff));
+            Label handoffText = UiKit.Text(UiText.InstallerHandoff);
+            handoff.Controls.Add(handoffText);
+
+            // What Cancel means while the installer is open: shown from before the launch call to the end.
+            handoff.Controls.Add(UiKit.Text(UiText.HandoffCancelNote));
             Label notDetected = UiKit.Text(string.Empty);
             notDetected.ForeColor = Theme.Err;
             handoff.Controls.Add(notDetected);
             Button finished = UiKit.Button(UiText.IFinished, null, true);
-            handoff.Controls.Add(UiKit.ButtonRow(finished));
+            Control finishedRow = UiKit.ButtonRow(finished);
+            handoff.Controls.Add(finishedRow);
             stack.Add(handoff);
 
             var errors = stack.Add(new ErrorPanel { ShowTryLater = true });
@@ -415,7 +420,18 @@ namespace DreamWeave.Launcher.UI
 
                         currentBar.Value = 1000;
                         break;
+                    case InstallEventKind.HandoffStarting:
+                        // Before the launch call: the installer (or the Windows permission prompt) is on its way.
+                        // "I finished" stays hidden until the installer has actually been started.
+                        handoffText.Text = ev.Text ?? UiText.InstallerStarting;
+                        finishedRow.Visible = false;
+                        notDetected.Text = string.Empty;
+                        handoff.Visible = true;
+                        totalBar.Style = ProgressBarStyle.Marquee;
+                        break;
                     case InstallEventKind.HandoffStarted:
+                        handoffText.Text = UiText.InstallerHandoff;
+                        finishedRow.Visible = true;
                         notDetected.Text = string.Empty;
                         handoff.Visible = true;
 

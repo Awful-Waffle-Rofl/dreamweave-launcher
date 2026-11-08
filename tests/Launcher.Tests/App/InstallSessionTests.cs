@@ -61,6 +61,8 @@ namespace DreamWeave.Launcher.Tests.App
                 Processes = new FakeProcessTable(),
                 PollInterval = TimeSpan.FromMilliseconds(20),
                 SettleInterval = TimeSpan.FromMilliseconds(5),
+                ProcessPollInterval = TimeSpan.FromMilliseconds(5),
+                ClosedEarlyWindow = TimeSpan.FromMilliseconds(5),
                 VerifyRetryDelay = TimeSpan.Zero,
             };
         }
@@ -249,6 +251,68 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
+        public void ShippedInstallDependencies_HaveTheExpectedFinishWaitDefaults()
+        {
+            // Every other test overrides these, so the values the player actually gets are pinned only here.
+            var deps = new InstallDependencies();
+            Assert.AreEqual(TimeSpan.FromSeconds(2), deps.SettleInterval, "SettleInterval");
+            Assert.AreEqual(TimeSpan.FromMilliseconds(500), deps.ProcessPollInterval, "ProcessPollInterval");
+            Assert.AreEqual(TimeSpan.FromSeconds(10), deps.ClosedEarlyWindow, "ClosedEarlyWindow");
+            Assert.AreEqual(TimeSpan.FromSeconds(2), deps.PollInterval, "PollInterval (detection poll)");
+            Assert.AreEqual(TimeSpan.FromMinutes(5), deps.SettleTimeout, "SettleTimeout");
+        }
+
+        [TestMethod]
+        public void InstallerExplanation_IsRaisedBeforeTheLaunchCall_AndStaysUpWhileItBlocks()
+        {
+            var m = AppFixtures.Manifest(Installer());
+            var session = new InstallSession(_deps, m, null);
+            var events = new Collector();
+            InstallEventKind[] seenAtLaunch = null;
+            using (var release = new ManualResetEventSlim(false))
+            {
+                // The launch call blocks, as ShellExecute does while the Windows permission prompt is open.
+                _starter.OnStart = () =>
+                {
+                    seenAtLaunch = events.All.Select(e => e.Kind).ToArray();
+                    release.Wait(TimeSpan.FromSeconds(15));
+                };
+                Task<InstallRunResult> run = session.RunAsync(m.Components, events, CancellationToken.None);
+                WaitFor(() => Volatile.Read(ref seenAtLaunch) != null).GetAwaiter().GetResult();
+
+                CollectionAssert.Contains(seenAtLaunch, InstallEventKind.HandoffStarting, "the explanation must be raised before the launch call");
+                CollectionAssert.DoesNotContain(seenAtLaunch, InstallEventKind.HandoffStarted, "I finished belongs after the launch");
+                Assert.AreEqual(UiText.InstallerStarting, events.All.Single(e => e.Kind == InstallEventKind.HandoffStarting).Text);
+                Thread.Sleep(100);
+                Assert.IsFalse(events.Has(InstallEventKind.HandoffEnded), "the explanation must stay up while the launch call blocks");
+                Assert.AreEqual(InstallPhase.Stoppable, session.Phase, "Cancel stays available while the launch call blocks");
+
+                release.Set();
+                WaitFor(() => events.Has(InstallEventKind.HandoffStarted)).GetAwaiter().GetResult();
+                InstallClient(ClientBytes);
+                Assert.AreEqual(LauncherError.None, run.GetAwaiter().GetResult().Error);
+            }
+
+            List<InstallEventKind> kinds = events.All.Select(e => e.Kind).ToList();
+            int starting = kinds.IndexOf(InstallEventKind.HandoffStarting);
+            Assert.IsTrue(starting < kinds.IndexOf(InstallEventKind.HandoffStarted) && kinds.IndexOf(InstallEventKind.HandoffStarted) < kinds.IndexOf(InstallEventKind.HandoffEnded));
+            Assert.IsTrue(starting < kinds.IndexOf(InstallEventKind.StepStatus), "the explanation goes up before the integrity check too");
+        }
+
+        [TestMethod]
+        public void LaunchDeclined_TakesTheExplanationDown()
+        {
+            _starter.OnStart = () => throw new System.ComponentModel.Win32Exception(InstallerRunner.ErrorCancelled);
+            var m = AppFixtures.Manifest(Installer());
+            var events = new Collector();
+            InstallRunResult r = new InstallSession(_deps, m, null).RunAsync(m.Components, events, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.AreEqual(LauncherError.ElevationDeclined, r.Error);
+            List<InstallEventKind> kinds = events.All.Select(e => e.Kind).ToList();
+            Assert.IsTrue(kinds.IndexOf(InstallEventKind.HandoffStarting) >= 0 && kinds.IndexOf(InstallEventKind.HandoffStarting) < kinds.IndexOf(InstallEventKind.HandoffEnded), "a failed launch must take the explanation down");
+            Assert.IsFalse(kinds.Contains(InstallEventKind.HandoffStarted));
+        }
+
+        [TestMethod]
         public void IFinished_ChecksAtOnce()
         {
             _deps.PollInterval = TimeSpan.FromMinutes(5);
@@ -427,9 +491,13 @@ namespace DreamWeave.Launcher.Tests.App
         {
             public ConcurrentQueue<ProcessStartInfo> Starts { get; } = new ConcurrentQueue<ProcessStartInfo>();
 
+            /// <summary>Runs inside the launch call, after it is recorded (may block, as a permission prompt does, or throw).</summary>
+            public Action OnStart { get; set; }
+
             public IStartedProcess Start(ProcessStartInfo startInfo)
             {
                 Starts.Enqueue(startInfo);
+                OnStart?.Invoke();
                 return new ExitedProcess();
             }
 

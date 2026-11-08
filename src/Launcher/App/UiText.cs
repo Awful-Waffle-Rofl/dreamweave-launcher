@@ -115,6 +115,8 @@ namespace DreamWeave.Launcher.App
         public const string WaitingForInstallerFiles = "Waiting for the Asheron's Call installer to finish copying files...";
         public const string Installing = "Installing...";
         public const string AskingPermission = "Windows will ask for permission to write to the game folder.";
+        public const string InstallerStarting = "The Asheron's Call installer is starting. If Windows asks for permission, click Yes. The installer can take a few seconds to appear."; // DRAFT
+        public const string HandoffCancelNote = "Finish the installer in its own window; this launcher continues by itself afterwards. Do not click Cancel here: it only stops this launcher waiting, and the installer keeps running."; // DRAFT
         public const string HandoffNotDetected = "The install has not been detected yet. Finish the installer, then click \"I finished\" again.";
 
         public const string StepDownloading = "Downloading";
