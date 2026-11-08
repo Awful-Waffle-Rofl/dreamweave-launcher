@@ -204,6 +204,7 @@ namespace DreamWeave.Launcher.Core.Downloads
                     SourceIndex = sourceIndex,
                     Transport = request.Transport,
                     Host = request.Url != null && request.Url.IsAbsoluteUri ? request.Url.Host : null,
+                    StorageHost = request.ServedFromHost,
                     Outcome = outcome,
                     Bytes = bytes,
                     Duration = duration,

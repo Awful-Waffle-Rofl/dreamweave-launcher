@@ -91,6 +91,9 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <summary>Player-facing description of the primary source (the manifest component's sourceLabel), or null.</summary>
         public string SourceLabel { get; set; }
 
+        /// <summary>Set by a transport that learns the server actually serving the bytes (mega's storage host); logged per attempt.</summary>
+        public string ServedFromHost { get; set; }
+
         /// <summary>
         /// Distinguishes this source's in-progress files from every other source's (empty for the primary,
         /// <c>.s1</c>, <c>.s2</c> ... for mirrors), so a read of one source that is still running can never

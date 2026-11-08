@@ -75,10 +75,10 @@ namespace DreamWeave.Launcher.App
         /// <summary>Shown on the progress screen when a download falls back to a mirror ({0} = the mirror's source label).</summary>
         public const string FallbackSourceFormat = "Trying another source: {0}";
 
-        // DRAFT: progress screen source line while a component downloads ({0} = the source's label).
+        // Progress screen source line while a component downloads ({0} = the source's label).
         public const string DownloadingFromFormat = "Downloading from: {0}";
 
-        // DRAFT: second line under FallbackSourceFormat ({0} = one of the reasons below, or the failure's own plain description).
+        // Second line under FallbackSourceFormat ({0} = one of the reasons below, or the failure's own plain description).
         public const string FallbackReasonFormat = "The previous source did not work: {0}";
         public const string FallbackReasonDamaged = "the file it sent was damaged or incomplete.";
         public const string FallbackReasonQuota = "its free download limit has been reached for your connection.";

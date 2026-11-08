@@ -36,6 +36,9 @@ namespace DreamWeave.Launcher.Core.Downloads
         /// <summary>Host name of the source URL only (never the path, query or mega key).</summary>
         public string Host { get; set; }
 
+        /// <summary>The server that actually served the bytes when the transport knows it (mega's storage host), or null.</summary>
+        public string StorageHost { get; set; }
+
         /// <summary>Result of the attempt.</summary>
         public DownloadAttemptOutcome Outcome { get; set; }
 
@@ -121,6 +124,10 @@ namespace DreamWeave.Launcher.Core.Downloads
             sb.Append(" source=").Append(r.SourceIndex.ToString(CultureInfo.InvariantCulture));
             sb.Append(" transport=").Append(Clean(r.Transport));
             sb.Append(" host=").Append(Clean(r.Host));
+            if (!string.IsNullOrEmpty(r.StorageHost))
+            {
+                sb.Append(" storage=").Append(Clean(r.StorageHost));
+            }
             sb.Append(" outcome=").Append(r.Outcome.ToString());
             sb.Append(" bytes=").Append(r.Bytes.ToString(CultureInfo.InvariantCulture));
             sb.Append(" duration=").Append(r.Duration.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture)).Append('s');

@@ -5,13 +5,7 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <!--
-      MegaApiClient ships a public BigInteger class in the GLOBAL namespace, which shadows
-      System.Numerics.BigInteger in every file of a project that can see it. The extern alias keeps
-      it out of the global namespace here, and PrivateAssets="compile" stops it reaching dependent
-      projects' compile references (its runtime DLL still flows, so Costura still embeds it).
-    -->
-    <PackageReference Include="MegaApiClient" Version="1.10.5" Aliases="MegaApi" PrivateAssets="compile;contentfiles;analyzers;build" />
+
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
   <ItemGroup>
