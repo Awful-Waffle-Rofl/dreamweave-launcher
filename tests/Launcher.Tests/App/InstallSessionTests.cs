@@ -59,6 +59,8 @@ namespace DreamWeave.Launcher.Tests.App
                 SaveFolder = f => _saved = f,
                 Installers = new InstallerRunner(_starter),
                 PollInterval = TimeSpan.FromMilliseconds(20),
+                SettleInterval = TimeSpan.FromMilliseconds(5),
+                VerifyRetryDelay = TimeSpan.Zero,
             };
         }
 
@@ -287,6 +289,8 @@ namespace DreamWeave.Launcher.Tests.App
             public void Report(InstallEvent value) => _events.Enqueue(value);
 
             public bool Has(InstallEventKind kind) => _events.Any(e => e.Kind == kind);
+
+            public InstallEvent[] All => _events.ToArray();
         }
 
         internal sealed class FakeDownloader : IDownloader

@@ -304,8 +304,8 @@ namespace DreamWeave.Launcher.UI
             }
 
             Label current = UiKit.Add(stack, UiKit.Text(string.Empty));
-            var currentBar = UiKit.Add(stack, new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 1000 });
-            var totalBar = UiKit.Add(stack, new ProgressBar { Dock = DockStyle.Fill, Minimum = 0, Maximum = 1000 });
+            var currentBar = UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Blocks, 1000));
+            var totalBar = UiKit.Add(stack, UiKit.Bar(ProgressBarStyle.Blocks, 1000));
 
             var handoff = new TableLayoutPanel { ColumnCount = 1, AutoSize = true, Dock = DockStyle.Fill, Visible = false };
             handoff.Controls.Add(UiKit.Text(UiText.InstallerHandoff, true));
@@ -449,7 +449,7 @@ namespace DreamWeave.Launcher.UI
                     failedLabel.Text = TitleOf(result.ComponentId) + " - " + UiText.StepFailed;
                 }
 
-                errors.ShowError(result.Error, TelemetryStepFor(result.ComponentId));
+                errors.ShowError(result.Error, TelemetryStepFor(result.ComponentId), result.FileDetails);
             }
 
             finished.Click += (s, e) => session.CheckInstallNow();

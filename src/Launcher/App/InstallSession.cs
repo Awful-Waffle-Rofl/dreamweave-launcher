@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using DreamWeave.Launcher.Core;
@@ -53,12 +54,16 @@ namespace DreamWeave.Launcher.App
     /// <summary>How a run ended.</summary>
     internal sealed class InstallRunResult
     {
-        public InstallRunResult(LauncherError error, string componentId, string acFolder)
+        public InstallRunResult(LauncherError error, string componentId, string acFolder, IReadOnlyList<string> fileDetails = null)
         {
             Error = error;
             ComponentId = componentId;
             AcFolder = acFolder;
+            FileDetails = fileDetails ?? new string[0];
         }
+
+        /// <summary>Game-relative file names with their state ("client_portal.dat: Mismatch") for a failure about installed files; empty otherwise.</summary>
+        public IReadOnlyList<string> FileDetails { get; }
 
         /// <summary><see cref="LauncherError.None"/> when every component finished.</summary>
         public LauncherError Error { get; }
@@ -233,6 +238,15 @@ namespace DreamWeave.Launcher.App
         /// <summary>How often the installer hand-off polls detection.</summary>
         public TimeSpan PollInterval { get; set; } = InstallSession.HandoffPollInterval;
 
+        /// <summary>Gap between the two polls that must see identical files before the installer counts as finished copying.</summary>
+        public TimeSpan SettleInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+        /// <summary>How long to wait for the installer's files to settle before carrying on regardless (the final check is the backstop).</summary>
+        public TimeSpan SettleTimeout { get; set; } = TimeSpan.FromMinutes(5);
+
+        /// <summary>Wait before re-checking a file that could not be read (locked by a scanner, say) during the final check.</summary>
+        public TimeSpan VerifyRetryDelay { get; set; } = TimeSpan.FromSeconds(3);
+
         /// <summary>The production wiring over the process's <see cref="AppServices"/>.</summary>
         public static InstallDependencies From(AppServices s)
         {
@@ -268,6 +282,7 @@ namespace DreamWeave.Launcher.App
         private readonly object _pokeGate = new object();
         private readonly HashSet<string> _launchedInstallers = new HashSet<string>(StringComparer.Ordinal);
         private TaskCompletionSource<bool> _poke = NewPoke();
+        private readonly List<string> _stagedUntilVerified = new List<string>();
         private string _acFolder;
         private readonly InstallStopGate _stop = new InstallStopGate();
 
@@ -336,7 +351,19 @@ namespace DreamWeave.Launcher.App
                     }
                 }
 
-                return new InstallRunResult(LauncherError.None, null, _acFolder);
+                InstallRunResult verified = await VerifyPlanAsync(components, events, cancellationToken).ConfigureAwait(false);
+                if (verified.Error == LauncherError.None)
+                {
+                    // Kept until now so a repair does not have to download the archive again.
+                    foreach (string staged in _stagedUntilVerified)
+                    {
+                        TryDeleteStaged(staged);
+                    }
+
+                    _stagedUntilVerified.Clear();
+                }
+
+                return verified;
             }
             finally
             {
@@ -344,6 +371,177 @@ namespace DreamWeave.Launcher.App
             }
         }
 
+        /// <summary>
+        /// After every step has run, checks the files once more and re-runs a non-installer step whose
+        /// result no longer holds. The retail installer can still be copying its stock files after
+        /// detection first sees the client, and a late write undoes the game data step; "Done" must
+        /// mean the files are right, not that every step returned. A file that cannot be read gets one
+        /// more look after a short wait. A second failure is reported as <see cref="LauncherError.GameFilesChanged"/>
+        /// with the files and their states.
+        /// </summary>
+        private async Task<InstallRunResult> VerifyPlanAsync(IReadOnlyList<ManifestComponent> components, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            ITelemetrySink t = _deps.Telemetry;
+            foreach (ManifestComponent c in components)
+            {
+                if (c.Kind == ComponentKinds.Installer)
+                {
+                    continue;
+                }
+
+                for (int attempt = 0; attempt < 2; attempt++)
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        t.RecordComponent(c.Id, TelemetryOutcome.Cancelled, LauncherError.Cancelled, TimeSpan.Zero);
+                        return new InstallRunResult(LauncherError.Cancelled, c.Id, _acFolder);
+                    }
+
+                    events.Report(new InstallEvent(InstallEventKind.StepStatus, c.Id, text: UiText.VerifyingGameFiles));
+                    ComponentStatus status;
+                    try
+                    {
+                        status = await EvaluateForVerifyAsync(c, events, ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherError code = Classify(ex, ct);
+                        t.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, TimeSpan.Zero);
+                        return new InstallRunResult(code, c.Id, _acFolder);
+                    }
+
+                    bool unreadable = status.State == ComponentState.Unknown;
+                    if (!unreadable && status.State != ComponentState.Missing && status.State != ComponentState.NeedsRepair)
+                    {
+                        break;
+                    }
+
+                    if (unreadable || attempt == 1)
+                    {
+                        t.RecordComponent(c.Id, TelemetryOutcome.Failed, LauncherError.GameFilesChanged, TimeSpan.Zero);
+                        return new InstallRunResult(LauncherError.GameFilesChanged, c.Id, _acFolder, FileDetailsOf(status));
+                    }
+
+                    // A re-run is a step like any other: it starts, reports, and records its outcome.
+                    t.RecordComponent(c.Id, TelemetryOutcome.Started);
+                    Stopwatch clock = Stopwatch.StartNew();
+                    events.Report(new InstallEvent(InstallEventKind.StepStarted, c.Id));
+                    try
+                    {
+                        bool didWork = await RunOneAsync(c, events, ct).ConfigureAwait(false);
+                        t.RecordComponent(c.Id, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
+                        events.Report(new InstallEvent(didWork ? InstallEventKind.StepDone : InstallEventKind.StepSkipped, c.Id));
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherError code = Classify(ex, ct);
+                        t.RecordComponent(c.Id, code == LauncherError.Cancelled ? TelemetryOutcome.Cancelled : TelemetryOutcome.Failed, code, clock.Elapsed);
+                        return new InstallRunResult(code, c.Id, _acFolder);
+                    }
+                }
+            }
+
+            return new InstallRunResult(LauncherError.None, null, _acFolder);
+        }
+
+        private async Task<ComponentStatus> EvaluateForVerifyAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            string folder = _acFolder;
+            var progress = new ForwardingProgress(c.Id, events);
+            ComponentStatus status = await Task.Run(() => _deps.Evaluator.Evaluate(c, _manifest, folder, progress, ct), ct).ConfigureAwait(false);
+            if (status.State == ComponentState.Unknown)
+            {
+                // Locked by a scanner or the like: look once more before calling it a failure.
+                await Task.Delay(_deps.VerifyRetryDelay, ct).ConfigureAwait(false);
+                status = await Task.Run(() => _deps.Evaluator.Evaluate(c, _manifest, folder, progress, ct), ct).ConfigureAwait(false);
+            }
+
+            return status;
+        }
+
+        private static IReadOnlyList<string> FileDetailsOf(ComponentStatus status)
+        {
+            return status.Files
+                .Where(f => f.State != FileState.Ok)
+                .Select(f => f.Path + ": " + f.State)
+                .ToList();
+        }
+
+        /// <summary>
+        /// After the retail installer is first detected, waits until the files this manifest cares about
+        /// (every overlay file and every satisfiedWhen path that exists) stop changing and can be opened
+        /// exclusively, so the game data step does not race the installer''s own copying. Settled means two
+        /// polls, <see cref="InstallDependencies.SettleInterval"/> apart, with identical (size, last write)
+        /// stamps and every probe open succeeding. Gives up after <see cref="InstallDependencies.SettleTimeout"/>
+        /// and carries on: the final check is the backstop. The installer process exiting is never the signal.
+        /// </summary>
+        private async Task SettleAsync(ManifestComponent installer, string folder, IProgress<InstallEvent> events, CancellationToken ct)
+        {
+            var relative = new List<string>();
+            foreach (ManifestComponent comp in _manifest.Components)
+            {
+                relative.AddRange(comp.Files.Select(f => f.Path));
+                relative.AddRange(comp.SatisfiedWhen.Select(r => r.Path));
+            }
+
+            List<string> targets = relative.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            events.Report(new InstallEvent(InstallEventKind.StepStatus, installer.Id, text: UiText.WaitingForInstallerFiles));
+            Stopwatch clock = Stopwatch.StartNew();
+            string previous = null;
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                string snapshot = await Task.Run(() => SettleSnapshot(folder, targets), ct).ConfigureAwait(false);
+                if (snapshot != null && snapshot == previous)
+                {
+                    return;
+                }
+
+                previous = snapshot;
+                if (clock.Elapsed >= _deps.SettleTimeout)
+                {
+                    return;
+                }
+
+                await Task.Delay(_deps.SettleInterval, ct).ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>Stamps of the existing targets, or null when any of them could not be opened exclusively.</summary>
+        private static string SettleSnapshot(string folder, List<string> relativePaths)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (string rel in relativePaths)
+            {
+                string full = AcPathSafety.Resolve(folder, rel);
+                var info = new FileInfo(full);
+                if (!info.Exists)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using (new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.None))
+                    {
+                    }
+
+                    info.Refresh();
+                }
+                catch (IOException)
+                {
+                    return null;
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return null;
+                }
+
+                sb.Append(rel).Append('|').Append(info.Length).Append('|').Append(info.LastWriteTimeUtc.Ticks).Append(';');
+            }
+
+            return sb.ToString();
+        }
         private async Task<bool> RunOneAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
         {
             var progress = new ForwardingProgress(c.Id, events);
@@ -386,6 +584,7 @@ namespace DreamWeave.Launcher.App
                 try
                 {
                     string folder = await WaitForInstallAsync(c, events, ct).ConfigureAwait(false);
+                    await SettleAsync(c, folder, events, ct).ConfigureAwait(false);
                     await AdoptFolderAsync(folder).ConfigureAwait(false);
                 }
                 finally
@@ -499,7 +698,8 @@ namespace DreamWeave.Launcher.App
                     await RequireSatisfiedAsync(c, folder, ct).ConfigureAwait(false);
                 }
 
-                TryDeleteStaged(file.Path);
+                // Kept until the final check passes, so a repair does not download it again.
+                _stagedUntilVerified.Add(file.Path);
                 return result.Outcome != InstallOutcome.NothingToDo;
             }
             finally

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using DreamWeave.Launcher.Core;
@@ -55,6 +56,7 @@ namespace DreamWeave.Launcher.App
             { LauncherError.ShortcutFailed, "The Start menu shortcut could not be created or removed." },
             { LauncherError.RegistryWriteFailed, "The Apps and Features entry could not be written or removed." },
             { LauncherError.UninstallIncomplete, "Uninstall finished, but some items could not be removed." },
+            { LauncherError.GameFilesChanged, "Some game files changed after they were installed, usually because another installer was still running. Close any other installers and click Retry." },
         };
 
         /// <summary>The player-facing message for <paramref name="code"/>; an unlisted value falls back to the Unknown message.</summary>
@@ -78,10 +80,11 @@ namespace DreamWeave.Launcher.App
     /// </summary>
     internal static class ErrorDetails
     {
+        private static readonly Regex FilePattern = new Regex(@"^[A-Za-z0-9_][A-Za-z0-9_.\- /\\]{0,100}: (Ok|Mismatch|Missing|Locked|AccessDenied|Error)\z", RegexOptions.CultureInvariant);
         private static readonly Regex StepPattern = new Regex(@"^[a-z][a-z0-9-]{1,31}\z", RegexOptions.CultureInvariant);
 
         /// <summary>Builds the clipboard text.</summary>
-        public static string Build(LauncherError code, string launcherVersion, string step, DateTime utcNow)
+        public static string Build(LauncherError code, string launcherVersion, string step, DateTime utcNow, IReadOnlyList<string> files = null)
         {
             string safeStep = step != null && StepPattern.IsMatch(step) ? step : "unknown";
             string safeVersion = launcherVersion != null && Regex.IsMatch(launcherVersion, @"^[0-9A-Za-z.\-]{1,40}\z") ? launcherVersion : "unknown";
@@ -92,6 +95,14 @@ namespace DreamWeave.Launcher.App
             sb.Append("Launcher version: ").Append(safeVersion).Append("\r\n");
             sb.Append("Step: ").Append(safeStep).Append("\r\n");
             sb.Append("Time (UTC): ").Append(utcNow.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append("\r\n");
+
+            // Game-relative file names and states only (for example "client_portal.dat: Mismatch"); anything
+            // that is not exactly that shape, such as an absolute path, is dropped.
+            foreach (string line in (files ?? new string[0]).Where(l => l != null && FilePattern.IsMatch(l)).Take(12))
+            {
+                sb.Append("File: ").Append(line).Append("\r\n");
+            }
+
             return sb.ToString();
         }
     }

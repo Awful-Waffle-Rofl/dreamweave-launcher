@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using DreamWeave.Launcher.App;
@@ -35,6 +36,41 @@ namespace DreamWeave.Launcher.UI
             return c;
         }
 
+        /// <summary>Height of a progress bar at 96 DPI.</summary>
+        public const int BarHeight = 20;
+
+        /// <summary>
+        /// A full-width progress bar of normal fixed height (<see cref="BarHeight"/> scaled to the DPI of
+        /// the window it ends up in). Never Dock.Fill: in an auto-sizing stack that renders as a block as
+        /// tall as the window.
+        /// </summary>
+        public static ProgressBar Bar(ProgressBarStyle style = ProgressBarStyle.Blocks, int maximum = 100)
+        {
+            var bar = new ProgressBar
+            {
+                Style = style,
+                Minimum = 0,
+                Maximum = maximum,
+                Dock = DockStyle.None,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right,
+                Height = BarHeight,
+                Margin = new Padding(0, 4, 0, 4),
+            };
+
+            // Sized from the host control's own DPI once it has a parent (and again if the window moves
+            // to a monitor with another scale), not from the primary screen.
+            bar.ParentChanged += (s, e) => ApplyBarHeight(bar);
+            bar.DpiChangedAfterParent += (s, e) => ApplyBarHeight(bar);
+            return bar;
+        }
+
+        private static void ApplyBarHeight(ProgressBar bar)
+        {
+            if (bar.Parent != null)
+            {
+                bar.Height = bar.LogicalToDeviceUnits(BarHeight);
+            }
+        }
         /// <summary>A wrapping label.</summary>
         public static Label Text(string text, bool bold = false, float sizeDelta = 0)
         {
@@ -119,6 +155,7 @@ namespace DreamWeave.Launcher.UI
         private LauncherError _code;
         private string _step;
         private DateTime _whenUtc;
+        private IReadOnlyList<string> _files;
 
         public ErrorPanel()
         {
@@ -133,7 +170,7 @@ namespace DreamWeave.Launcher.UI
             _later = UiKit.Button(UiText.TryLater, (s, e) => TryLaterClicked?.Invoke(this, EventArgs.Empty));
             Button copy = UiKit.Button(UiText.CopyDetails, (s, e) =>
             {
-                UiKit.CopyToClipboard(ErrorDetails.Build(_code, LauncherInfo.Version, _step, _whenUtc));
+                UiKit.CopyToClipboard(ErrorDetails.Build(_code, LauncherInfo.Version, _step, _whenUtc, _files));
                 _message.Text = ErrorMessages.For(_code) + " " + UiText.DetailsCopied;
             });
             RowCount = 2;
@@ -155,8 +192,9 @@ namespace DreamWeave.Launcher.UI
         }
 
         /// <summary>Shows <paramref name="code"/> for <paramref name="step"/> (a fixed step or component id).</summary>
-        public void ShowError(LauncherError code, string step)
+        public void ShowError(LauncherError code, string step, IReadOnlyList<string> files = null)
         {
+            _files = files;
             _code = code;
             _step = step;
             _whenUtc = DateTime.UtcNow;

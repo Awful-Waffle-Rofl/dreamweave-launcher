@@ -87,6 +87,10 @@ namespace DreamWeave.Launcher.App
         public const string ProgressSpeedFormat = "{0}/s";
         public const string ProgressEtaFormat = "about {0} left";
         public const string Verifying = "Checking the downloaded file...";
+
+        public const string VerifyingGameFiles = "Checking the installed game files...";
+
+        public const string WaitingForInstallerFiles = "Waiting for the Asheron's Call installer to finish copying files...";
         public const string Installing = "Installing...";
         public const string AskingPermission = "Windows will ask for permission to write to the game folder.";
         public const string HandoffNotDetected = "The install has not been detected yet. Finish the installer, then click \"I finished\" again.";

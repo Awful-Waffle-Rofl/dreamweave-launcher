@@ -254,7 +254,7 @@ namespace DreamWeave.Launcher.Core.Detection
                 foreach (ManifestFile f in c.Files)
                 {
                     string expected = f.Sha256;
-                    ManifestComponent patch = PatchTargeting(f.Path);
+                    ManifestComponent patch = PatchedFiles.Find(_manifest.Components, f.Path, f.Sha256);
 
                     // A patch target may legitimately carry the patch's output hash, so it must be hashed
                     // even when its own size is odd; any other file with the wrong size is not read at all.
@@ -364,21 +364,6 @@ namespace DreamWeave.Launcher.Core.Detection
                 FileCheckResult r = _verifier.Verify(full, expectedSize, _progress, _ct);
                 _memo[key] = r;
                 return r;
-            }
-
-            private ManifestComponent PatchTargeting(string path)
-            {
-                string want = Canonical(path);
-                return _manifest.Components.FirstOrDefault(p =>
-                    p.Kind == ComponentKinds.BytePatch
-                    && !string.IsNullOrEmpty(p.Target)
-                    && !string.IsNullOrEmpty(p.OutputSha256)
-                    && string.Equals(Canonical(p.Target), want, StringComparison.OrdinalIgnoreCase));
-            }
-
-            private static string Canonical(string path)
-            {
-                return (path ?? string.Empty).Replace('/', '\\');
             }
 
             private static bool IsUnreadable(FileDetail d)

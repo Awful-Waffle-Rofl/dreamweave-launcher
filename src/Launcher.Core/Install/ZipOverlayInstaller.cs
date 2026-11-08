@@ -387,7 +387,7 @@ namespace DreamWeave.Launcher.Core.Install
         internal static bool IsCurrent(LauncherManifest manifest, string acFolder, ManifestFile f, IProgress<ProgressReport> progress, CancellationToken cancellationToken)
         {
             string full = AcPathSafety.ResolveForWrite(acFolder, f.Path);
-            string patchOutput = PatchOutputFor(manifest, f.Path);
+            string patchOutput = PatchedFiles.OutputFor(manifest.Components, f.Path, f.Sha256);
             FileStream fs;
             try
             {
@@ -467,17 +467,6 @@ namespace DreamWeave.Launcher.Core.Install
             }
 
             return true;
-        }
-
-        internal static string PatchOutputFor(LauncherManifest manifest, string path)
-        {
-            string want = ZipOverlayInstaller.Canonical(path);
-            ManifestComponent patch = manifest.Components.FirstOrDefault(p =>
-                p.Kind == ComponentKinds.BytePatch
-                && !string.IsNullOrEmpty(p.Target)
-                && Hasher.IsSha256Hex(p.OutputSha256)
-                && string.Equals(ZipOverlayInstaller.Canonical(p.Target), want, StringComparison.OrdinalIgnoreCase));
-            return patch?.OutputSha256;
         }
     }
 }

@@ -76,6 +76,56 @@ namespace DreamWeave.Launcher.Tests.Detection
         }
 
         [TestMethod]
+        public void Patched_Exe_Plus_Overlay_Routes_To_Launcher()
+        {
+            var m = SampleLike();
+            var all = Run(Healthy(ExePatched), m);
+            Assert.AreEqual(DreamWeave.Launcher.App.StartRoute.Launcher, DreamWeave.Launcher.App.RouteDecider.Decide(m, all));
+        }
+
+        [TestMethod]
+        public void Patched_Exe_With_Wrong_Output_Hash_Is_Still_NeedsRepair()
+        {
+            byte[] other = DetectionData.Bytes("some other acclient build");
+            var fs = Healthy(other);
+            ComponentStatus dats = Find(Run(fs, SampleLike()), "eor-dats");
+            Assert.AreEqual(ComponentState.NeedsRepair, dats.State);
+            Assert.AreEqual(FileState.Mismatch, dats.Files.Single(f => f.Path == "acclient.exe").State);
+        }
+
+        [TestMethod]
+        public void Patch_Whose_Input_Hash_Does_Not_Match_The_Entry_Grants_Nothing()
+        {
+            // The patch targets acclient.exe and its output is on disk, but it was made for a different input build.
+            string wrongIn = DetectionData.Hash(DetectionData.Bytes("a different original build"));
+            string exeOut = DetectionData.Hash(ExePatched);
+            var m = DetectionData.Manifest(
+                DetectionData.Overlay("eor-dats", 5000, DetectionData.File("a.dat", DatA), DetectionData.File("b.dat", DatB), DetectionData.File("acclient.exe", ExeOriginal)),
+                DetectionData.Patch("palette-leak-fix", "acclient.exe", wrongIn, exeOut));
+            var all = Run(Healthy(ExePatched), m);
+            Assert.AreEqual(ComponentState.NeedsRepair, Find(all, "eor-dats").State);
+        }
+
+        [TestMethod]
+        public void Patch_Target_Match_Is_Case_And_Slash_Insensitive()
+        {
+            string exeIn = DetectionData.Hash(ExeOriginal);
+            string exeOut = DetectionData.Hash(ExePatched);
+            var m = DetectionData.Manifest(
+                DetectionData.Overlay("eor-dats", 5000, DetectionData.File("a.dat", DatA), DetectionData.File("b.dat", DatB), DetectionData.File("acclient.exe", ExeOriginal)),
+                DetectionData.Patch("palette-leak-fix", "ACClient.EXE", exeIn, exeOut));
+            Assert.AreEqual(ComponentState.Satisfied, Find(Run(Healthy(ExePatched), m), "eor-dats").State);
+
+            // Slash style differs between the file entry and the patch target.
+            var fs = Healthy(ExePatched);
+            fs.SetFile(F("sub\\x.dat"), ExePatched);
+            var nested = DetectionData.Manifest(
+                DetectionData.Overlay("eor-dats", 5000, DetectionData.File("sub/x.dat", ExeOriginal)),
+                DetectionData.Patch("palette-leak-fix", "SUB\\X.dat", exeIn, exeOut));
+            Assert.AreEqual(ComponentState.Satisfied, Find(Run(fs, nested), "eor-dats").State);
+        }
+
+        [TestMethod]
         public void Patched_Output_Hash_Is_Only_Accepted_When_A_Patch_Targets_The_File()
         {
             var m = DetectionData.Manifest(DetectionData.Overlay("eor-dats", 5000, DetectionData.File("acclient.exe", ExeOriginal)));
