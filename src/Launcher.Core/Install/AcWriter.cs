@@ -210,9 +210,10 @@ namespace DreamWeave.Launcher.Core.Install
         /// replaces the target; otherwise the temp file is deleted and HashMismatch thrown with the
         /// target untouched. Earlier verification of the source is therefore not load-bearing: a
         /// source that changes between verification and copy is caught here. The caller holds the
-        /// target's guard (when the target exists) across this call.
+        /// target's guard (when the target exists) across this call. <paramref name="beforeCommit"/>,
+        /// when given, runs right before the replace and can refuse it by throwing.
         /// </summary>
-        internal static void ReplaceFrom(string acFolder, string relativePath, Stream source, long length, string expectedSha256, CancellationToken cancellationToken)
+        internal static void ReplaceFrom(string acFolder, string relativePath, Stream source, long length, string expectedSha256, CancellationToken cancellationToken, Action beforeCommit = null)
         {
             string tmpRel = relativePath + TempSuffix;
             string full = AcPathSafety.ResolveForWrite(acFolder, relativePath);
@@ -253,6 +254,7 @@ namespace DreamWeave.Launcher.Core.Install
                     throw new LauncherException(LauncherError.HashMismatch, "The staged copy of " + relativePath + " changed after it was verified, so it was not installed.");
                 }
 
+                beforeCommit?.Invoke();
                 Commit(acFolder, relativePath, tmpRel);
             }
             catch (OperationCanceledException ex)

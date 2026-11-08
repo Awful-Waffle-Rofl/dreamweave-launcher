@@ -563,8 +563,10 @@ namespace DreamWeave.Launcher.Core.Install
         /// <summary>
         /// Guards every target, then replaces each from its verified staged stream. Returns false
         /// (nothing written) when the current user cannot write the game folder.
+        /// <paramref name="checkTarget"/>, when given, runs with each target's full path before its
+        /// write and again right before its replace, and can refuse it by throwing.
         /// </summary>
-        internal static bool TryWriteAll(string acFolder, IList<KeyValuePair<ManifestFile, Stream>> items, List<string> written, CancellationToken cancellationToken)
+        internal static bool TryWriteAll(string acFolder, IList<KeyValuePair<ManifestFile, Stream>> items, List<string> written, CancellationToken cancellationToken, Action<string> checkTarget = null)
         {
             using (AcWriter.GuardSet guards = AcWriter.Acquire(acFolder, items.Select(i => i.Key.Path)))
             {
@@ -583,7 +585,15 @@ namespace DreamWeave.Launcher.Core.Install
                         }
 
                         item.Value.Position = 0;
-                        AcWriter.ReplaceFrom(acFolder, item.Key.Path, item.Value, item.Key.Size, item.Key.Sha256, cancellationToken);
+                        Action check = null;
+                        if (checkTarget != null)
+                        {
+                            string full = AcPathSafety.Resolve(acFolder, item.Key.Path);
+                            check = () => checkTarget(full);
+                            check();
+                        }
+
+                        AcWriter.ReplaceFrom(acFolder, item.Key.Path, item.Value, item.Key.Size, item.Key.Sha256, cancellationToken, check);
                         written.Add(item.Key.Path);
                     }
                     catch (LauncherException ex) when (written.Count > 0)

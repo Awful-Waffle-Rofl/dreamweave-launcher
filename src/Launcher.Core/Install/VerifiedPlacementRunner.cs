@@ -88,6 +88,12 @@ namespace DreamWeave.Launcher.Core.Install
         /// </summary>
         internal Action<string> AfterPinned { get; set; }
 
+        /// <summary>
+        /// Test seam: false holds pinned folders WITHOUT their sentinel files, so a test can reach
+        /// the last check (<see cref="FolderPins.RequireNoReparse"/>) on its own. Always true in production.
+        /// </summary>
+        internal bool PinSentinels { get; set; } = true;
+
         /// <summary>Creates a runner trusting <paramref name="verifier"/>'s keys (production: <see cref="ManifestVerifier.CreateProduction"/>).</summary>
         public VerifiedPlacementRunner(ManifestVerifier verifier)
         {
@@ -248,7 +254,7 @@ namespace DreamWeave.Launcher.Core.Install
                 string ready = ReadyFolder(paths, componentId);
                 List<string> staged = ListStaged(paths, ready);
 
-                using (var pins = new FolderPins())
+                using (var pins = new FolderPins(PinSentinels))
                 {
                     pins.Pin(ac);
                     switch (component.Kind)
@@ -421,7 +427,7 @@ namespace DreamWeave.Launcher.Core.Install
                     return;
                 }
 
-                if (!OverlayFiles.TryWriteAll(acFolder, items, new List<string>(), cancellationToken))
+                if (!OverlayFiles.TryWriteAll(acFolder, items, new List<string>(), cancellationToken, pins.RequireNoReparse))
                 {
                     throw new LauncherException(LauncherError.AccessDenied, "Windows denied access to the game folder even with administrator rights.");
                 }
@@ -494,7 +500,9 @@ namespace DreamWeave.Launcher.Core.Install
                     }
 
                     source.Position = 0;
-                    AcWriter.ReplaceFrom(acFolder, component.Target, source, source.Length, stagedHash, cancellationToken);
+                    string targetFull = AcPathSafety.Resolve(acFolder, component.Target);
+                    pins.RequireNoReparse(targetFull);
+                    AcWriter.ReplaceFrom(acFolder, component.Target, source, source.Length, stagedHash, cancellationToken, () => pins.RequireNoReparse(targetFull));
                 }
             }
         }

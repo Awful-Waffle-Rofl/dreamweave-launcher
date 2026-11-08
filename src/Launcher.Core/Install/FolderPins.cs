@@ -10,14 +10,25 @@ using Microsoft.Win32.SafeHandles;
 namespace DreamWeave.Launcher.Core.Install
 {
     /// <summary>
-    /// Holds folders open, delete sharing denied, so that while the set lives none of them can be
-    /// renamed, deleted or replaced by a junction (a rename or delete needs DELETE access, which
-    /// conflicts with the held handle). Each folder is opened WITHOUT following a reparse point,
-    /// refused when it is one, and refused when the opened folder is not the one its path names
-    /// (a swap that happened before the open).
+    /// Holds folders so that, while the set lives, none of them can be renamed, deleted or turned
+    /// into a junction:
+    /// <list type="bullet">
+    /// <item>Each folder is opened WITHOUT following a reparse point, with delete sharing denied (a
+    /// rename or delete needs DELETE access, which conflicts with the held handle), refused when it
+    /// is a reparse point, and refused when the opened folder is not the one its path names (a swap
+    /// that happened before the open).</item>
+    /// <item>Each folder also holds a sentinel file, opened exclusively and deleted on close. A
+    /// folder can only be converted into a junction in place (FSCTL_SET_REPARSE_POINT) while it is
+    /// EMPTY, and nobody can delete the sentinel, so the folder never becomes empty.</item>
+    /// <item>Before each write, <see cref="RequireNoReparse"/> re-reads the attributes through the
+    /// held handles, as a last check.</item>
+    /// </list>
     /// </summary>
     internal sealed class FolderPins : IDisposable
     {
+        /// <summary>Name prefix of the sentinel file held in each pinned folder.</summary>
+        internal const string SentinelPrefix = ".dwpin-";
+
         private const uint FileListDirectory = 0x0001;
         private const uint FileReadAttributes = 0x0080;
         private const uint FileShareRead = 0x0001;
@@ -29,11 +40,28 @@ namespace DreamWeave.Launcher.Core.Install
         private const int ErrorPathNotFound = 3;
         private const int ErrorSharingViolation = 32;
 
-        private readonly List<SafeFileHandle> _handles = new List<SafeFileHandle>();
-        private readonly HashSet<string> _pinned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Pinned> _pinned = new Dictionary<string, Pinned>(StringComparer.OrdinalIgnoreCase);
+        private readonly bool _sentinels;
+
+        /// <summary>Creates an empty set.</summary>
+        /// <param name="sentinels">False only in tests that exercise the last-check layer on its own.</param>
+        public FolderPins(bool sentinels = true)
+        {
+            _sentinels = sentinels;
+        }
 
         /// <summary>Number of folders held (for tests).</summary>
-        internal int Count => _handles.Count;
+        internal int Count => _pinned.Count;
+
+        /// <summary>
+        /// A full folder path without a trailing separator, except a drive root, which keeps it
+        /// (<c>C:\</c>, never the drive-relative <c>C:</c>).
+        /// </summary>
+        internal static string TrimFolder(string path)
+        {
+            string trimmed = path.TrimEnd('\\');
+            return trimmed.Length == 2 && trimmed[1] == ':' ? trimmed + "\\" : trimmed;
+        }
 
         /// <summary>
         /// Pins <paramref name="folder"/>, which must exist.
@@ -49,13 +77,12 @@ namespace DreamWeave.Launcher.Core.Install
 
         /// <summary>
         /// Pins every folder that currently exists between <paramref name="root"/> (already pinned)
-        /// and the folder that will hold <paramref name="relativePath"/>. Folders that do not exist
-        /// yet are left to the writer, which re-checks the path right before each write.
+        /// and the folder that will hold <paramref name="relativePath"/>.
         /// </summary>
         public void PinFoldersOnTheWay(string root, string relativePath)
         {
             string dir = Path.GetDirectoryName(AcPathSafety.Resolve(root, relativePath));
-            string rootFull = Path.GetFullPath(root).TrimEnd('\\');
+            string rootFull = TrimFolder(Path.GetFullPath(root));
             if (dir == null || dir.Length <= rootFull.Length)
             {
                 return;
@@ -64,7 +91,10 @@ namespace DreamWeave.Launcher.Core.Install
             string current = rootFull;
             foreach (string segment in dir.Substring(rootFull.Length).Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                current = current + "\\" + segment;
+                current = Path.Combine(current, segment);
+
+                // A folder that does not exist yet is not pinned: the writer creates it and
+                // re-checks the whole path below the game folder right before each write.
                 if (!TryPin(current))
                 {
                     return;
@@ -72,10 +102,34 @@ namespace DreamWeave.Launcher.Core.Install
             }
         }
 
+        /// <summary>
+        /// Last check before a write to <paramref name="targetFullPath"/>: re-reads, through the
+        /// held handles, every pinned folder that contains it, and refuses when one has become a
+        /// reparse point.
+        /// </summary>
+        /// <exception cref="LauncherException">ReparsePointInPath.</exception>
+        public void RequireNoReparse(string targetFullPath)
+        {
+            for (string dir = Path.GetDirectoryName(Path.GetFullPath(targetFullPath)); dir != null; dir = Path.GetDirectoryName(dir))
+            {
+                Pinned pin;
+                if (!_pinned.TryGetValue(TrimFolder(dir), out pin))
+                {
+                    continue;
+                }
+
+                ByHandleFileInformation info;
+                if (!GetFileInformationByHandle(pin.Handle, out info) || (info.FileAttributes & (uint)FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new LauncherException(LauncherError.ReparsePointInPath, "Nothing more was placed because '" + AcPathSafety.ToDisplayPath(dir) + "' became a junction or link, or could not be checked.");
+                }
+            }
+        }
+
         private bool TryPin(string folder)
         {
-            string full = Path.GetFullPath(folder).TrimEnd('\\');
-            if (_pinned.Contains(full))
+            string full = TrimFolder(Path.GetFullPath(folder));
+            if (_pinned.ContainsKey(full))
             {
                 return true;
             }
@@ -99,6 +153,7 @@ namespace DreamWeave.Launcher.Core.Install
                 throw new LauncherException(LauncherError.AccessDenied, "'" + AcPathSafety.ToDisplayPath(full) + "' could not be held while files are placed: " + inner.Message, inner);
             }
 
+            FileStream sentinel = null;
             try
             {
                 ByHandleFileInformation info;
@@ -119,9 +174,21 @@ namespace DreamWeave.Launcher.Core.Install
 
                 string actual = FinalPath(h);
                 string expected = LongPath(full);
-                if (actual == null || !string.Equals(actual.TrimEnd('\\'), expected.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                if (actual == null || !string.Equals(TrimFolder(actual), TrimFolder(expected), StringComparison.OrdinalIgnoreCase))
                 {
                     throw new LauncherException(LauncherError.ReparsePointInPath, "Nothing was placed because '" + AcPathSafety.ToDisplayPath(full) + "' no longer names the folder that was checked.");
+                }
+
+                if (_sentinels)
+                {
+                    try
+                    {
+                        sentinel = new FileStream(Path.Combine(full, SentinelPrefix + Guid.NewGuid().ToString("N")), FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose);
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                    {
+                        throw new LauncherException(LauncherError.AccessDenied, "'" + AcPathSafety.ToDisplayPath(full) + "' could not be held while files are placed: " + ex.Message, ex);
+                    }
                 }
             }
             catch
@@ -130,8 +197,7 @@ namespace DreamWeave.Launcher.Core.Install
                 throw;
             }
 
-            _handles.Add(h);
-            _pinned.Add(full);
+            _pinned.Add(full, new Pinned(h, sentinel));
             return true;
         }
 
@@ -172,13 +238,27 @@ namespace DreamWeave.Launcher.Core.Install
 
         public void Dispose()
         {
-            foreach (SafeFileHandle h in _handles)
+            foreach (Pinned p in _pinned.Values)
             {
-                h.Dispose();
+                // Sentinel first: it is deleted on close, while the folder is still held.
+                p.Sentinel?.Dispose();
+                p.Handle.Dispose();
             }
 
-            _handles.Clear();
             _pinned.Clear();
+        }
+
+        private sealed class Pinned
+        {
+            public Pinned(SafeFileHandle handle, FileStream sentinel)
+            {
+                Handle = handle;
+                Sentinel = sentinel;
+            }
+
+            public SafeFileHandle Handle { get; }
+
+            public FileStream Sentinel { get; }
         }
 
         [StructLayout(LayoutKind.Sequential)]

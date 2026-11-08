@@ -575,6 +575,122 @@ namespace DreamWeave.Launcher.Tests.Install
             }
         }
 
+        // --- in-place conversion of a pinned folder (re-review N1) --------------------------------
+
+        private static void EmptyFolder(string folder)
+        {
+            foreach (string file in Directory.GetFiles(folder))
+            {
+                try
+                {
+                    File.SetAttributes(file, FileAttributes.Normal);
+                    File.Delete(file);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                {
+                    // A held sentinel cannot be deleted: that is the point.
+                }
+            }
+        }
+
+        private static string[] Sentinels(string folder)
+        {
+            return Directory.GetFiles(folder, FolderPins.SentinelPrefix + "*", SearchOption.AllDirectories);
+        }
+
+        [TestMethod]
+        public void InPlaceConversionOfAnEmptyPinnedSubfolder_Fails()
+        {
+            using (var f = new Fixture())
+            {
+                Directory.CreateDirectory(f.Target("sub"));
+                string attacker = Path.Combine(f.Root, "attacker");
+                Directory.CreateDirectory(attacker);
+                f.Stage("sub/c.dat", C);
+                int error = -1;
+                var runner = new VerifiedPlacementRunner(new ManifestVerifier(new[] { _key.PublicKey }))
+                {
+                    AfterPinned = ac => error = InPlaceJunction.TryConvert(f.Target("sub"), attacker),
+                };
+
+                VerifiedPlacementResult r = runner.Execute(f.Paths.Root, f.Ac, Overlay);
+
+                Assert.AreNotEqual(0, error, "a pinned folder must never become a junction");
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(C, File.ReadAllBytes(f.Target(@"sub\c.dat")));
+                Assert.AreEqual(0, Directory.GetFileSystemEntries(attacker).Length, "nothing may be redirected");
+                Assert.AreEqual(0, Sentinels(f.Ac).Length, "the sentinels are deleted when the run ends");
+            }
+        }
+
+        [TestMethod]
+        public void InPlaceConversionOfTheEmptiedGameFolder_Fails()
+        {
+            using (var f = new Fixture())
+            {
+                string attacker = Path.Combine(f.Root, "attacker");
+                Directory.CreateDirectory(attacker);
+                f.Stage("a.dat", A);
+                int error = -1;
+                var runner = new VerifiedPlacementRunner(new ManifestVerifier(new[] { _key.PublicKey }))
+                {
+                    AfterPinned = ac =>
+                    {
+                        EmptyFolder(ac);
+                        error = InPlaceJunction.TryConvert(ac, attacker);
+                    },
+                };
+
+                VerifiedPlacementResult r = runner.Execute(f.Paths.Root, f.Ac, Overlay);
+
+                Assert.AreNotEqual(0, error, "the game folder cannot be emptied, so it cannot become a junction");
+                Assert.AreEqual(LauncherError.None, r.Code, r.Detail);
+                CollectionAssert.AreEqual(A, File.ReadAllBytes(f.Target("a.dat")));
+                Assert.AreEqual(0, Directory.GetFileSystemEntries(attacker).Length, "nothing may be redirected");
+                Assert.AreEqual(0, Sentinels(f.Ac).Length);
+            }
+        }
+
+        [TestMethod]
+        public void LastCheck_WithoutSentinels_RefusesAGameFolderTurnedIntoAJunction()
+        {
+            using (var f = new Fixture())
+            {
+                string attacker = Path.Combine(f.Root, "attacker");
+                Directory.CreateDirectory(attacker);
+                f.Stage("a.dat", A);
+                int error = -1;
+                var runner = new VerifiedPlacementRunner(new ManifestVerifier(new[] { _key.PublicKey }))
+                {
+                    PinSentinels = false,
+                    AfterPinned = ac =>
+                    {
+                        EmptyFolder(ac);
+                        error = InPlaceJunction.TryConvert(ac, attacker);
+                    },
+                };
+
+                VerifiedPlacementResult r = runner.Execute(f.Paths.Root, f.Ac, Overlay);
+
+                if (error != 0)
+                {
+                    Assert.Inconclusive("the in-place conversion did not succeed here (error " + error + "), so the last check was not reached");
+                }
+
+                Assert.AreEqual(LauncherError.ReparsePointInPath, r.Code, r.Detail);
+                Assert.AreEqual(0, Directory.GetFileSystemEntries(attacker).Length, "nothing may be written through the converted folder");
+            }
+        }
+
+        [TestMethod]
+        public void TrimFolder_KeepsTheDriveRootSeparator()
+        {
+            Assert.AreEqual(@"C:\", FolderPins.TrimFolder(@"C:\"));
+            Assert.AreEqual(@"C:\", FolderPins.TrimFolder(@"C:\\"));
+            Assert.AreEqual(@"C:\Turbine", FolderPins.TrimFolder(@"C:\Turbine\"));
+            Assert.AreEqual(@"C:\Turbine", FolderPins.TrimFolder(@"C:\Turbine"));
+        }
+
         // --- locations: reparse points, network and device paths --------------------------------
 
         [TestMethod]
