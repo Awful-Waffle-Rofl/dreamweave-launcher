@@ -165,6 +165,7 @@ namespace DreamWeave.Launcher.App
         private readonly ICredentialStore _credentials;
         private readonly IGameStarter _starter;
         private readonly IDecalGameStarter _decalStarter;
+        private readonly IClientPreferencesSeeder _prefsSeeder;
         private readonly ITelemetrySink _telemetry;
         private readonly Func<LauncherManifest> _manifest;
         private readonly Func<string> _acFolder;
@@ -184,12 +185,13 @@ namespace DreamWeave.Launcher.App
         /// <summary>Pause between two client starts in Play all, so the clients do not race on startup.</summary>
         public static readonly TimeSpan LaunchGap = TimeSpan.FromSeconds(3);
 
-        public LauncherPresenter(ICredentialStore credentials, IGameStarter starter, ITelemetrySink telemetry, Func<LauncherManifest> manifest, Func<string> acFolder, ISlotAccountStore slots = null, IDecalGameStarter decalStarter = null)
+        public LauncherPresenter(ICredentialStore credentials, IGameStarter starter, ITelemetrySink telemetry, Func<LauncherManifest> manifest, Func<string> acFolder, ISlotAccountStore slots = null, IDecalGameStarter decalStarter = null, IClientPreferencesSeeder prefsSeeder = null)
         {
             _slots = slots;
             _credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
             _starter = starter ?? throw new ArgumentNullException(nameof(starter));
             _decalStarter = decalStarter;
+            _prefsSeeder = prefsSeeder;
             _telemetry = telemetry ?? NullTelemetrySink.Instance;
             _manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
             _acFolder = acFolder ?? throw new ArgumentNullException(nameof(acFolder));
@@ -398,6 +400,12 @@ namespace DreamWeave.Launcher.App
                 return new PlayResult(LauncherError.InvalidCredentials, rule, false);
             }
 
+            // Just before the client starts, whatever the launch path and however the client was
+            // installed: seed the client's windowed preferences default, but only when it has not
+            // written its own preferences file yet. The seeder never overwrites an existing file and
+            // never throws, so it cannot change a returning player's settings or fail a launch.
+            await SeedClientPreferencesAsync().ConfigureAwait(false);
+
             if (DecalAvailable && LaunchWithDecal)
             {
                 return await StartDecalCoreAsync(user, password, remember);
@@ -508,6 +516,32 @@ namespace DreamWeave.Launcher.App
             {
                 _starting = false;
             }
+        }
+
+        /// <summary>
+        /// Runs the client-preferences seeder off the UI thread (it touches the disk). Best-effort: the
+        /// seeder already swallows IO failures, and any other fault is ignored so a launch is never
+        /// blocked. No-op when no seeder was wired.
+        /// </summary>
+        private Task SeedClientPreferencesAsync()
+        {
+            IClientPreferencesSeeder seeder = _prefsSeeder;
+            if (seeder == null)
+            {
+                return Task.CompletedTask;
+            }
+
+            return Task.Run(() =>
+            {
+                try
+                {
+                    seeder.Seed();
+                }
+                catch (Exception)
+                {
+                    // Seeding never blocks or fails a launch.
+                }
+            });
         }
 
         // ---- Rows (Main, Alt 1, Alt 2) ----

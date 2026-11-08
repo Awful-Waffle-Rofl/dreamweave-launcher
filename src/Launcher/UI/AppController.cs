@@ -144,7 +144,8 @@ namespace DreamWeave.Launcher.UI
         private void ShowLauncher()
         {
             IDecalGameStarter decalStarter = BuildDecalStarter();
-            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(line => new FileDownloadLog(_services.Paths.LogFile).Note("launch", line)), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State), decalStarter)
+            var prefsSeeder = new ClientPreferencesSeederService(line => new FileDownloadLog(_services.Paths.LogFile).Note("client-prefs", line));
+            _presenter = new LauncherPresenter(_services.Credentials, new GameStarter(line => new FileDownloadLog(_services.Paths.LogFile).Note("launch", line)), _services.TelemetrySink, () => _services.Manifests.Manifest, () => _acFolder, new StateSlotAccounts(_services.State), decalStarter, prefsSeeder)
             {
                 Update = _gate,
                 LaunchWithDecal = _services.State.Read(s => s.LaunchWithDecal),
