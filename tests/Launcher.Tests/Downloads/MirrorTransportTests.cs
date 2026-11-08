@@ -128,6 +128,7 @@ namespace DreamWeave.Launcher.Tests.Downloads
         }
 
         [TestMethod]
+        [Timeout(60000)]
         public void StalledMegaRead_StillHoldingItsPart_SwitchesToTheHttpMirror()
         {
             // The abandoned mega read keeps its .part open (share Read); the mirror writes its own file.
@@ -147,10 +148,54 @@ namespace DreamWeave.Launcher.Tests.Downloads
                 {
                     release.Set();
                 }
+
+                // Once the abandoned read lets go, its leftover primary part and sidecar are removed too.
+                Stopwatch wait = Stopwatch.StartNew();
+                while (File.Exists(rig.Dest + ".part") && wait.Elapsed < TimeSpan.FromSeconds(10))
+                {
+                    Thread.Sleep(20);
+                }
+
+                Assert.IsFalse(File.Exists(rig.Dest + ".part"), "the abandoned mega part is left in staging");
+                Assert.IsFalse(File.Exists(rig.Dest + ".part.json"));
+                Assert.AreEqual(1, Directory.GetFiles(Path.GetDirectoryName(rig.Dest)).Length, "only the verified file remains");
             }
         }
 
         [TestMethod]
+        [Timeout(30000)]
+        public void DeadMega_WithAMirror_FailsOverAfterOneFirstProgressTimeout_NotFour()
+        {
+            byte[] content = DownloadFixtures.Content(Size);
+            var options = Options(TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(600));
+            options.Retry = new RetryPolicy { Delay = (d, ct) => Task.CompletedTask };
+            using (var server = new FakeHttpServer((ctx, i) => Serve.FileAsync(ctx, content)))
+            using (var rig = new Rig(i => new HangingMegaClient(false), options, server, content))
+            {
+                Stopwatch clock = Stopwatch.StartNew();
+                Assert.AreEqual(LauncherError.None, rig.Run());
+                Assert.AreEqual(1, rig.Clients.Count, "a dead primary must not be retried when a mirror is waiting");
+                Assert.IsTrue(clock.ElapsedMilliseconds >= 550 && clock.ElapsedMilliseconds < 1800, "about one timeout, not four: " + clock.ElapsedMilliseconds + " ms");
+                CollectionAssert.AreEqual(content, File.ReadAllBytes(rig.Dest));
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
+        public void DeadMega_WithNoMirror_StillRetries()
+        {
+            byte[] content = DownloadFixtures.Content(Size);
+            var options = Options(TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(300));
+            options.Retry = new RetryPolicy { Delay = (d, ct) => Task.CompletedTask };
+            using (var rig = new Rig(i => new HangingMegaClient(false), options, null, content))
+            {
+                Assert.AreEqual(LauncherError.NetworkUnavailable, rig.Run());
+                Assert.AreEqual(4, rig.Clients.Count);
+            }
+        }
+
+        [TestMethod]
+        [Timeout(30000)]
         public void MegaSlowStart_IsAllowedBeyondTheInactivityWindow()
         {
             byte[] content = DownloadFixtures.Content(Size);

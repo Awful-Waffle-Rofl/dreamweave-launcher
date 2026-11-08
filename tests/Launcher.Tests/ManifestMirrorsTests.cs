@@ -90,6 +90,17 @@ namespace DreamWeave.Launcher.Tests
         }
 
         [TestMethod]
+        public void MegaLinksDifferingOnlyInIdCase_AreNotDuplicates()
+        {
+            JObject root = Sample();
+            Installer(root)["mirrors"] = new JArray(
+                Mirror("mega", "https://mega.nz/file/AbCdEfGh#SameKey123", "Lower-case id variant"),
+                Mirror("mega", "https://mega.nz/file/abcdefgh#SameKey123", "Other id"),
+                Mirror("mega", "https://mega.nz/file/ABCDEFGH#samekey123", "Other key case"));
+            Assert.AreEqual(3, Parse(root).Components.Single(x => x.Id == "ac-client").Mirrors.Count);
+        }
+
+        [TestMethod]
         public void SameUrlWithADifferentTransport_IsNotADuplicate()
         {
             JObject root = Sample();

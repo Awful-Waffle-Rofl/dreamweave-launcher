@@ -108,6 +108,10 @@ namespace DreamWeave.Launcher.Core.Downloads
                 {
                     DownloadResult result = await DownloadFromSourceAsync(attempt, progress, cancellationToken).ConfigureAwait(false);
                     DeleteSourceParts(request);
+
+                    // The primary's own part (an abandoned read may have left it) is not wanted any more either.
+                    PartFiles.TryDelete(request.PartPath);
+                    PartFiles.TryDelete(request.SidecarPath);
                     return result;
                 }
                 catch (LauncherException ex)

@@ -179,7 +179,8 @@ namespace DreamWeave.Launcher.Core.Manifests
                         break;
                 }
 
-                var seenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                // Ordinal, not ignore-case: mega file ids and keys are case-sensitive.
+                var seenSources = new HashSet<string>(StringComparer.Ordinal);
                 if (c.Kind != ComponentKinds.BytePatch)
                 {
                     seenSources.Add(SourceKey(c.Transport, c.Url));

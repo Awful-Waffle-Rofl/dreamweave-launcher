@@ -40,6 +40,8 @@ namespace DreamWeave.Launcher.Core.Downloads
     /// </summary>
     public sealed class MegaTransport : IDownloadTransport
     {
+        private const string NeverStartedKey = "neverStarted";
+
         private readonly Func<IMegaClient> _clientFactory;
         private readonly MegaTransportOptions _options;
 
@@ -93,9 +95,9 @@ namespace DreamWeave.Launcher.Core.Downloads
 
                     bool transient;
                     LauncherException mapped = MegaErrorMapper.Map(ex, out transient);
-                    if (mapped.Code == LauncherError.HashMismatch && request.FallbackAvailable)
+                    if (request.FallbackAvailable && (mapped.Code == LauncherError.HashMismatch || mapped.Data.Contains(NeverStartedKey)))
                     {
-                        // Mega's own checksum failed and another source is waiting: move on instead of retrying.
+                        // Mega's own checksum failed, or it never started sending, and another source is waiting: move on instead of retrying.
                         throw mapped;
                     }
 
@@ -170,7 +172,8 @@ namespace DreamWeave.Launcher.Core.Downloads
                         }
 
                         // Before the first byte of progress mega may legitimately take minutes; after it, 60 s of silence is a stall.
-                        TimeSpan limit = Interlocked.Read(ref lastBytes) == 0 ? _options.FirstProgressTimeout : _options.InactivityTimeout;
+                        bool neverStarted = Interlocked.Read(ref lastBytes) == 0;
+                        TimeSpan limit = neverStarted ? _options.FirstProgressTimeout : _options.InactivityTimeout;
                         bool stalled = TimeSpan.FromSeconds((clock.ElapsedTicks - Interlocked.Read(ref lastActivityTicks)) / (double)Stopwatch.Frequency) > limit;
                         if (cancellationToken.IsCancellationRequested || stalled)
                         {
@@ -181,12 +184,33 @@ namespace DreamWeave.Launcher.Core.Downloads
                             await Task.WhenAny(download, Task.Delay(_options.AbandonGrace)).ConfigureAwait(false);
                             if (!download.IsCompleted)
                             {
-                                _possiblyHeld[Path.GetFullPath(request.PartPath)] = true;
+                                string heldKey = Path.GetFullPath(request.PartPath);
+                                string heldPart = request.PartPath;
+                                _possiblyHeld[heldKey] = true;
+
+                                // When the abandoned read finally lets go, remove the part it leaves behind, unless
+                                // a newer attempt has already taken the path over (it clears the flag).
+                                download.ContinueWith(
+                                    _ =>
+                                    {
+                                        bool ownedByNobody;
+                                        if (_possiblyHeld.TryRemove(heldKey, out ownedByNobody))
+                                        {
+                                            PartFiles.TryDelete(heldPart);
+                                        }
+                                    },
+                                    TaskScheduler.Default);
                             }
 
                             Observe(download);
                             cancellationToken.ThrowIfCancellationRequested();
-                            throw new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.");
+                            var stall = new LauncherException(LauncherError.NetworkUnavailable, "mega.nz stopped sending data.");
+                            if (neverStarted)
+                            {
+                                stall.Data[NeverStartedKey] = true;
+                            }
+
+                            throw stall;
                         }
                     }
 
