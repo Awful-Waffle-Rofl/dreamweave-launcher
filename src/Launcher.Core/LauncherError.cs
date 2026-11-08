@@ -138,5 +138,8 @@ namespace DreamWeave.Launcher.Core
 
         /// <summary>A game file was still in use when the game data step ran right after the game installer: the installer was probably still running.</summary>
         InstallerStillRunning = 109,
+
+        /// <summary>The game installer this session started was closed (or aborted) before the install was detected.</summary>
+        InstallerClosedEarly = 110,
     }
 }

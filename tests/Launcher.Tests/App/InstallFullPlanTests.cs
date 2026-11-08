@@ -1005,6 +1005,83 @@ namespace DreamWeave.Launcher.Tests.App
                 rig.AssertAllSatisfied();
             }
         }
+        /// <summary>Starts a run whose installer stays on its first pages (tree alive, nothing written), then stops it.</summary>
+        private static InstallSession StartedThenStopped(Rig rig)
+        {
+            rig.Starter.Pid = 4242;
+            rig.Starter.WriteFiles = false;
+            rig.Starter.OnStart = () => rig.Processes.Set((4242, 900, "setup-root.exe"));
+            var session = new InstallSession(rig.Deps, rig.Manifest, null);
+            using (var cts = new CancellationTokenSource())
+            {
+                var first = new Hooked(null);
+                Task<InstallRunResult> run = session.RunAsync(rig.FullPlan(), first, cts.Token);
+                WaitUntil(() => Has(first, InstallEventKind.HandoffStarted), "the hand-off");
+                cts.Cancel();
+                Assert.AreEqual(LauncherError.Cancelled, run.GetAwaiter().GetResult().Error);
+            }
+
+            return session;
+        }
+
+        [TestMethod]
+        public void ResumedInstaller_ClosedBeforeFinishing_FailsPromptly_ThenRetryStartsOneNewInstaller()
+        {
+            using (var rig = new Rig())
+            {
+                InstallSession session = StartedThenStopped(rig);
+
+                var second = new Hooked(null);
+                Task<InstallRunResult> retry = session.RunAsync(rig.FullPlan(), second, CancellationToken.None);
+                WaitUntil(() => Has(second, InstallEventKind.HandoffStarted), "the resumed hand-off");
+
+                // The player closes the installer without finishing it.
+                rig.Processes.Set();
+                Assert.IsTrue(retry.Wait(TimeSpan.FromSeconds(5)), "the resumed wait did not notice the installer was gone");
+                InstallRunResult r = retry.Result;
+                Assert.AreEqual(LauncherError.InstallerClosedEarly, r.Error);
+                Assert.AreEqual("ac-client", r.ComponentId);
+                Assert.AreEqual("ac-client", r.RetryFromId);
+                Assert.AreEqual("The Asheron's Call installer closed before it finished. Click Retry to run it again.", ErrorMessages.For(r.Error, r.SourceTransport));
+                Assert.AreEqual(1, rig.Log.Count(l => l == "installer-started"));
+                Assert.IsFalse(OverlayStarted(second));
+
+                // Retry: exactly one new installer, which this time runs to the end.
+                rig.Starter.WriteFiles = true;
+                rig.Starter.OnStart = () => rig.Processes.Set();
+                InstallRunResult third = session.RunAsync(rig.FullPlan(), new Hooked(null), CancellationToken.None).GetAwaiter().GetResult();
+                Assert.AreEqual(LauncherError.None, third.Error, third.ComponentId);
+                Assert.AreEqual(2, rig.Log.Count(l => l == "installer-started"), "the Retry must start exactly one new installer");
+                rig.AssertAllSatisfied();
+            }
+        }
+
+        [TestMethod]
+        public void UnreadableProcessListAtRetry_ResumesInsteadOfStartingASecondInstaller()
+        {
+            using (var rig = new Rig())
+            {
+                InstallSession session = StartedThenStopped(rig);
+                rig.Processes.Throw = true;
+
+                var second = new Hooked(null);
+                Task<InstallRunResult> retry = session.RunAsync(rig.FullPlan(), second, CancellationToken.None);
+                WaitUntil(() => Has(second, InstallEventKind.HandoffStarted), "the resumed hand-off");
+                Thread.Sleep(100);
+                Assert.AreEqual(1, rig.Log.Count(l => l == "installer-started"), "an unreadable process list let a second installer start");
+                Assert.IsFalse(retry.IsCompleted);
+
+                // The first installer finishes, then the list can be read again and shows nothing.
+                File.WriteAllBytes(Path.Combine(rig.Ac, "acclient.exe"), Exe);
+                File.WriteAllBytes(rig.Dat, StockDat);
+                rig.Processes.Set();
+                rig.Processes.Throw = false;
+                Assert.IsTrue(retry.Wait(TimeSpan.FromSeconds(15)));
+                Assert.AreEqual(LauncherError.None, retry.Result.Error, retry.Result.ComponentId);
+                Assert.AreEqual(1, rig.Log.Count(l => l == "installer-started"));
+                rig.AssertAllSatisfied();
+            }
+        }
     }
 
     [TestClass]

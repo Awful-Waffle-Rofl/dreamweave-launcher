@@ -674,7 +674,13 @@ namespace DreamWeave.Launcher.App
         /// <summary>A watch with no root id: anything running under the staged installer's file name, plus the helpers.</summary>
         private InstallerProcessWatch NameOnlyWatch(ManifestComponent installer)
         {
-            return new InstallerProcessWatch(_deps.Processes, null, installer.Id + ".exe");
+            return new InstallerProcessWatch(_deps.Processes, null, StagedInstallerName(installer));
+        }
+
+        /// <summary>The staged installer's file name, which is also the image name its process runs under.</summary>
+        private static string StagedInstallerName(ManifestComponent installer)
+        {
+            return installer.Id + ".exe";
         }
 
         /// <summary>Image names the watch's last look saw: the tracked tree first, then helpers outside it.</summary>
@@ -791,17 +797,22 @@ namespace DreamWeave.Launcher.App
                     return new StagedComponent { DetectedFolder = already };
                 }
 
-                // Or it is still running: never start a second copy beside it.
+                // Or it may still be running: never start a second copy beside it. An unreadable process
+                // list counts as running; helpers alone do not (the installer itself is gone).
                 InstallerProcessWatch earlier;
-                if (_watches.TryGetValue(c.Id, out earlier) && await Task.Run(() => earlier.Check(), ct).ConfigureAwait(false) == InstallerActivity.Tree)
+                if (_watches.TryGetValue(c.Id, out earlier))
                 {
-                    return new StagedComponent { Resume = earlier };
+                    InstallerActivity activity = await Task.Run(() => earlier.Check(), ct).ConfigureAwait(false);
+                    if (activity != InstallerActivity.None && activity != InstallerActivity.HelpersOnly)
+                    {
+                        return new StagedComponent { Resume = earlier };
+                    }
                 }
             }
 
             events.Report(new InstallEvent(InstallEventKind.StageStarted, c.Id));
             var progress = new ForwardingProgress(c.Id, events);
-            string fileName = c.Id + (c.Kind == ComponentKinds.Installer ? ".exe" : ".zip");
+            string fileName = c.Kind == ComponentKinds.Installer ? StagedInstallerName(c) : c.Id + ".zip";
             DownloadResult file = await DownloadAsync(c, fileName, progress, events, ct).ConfigureAwait(false);
             events.Report(new InstallEvent(InstallEventKind.StageDone, c.Id));
             return new StagedComponent { File = file };
@@ -893,7 +904,7 @@ namespace DreamWeave.Launcher.App
                 events.Report(new InstallEvent(InstallEventKind.HandoffStarted, c.Id, text: UiText.InstallerHandoff));
                 try
                 {
-                    string folder = staged.DetectedFolder ?? await WaitForInstallAsync(c, events, ct).ConfigureAwait(false);
+                    string folder = staged.DetectedFolder ?? await WaitForInstallAsync(c, events, ct, earlier).ConfigureAwait(false);
                     await WaitForInstallerDoneAsync(c, folder, earlier, events, ct).ConfigureAwait(false);
                     await AdoptFolderAsync(folder).ConfigureAwait(false);
                 }
@@ -944,8 +955,15 @@ namespace DreamWeave.Launcher.App
         /// Polls every <see cref="InstallDependencies.PollInterval"/> (or at once when "I finished" is
         /// clicked) until the client is detected. The installer process exiting is never the signal: an
         /// InstallShield self-extractor exits early.
+        /// <para>
+        /// <paramref name="resumed"/> is set only when a Retry resumes waiting on an installer an earlier
+        /// run started and whose tree was still running then. Its tree is then known, so once the watch
+        /// reports nothing left and the install is still not there, the installer was closed before it
+        /// finished: that fails at once (InstallerClosedEarly) instead of waiting forever, and the next
+        /// Retry starts a new installer.
+        /// </para>
         /// </summary>
-        private async Task<string> WaitForInstallAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct)
+        private async Task<string> WaitForInstallAsync(ManifestComponent c, IProgress<InstallEvent> events, CancellationToken ct, InstallerProcessWatch resumed = null)
         {
             while (true)
             {
@@ -960,6 +978,19 @@ namespace DreamWeave.Launcher.App
                 if (found != null)
                 {
                     return found;
+                }
+
+                if (resumed != null && await Task.Run(() => resumed.Check(), ct).ConfigureAwait(false) == InstallerActivity.None)
+                {
+                    // One more look: the installer may have finished between the detection and the check.
+                    found = await Task.Run(() => Detect(c, ct), ct).ConfigureAwait(false);
+                    if (found != null)
+                    {
+                        return found;
+                    }
+
+                    _deps.InstallLog("installer-handoff component=" + c.Id + " installer closed before the install was detected");
+                    throw new LauncherException(LauncherError.InstallerClosedEarly, "The installer exited before the install was detected.");
                 }
 
                 Task delay = Task.Delay(_deps.PollInterval, ct);
