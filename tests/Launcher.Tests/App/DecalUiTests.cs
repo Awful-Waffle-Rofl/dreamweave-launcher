@@ -51,6 +51,12 @@ namespace DreamWeave.Launcher.Tests.App
 
         private static LauncherPresenter Presenter(bool decalAvailable, bool launchWithDecal)
         {
+            // Not detected means no starter at all (as the app builds it); detected means a starter.
+            return Presenter(decalAvailable ? new FakeDecal { Available = true } : null, launchWithDecal);
+        }
+
+        private static LauncherPresenter Presenter(IDecalGameStarter decal, bool launchWithDecal)
+        {
             return new LauncherPresenter(
                 new LauncherPresenterTests.MemoryCredentials(),
                 new NoStart(),
@@ -58,7 +64,7 @@ namespace DreamWeave.Launcher.Tests.App
                 () => AppFixtures.Sample(),
                 () => @"C:\Games\AC",
                 null,
-                new FakeDecal { Available = decalAvailable })
+                decal)
             {
                 LaunchWithDecal = launchWithDecal,
             };
@@ -93,6 +99,18 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.IsTrue(screen.DecalLink.Visible);
                 Assert.IsNotNull(screen.DecalLink.Parent, "the link is on the page");
                 Assert.IsNotNull(screen.RememberBox.Parent);
+                screen.Dispose();
+            });
+        }
+
+        [TestMethod]
+        public void DecalInstalledButHelperMissing_ShowsNeitherBoxNorGetLink()
+        {
+            RunSta(() =>
+            {
+                var screen = new LauncherScreen(Presenter(new FakeDecal { Available = false }, true), null);
+                Assert.IsNull(screen.DecalBox, "no box without the helper");
+                Assert.IsNull(screen.DecalLink, "a player who has Decal is not told to get it");
                 screen.Dispose();
             });
         }

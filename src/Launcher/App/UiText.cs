@@ -115,8 +115,8 @@ namespace DreamWeave.Launcher.App
         public const string WaitingForInstallerFiles = "Waiting for the Asheron's Call installer to finish copying files...";
         public const string Installing = "Installing...";
         public const string AskingPermission = "Windows will ask for permission to write to the game folder.";
-        public const string InstallerStarting = "The Asheron's Call installer is starting. If Windows asks for permission, click Yes. The installer can take a few seconds to appear."; // DRAFT
-        public const string HandoffCancelNote = "Finish the installer in its own window; this launcher continues by itself afterwards. Do not click Cancel here: it only stops this launcher waiting, and the installer keeps running."; // DRAFT
+        public const string InstallerStarting = "The Asheron's Call installer is starting. If Windows asks for permission, click Yes. The installer can take a few seconds to appear.";
+        public const string HandoffCancelNote = "Finish the installer in its own window; this launcher continues by itself afterwards. Do not click Cancel here: it only stops this launcher waiting, and the installer keeps running.";
         public const string HandoffNotDetected = "The install has not been detected yet. Finish the installer, then click \"I finished\" again.";
 
         public const string StepDownloading = "Downloading";
@@ -145,8 +145,8 @@ namespace DreamWeave.Launcher.App
         public const string UpdateOptionalFormat = "A new launcher version ({0}) is available.";
         public const string UpdateMandatoryFormat = "This launcher must be updated to version {0} before you can play.";
         public const string UpdateUnavailable = "This launcher is too old to play on the server and no update could be found. Download the launcher again from the DreamWeave website.";
-        public const string OpeningDownloadPage = "Opening the download page in your browser..."; // DRAFT
-        public const string OpenPageFailedFormat = "Could not open your browser. Visit {0} to download the latest launcher."; // DRAFT
+        public const string OpeningDownloadPage = "Opening the download page in your browser...";
+        public const string OpenPageFailedFormat = "Could not open your browser. Visit {0} to download the latest launcher.";
         public const string GameStarted = "Asheron's Call is starting.";
         public const string StartingSlotFormat = "Starting {0}...";
         public const string SecondClientMayBeRefused = "Started, but a second client may be refused. Close the other client to play this one.";
@@ -154,9 +154,9 @@ namespace DreamWeave.Launcher.App
         public const string SlotAlt1 = "Alt 1";
         public const string SlotAlt2 = "Alt 2";
         public const string RememberPasswords = "Remember passwords";
-        public const string LaunchWithDecal = "Launch with Decal"; // DRAFT
-        public const string DecalGetItLink = "Get Decal"; // DRAFT
-        public const string DecalNotLoaded = "The game started, but Decal could not be loaded, so it is running without Decal this time."; // DRAFT
+        public const string LaunchWithDecal = "Launch with Decal";
+        public const string DecalGetItLink = "Get Decal";
+        public const string DecalNotLoaded = "The game started, but Decal could not be loaded, so it is running without Decal this time.";
         public const string PlayAll = "Play all";
         public const string FillInFirst = "Fill in an account and password first.";
         public const string DuplicateAccount = "This account is already used in another row.";

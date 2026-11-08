@@ -152,7 +152,7 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void Start_WhenHelperNeverFinishes_ReturnsLaunchFailedWithinTheBackstop()
+        public void Start_WhenHelperNeverFinishes_ReturnsDecalHelperTimeoutWithinTheBackstop()
         {
             var release = new System.Threading.ManualResetEventSlim(false);
             try
@@ -166,7 +166,7 @@ namespace DreamWeave.Launcher.Tests.App
                     200);
 
                 var clock = System.Diagnostics.Stopwatch.StartNew();
-                AssertError(() => starter.Start(@"C:\Games\AC", "-h host"), LauncherError.LaunchFailed);
+                AssertError(() => starter.Start(@"C:\Games\AC", "-h host"), LauncherError.DecalHelperTimeout);
 
                 Assert.IsTrue(clock.ElapsedMilliseconds < 10000, "Start returned in " + clock.ElapsedMilliseconds + " ms");
             }
@@ -177,12 +177,12 @@ namespace DreamWeave.Launcher.Tests.App
         }
 
         [TestMethod]
-        public void Start_WhenRunnerReportsATimeout_IsLaunchFailed()
+        public void Start_WhenRunnerReportsATimeout_IsDecalHelperTimeout()
         {
             var starter = new DecalGameStarter(@"C:\app\DreamWeaveDecalLaunch.exe", @"C:\Decal\Inject.dll", null,
                 (folder, inject, args) => throw new System.TimeoutException());
 
-            AssertError(() => starter.Start(@"C:\Games\AC", "-h host"), LauncherError.LaunchFailed);
+            AssertError(() => starter.Start(@"C:\Games\AC", "-h host"), LauncherError.DecalHelperTimeout);
         }
 
         private sealed class BrokenPipeWriter : System.IO.StringWriter

@@ -165,8 +165,8 @@ namespace DreamWeave.Launcher.UI
         }
 
         /// <summary>
-        /// Builds the Decal start seam when the player's Decal is installed and the helper is present
-        /// beside the launcher, or null (the "Launch with Decal" option is then hidden). Reading Decal's
+        /// Returns null when Decal is not detected (or detection throws). Otherwise returns a starter whose
+        /// Available is false when the helper is missing. Reading Decal's
         /// registry key and checking its Inject.dll is read-only; nothing about Decal is downloaded,
         /// installed or changed.
         /// </summary>
