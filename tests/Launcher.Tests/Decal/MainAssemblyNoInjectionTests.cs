@@ -28,6 +28,13 @@ namespace DreamWeave.Launcher.Tests.Decal
             "NtCreateThreadEx",
             "RtlCreateUserThread",
             "QueueUserAPC",
+            "NtWriteVirtualMemory",
+            "NtMapViewOfSection",
+            "SetThreadContext",
+            "SetWindowsHookExA",
+            "SetWindowsHookExW",
+            "NtQueueApcThread",
+            "QueueUserAPC2",
         };
 
         [TestMethod]

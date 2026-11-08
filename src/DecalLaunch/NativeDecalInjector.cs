@@ -108,6 +108,7 @@ namespace DreamWeave.DecalLaunch
             }
 
             uint remoteModule;
+            bool freeRemotePath = true;
             try
             {
                 if (!WriteProcessMemory(process, remotePath, pathBytes, (uint)pathBytes.Length, out _))
@@ -121,9 +122,19 @@ namespace DreamWeave.DecalLaunch
                     throw new InvalidOperationException("Inject.dll did not load in the client.");
                 }
             }
+            catch (RemoteThreadTimeoutException)
+            {
+                // The LoadLibraryW thread may still be reading the path buffer: leave it allocated (a few
+                // bytes in the client) rather than free memory a live thread is using.
+                freeRemotePath = false;
+                throw;
+            }
             finally
             {
-                VirtualFreeEx(process, remotePath, 0, MemRelease);
+                if (freeRemotePath)
+                {
+                    VirtualFreeEx(process, remotePath, 0, MemRelease);
+                }
             }
 
             // Load the same Inject.dll locally to find DecalStartup's offset from the module base, then
@@ -153,7 +164,14 @@ namespace DreamWeave.DecalLaunch
             }
         }
 
-        /// <summary>Runs <paramref name="start"/>(<paramref name="arg"/>) in <paramref name="process"/> and returns its 32-bit exit code.</summary>
+        /// <summary>How long one remote thread (LoadLibraryW, then DecalStartup) may run before injection is abandoned.</summary>
+        internal const uint RemoteThreadTimeoutMs = 15000;
+
+        /// <summary>
+        /// Runs <paramref name="start"/>(<paramref name="arg"/>) in <paramref name="process"/> and returns its
+        /// 32-bit exit code. Waits at most <see cref="RemoteThreadTimeoutMs"/>; on a timeout it throws
+        /// <see cref="RemoteThreadTimeoutException"/> so the caller fails open and resumes the client.
+        /// </summary>
         private static uint RunRemoteThread(IntPtr process, IntPtr start, IntPtr arg)
         {
             IntPtr thread = CreateRemoteThread(process, IntPtr.Zero, 0, start, arg, 0, IntPtr.Zero);
@@ -164,9 +182,15 @@ namespace DreamWeave.DecalLaunch
 
             try
             {
-                const uint infinite = 0xFFFFFFFF;
-                const uint waitFailed = 0xFFFFFFFF;
-                if (WaitForSingleObject(thread, infinite) == waitFailed)
+                const uint waitObject0 = 0x00000000;
+                const uint waitTimeout = 0x00000102;
+                uint wait = WaitForSingleObject(thread, RemoteThreadTimeoutMs);
+                if (wait == waitTimeout)
+                {
+                    throw new RemoteThreadTimeoutException();
+                }
+
+                if (wait != waitObject0)
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "WaitForSingleObject on the remote thread.");
                 }
@@ -176,7 +200,17 @@ namespace DreamWeave.DecalLaunch
             }
             finally
             {
+                // Closing our handle does not stop the thread.
                 CloseHandle(thread);
+            }
+        }
+
+        /// <summary>A remote thread did not finish within <see cref="RemoteThreadTimeoutMs"/>.</summary>
+        private sealed class RemoteThreadTimeoutException : Exception
+        {
+            public RemoteThreadTimeoutException()
+                : base("A remote thread in the client did not finish in time.")
+            {
             }
         }
 

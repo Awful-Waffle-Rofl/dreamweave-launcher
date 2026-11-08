@@ -43,6 +43,7 @@ namespace DreamWeave.Launcher.App
             { LauncherError.CredentialStoreUnavailable, "Windows could not save or read the password. You can still play by typing it each time." },
             { LauncherError.DecalInjectFailed, UiText.DecalNotLoaded }, // DRAFT
             { LauncherError.DecalNotFound, "Decal was not found, so the game was not started. Open the launcher's Decal option again after checking that Decal is installed." }, // DRAFT
+            { LauncherError.DecalHelperFailed, "The Decal helper did not run correctly, so the game was not started." }, // DRAFT
             { LauncherError.Cancelled, UiText.CancelledResumable },
             { LauncherError.GameRunning, "A game file is in use, probably by a running Asheron's Call. Close the game and click Retry." },
             { LauncherError.ElevationRequired, "The game folder needs administrator permission to change. Click Retry and choose Yes when Windows asks." },

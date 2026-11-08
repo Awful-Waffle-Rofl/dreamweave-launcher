@@ -25,6 +25,17 @@ namespace DreamWeave.Launcher.Tests.Decal
             Assert.IsTrue(ErrorMessages.Has(LauncherError.DecalNotFound));
             Assert.AreEqual(75, (int)LauncherError.DecalInjectFailed);
             Assert.AreEqual(76, (int)LauncherError.DecalNotFound);
+            Assert.IsTrue(ErrorMessages.Has(LauncherError.DecalHelperFailed));
+            Assert.AreEqual(77, (int)LauncherError.DecalHelperFailed);
+        }
+
+        [TestMethod]
+        public void HelperFailedMessage_DoesNotClaimTheGameStarted()
+        {
+            string text = ErrorMessages.For(LauncherError.DecalHelperFailed);
+
+            Assert.IsFalse(text.Contains("game started"), text);
+            Assert.IsFalse(text.Contains("started, but"), text);
         }
 
         [TestMethod]

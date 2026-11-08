@@ -30,6 +30,12 @@ One HTTPS `POST` of a small JSON body per batch (at most 50 events and 16 KiB) t
 | `events[].error` | A number for the kind of failure (the launcher's error code), `0` for none. |
 | `events[].durationMs` | How long the step took in milliseconds, or `null` if not measured. |
 
+For the `launch-decal` step the error is one of the ordinary launch codes, or one of these Decal codes: `75`
+(the step succeeded and the game started, but Decal could not be loaded into it, so it ran without Decal), `76`
+(Decal's `Inject.dll` was not found or is not the one Decal registered; no game was started) and `77` (the Decal
+helper could not be run, gave no usable answer or did not report a known failure; no game was started by the
+launcher). A code `77` never means the game started.
+
 **Never sent:** account name, password, character names, the game folder or any file path, file names, IP
 address (the server does not store it), computer name, user name, hardware details, or anything typed by the player.
 The request carries no cookies and no credentials, uses the generic user agent `DreamWeaveLauncher`, and puts nothing

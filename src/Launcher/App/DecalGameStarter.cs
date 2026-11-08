@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
+using System.Threading.Tasks;
 using DreamWeave.DecalLaunch;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Launch;
@@ -40,7 +42,9 @@ namespace DreamWeave.Launcher.App
         /// player's Decal. The argument string carries the password and is passed to the helper on
         /// stdin, never on its command line.
         /// </summary>
-        /// <exception cref="LauncherException">DecalNotFound, ClientNotFound, ReparsePointInPath, LaunchFailed or DecalInjectFailed.</exception>
+        /// <exception cref="LauncherException">DecalNotFound, ClientNotFound, ReparsePointInPath, ClientRequiresElevation, AccessDenied,
+        /// LaunchFailed (including a helper that did not finish in time) or DecalHelperFailed. A client that started without Decal is
+        /// not an exception: it is reported through <see cref="DecalStartResult.InjectionFailed"/>.</exception>
         DecalStartResult Start(string acFolder, string args);
     }
 
@@ -68,6 +72,13 @@ namespace DreamWeave.Launcher.App
         private readonly string _injectDllPath;
         private readonly Action<string> _log;
         private readonly Func<string, string, string, HelperOutput> _runHelper;
+        private readonly int _backstopMs;
+
+        /// <summary>How long the launcher waits for the helper before giving up, in milliseconds.</summary>
+        internal const int DefaultBackstopMs = 30000;
+
+        /// <summary>Extra time the outer guard gives a helper-runner to honour its own backstop before the launcher stops waiting.</summary>
+        private const int GraceMs = 1000;
 
         /// <summary>Creates a starter that runs the real helper. <paramref name="injectDllPath"/> is the detected Decal Inject.dll.</summary>
         public DecalGameStarter(string helperExePath, string injectDllPath, Action<string> log = null)
@@ -76,8 +87,9 @@ namespace DreamWeave.Launcher.App
         }
 
         /// <summary>Creates a starter over the given helper-runner seam (tests).</summary>
-        internal DecalGameStarter(string helperExePath, string injectDllPath, Action<string> log, Func<string, string, string, HelperOutput> runHelper)
+        internal DecalGameStarter(string helperExePath, string injectDllPath, Action<string> log, Func<string, string, string, HelperOutput> runHelper, int backstopMs = DefaultBackstopMs)
         {
+            _backstopMs = backstopMs > 0 ? backstopMs : DefaultBackstopMs;
             _helperExePath = helperExePath;
             _injectDllPath = injectDllPath;
             _log = log ?? (line => { });
@@ -110,19 +122,51 @@ namespace DreamWeave.Launcher.App
                 throw new LauncherException(LauncherError.ClientNotFound, "No game folder.");
             }
 
-            HelperOutput output;
-            try
-            {
-                output = _runHelper(acFolder, _injectDllPath, args ?? string.Empty);
-            }
-            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is IOException || ex is InvalidOperationException)
-            {
-                // The arguments are never logged: they carry the password.
-                Note("decal helper did not run type=" + ex.GetType().Name);
-                throw new LauncherException(LauncherError.DecalInjectFailed, "The Decal helper could not be started.", ex);
-            }
+            HelperOutput output = RunWithBackstop(acFolder, args ?? string.Empty);
 
             return Interpret(output);
+        }
+
+        /// <summary>
+        /// Runs the helper-runner on its own task and waits at most the backstop (plus a short grace so a
+        /// runner that honours the backstop itself reports its own timeout first). A helper that does not
+        /// finish is NOT killed: the launcher only stops waiting and reports LaunchFailed.
+        /// </summary>
+        private HelperOutput RunWithBackstop(string acFolder, string args)
+        {
+            Task<HelperOutput> run = Task.Run(() => _runHelper(acFolder, _injectDllPath, args));
+            try
+            {
+                if (!run.Wait(_backstopMs + GraceMs))
+                {
+                    return Timeout();
+                }
+
+                return run.Result;
+            }
+            catch (AggregateException agg)
+            {
+                Exception ex = agg.InnerException ?? agg;
+                if (ex is TimeoutException)
+                {
+                    return Timeout();
+                }
+
+                if (ex is System.ComponentModel.Win32Exception || ex is IOException || ex is InvalidOperationException)
+                {
+                    // The arguments are never logged: they carry the password.
+                    Note("decal helper did not run type=" + ex.GetType().Name);
+                    throw new LauncherException(LauncherError.DecalHelperFailed, "The Decal helper could not be run.", ex);
+                }
+
+                throw;
+            }
+        }
+
+        private HelperOutput Timeout()
+        {
+            Note("decal helper did not finish within " + _backstopMs + " ms");
+            throw new LauncherException(LauncherError.LaunchFailed, "The Decal helper did not finish in time.");
         }
 
         /// <summary>
@@ -173,13 +217,20 @@ namespace DreamWeave.Launcher.App
                     return LauncherError.ClientNotFound;
                 case DecalLaunchResult.TokenInjectPathInvalid:
                 case DecalLaunchResult.TokenInjectMissing:
+                case DecalLaunchResult.TokenInjectNotRegistered:
                     return LauncherError.DecalNotFound;
-                case DecalLaunchResult.TokenReparsePoint:
+                case DecalLaunchResult.TokenAcclientReparsePoint:
+                case DecalLaunchResult.TokenInjectReparsePoint:
                     return LauncherError.ReparsePointInPath;
                 case DecalLaunchResult.TokenCreateProcessFailed:
                     return LauncherError.LaunchFailed;
+                case DecalLaunchResult.TokenElevationRequired:
+                    return LauncherError.ClientRequiresElevation;
+                case DecalLaunchResult.TokenAccessDenied:
+                    return LauncherError.AccessDenied;
                 default:
-                    return LauncherError.DecalInjectFailed;
+                    // Bad usage, an unknown token, or no token at all: the helper did not start a client.
+                    return LauncherError.DecalHelperFailed;
             }
         }
 
@@ -192,11 +243,17 @@ namespace DreamWeave.Launcher.App
                     return "acclient.exe was not found in the game folder.";
                 case DecalLaunchResult.TokenInjectPathInvalid:
                 case DecalLaunchResult.TokenInjectMissing:
+                case DecalLaunchResult.TokenInjectNotRegistered:
                     return "The player's Decal Inject.dll was not found.";
-                case DecalLaunchResult.TokenReparsePoint:
+                case DecalLaunchResult.TokenAcclientReparsePoint:
+                case DecalLaunchResult.TokenInjectReparsePoint:
                     return "A path to the client or to Decal passes through a junction or link.";
                 case DecalLaunchResult.TokenCreateProcessFailed:
                     return "Windows could not start acclient.exe.";
+                case DecalLaunchResult.TokenElevationRequired:
+                    return "acclient.exe needs to run as administrator.";
+                case DecalLaunchResult.TokenAccessDenied:
+                    return "Windows denied permission to start acclient.exe.";
                 default:
                     return "The Decal helper could not start the client.";
             }
@@ -220,16 +277,71 @@ namespace DreamWeave.Launcher.App
             {
                 process.Start();
 
-                // The password goes on stdin only.
-                using (StreamWriter stdin = process.StandardInput)
+                // The password goes on stdin only. The helper may exit before reading it; that write
+                // failure is ignored so its real token and exit code are still read below.
+                WriteStdin(process.StandardInput, args);
+
+                // Both streams are read concurrently so a full pipe on one cannot stall the other.
+                var stdout = new StringBuilder();
+                var stderr = new StringBuilder();
+                Task outTask = Pump(process.StandardOutput, stdout);
+                Task errTask = Pump(process.StandardError, stderr);
+
+                if (!process.WaitForExit(_backstopMs))
+                {
+                    // Not killed: the launcher only stops waiting.
+                    throw new TimeoutException();
+                }
+
+                // The streams normally end with the process; bound the wait in case a child holds a pipe open.
+                Task.WaitAll(new[] { outTask, errTask }, 5000);
+                return new HelperOutput(process.ExitCode, Snapshot(stdout), Snapshot(stderr));
+            }
+        }
+
+        /// <summary>Writes the argument string to the helper's stdin and closes it, ignoring a broken pipe from a helper that already exited.</summary>
+        internal static void WriteStdin(TextWriter stdin, string args)
+        {
+            try
+            {
+                using (stdin)
                 {
                     stdin.Write(args);
                 }
+            }
+            catch (IOException)
+            {
+                // The helper exited before reading: its token and exit code are what matter.
+            }
+        }
 
-                string stdout = process.StandardOutput.ReadToEnd();
-                string stderr = process.StandardError.ReadToEnd();
-                process.WaitForExit();
-                return new HelperOutput(process.ExitCode, stdout, stderr);
+        private static Task Pump(TextReader reader, StringBuilder into)
+        {
+            return Task.Run(() =>
+            {
+                try
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        lock (into)
+                        {
+                            into.Append(line).Append('\n');
+                        }
+                    }
+                }
+                catch (IOException)
+                {
+                    // The pipe closed under us: keep what was read.
+                }
+            });
+        }
+
+        private static string Snapshot(StringBuilder sb)
+        {
+            lock (sb)
+            {
+                return sb.ToString();
             }
         }
 

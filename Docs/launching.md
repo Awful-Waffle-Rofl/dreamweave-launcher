@@ -56,7 +56,8 @@ just started is ever opened.
 
 Players who already have [Decal](https://www.decaldev.com/) installed can tick "Launch with Decal" to
 start the client with Decal and its plugins loaded, the same way ThwargLauncher, Mag-ACClientLauncher
-and RynthCore do. The option appears only when Decal is detected on the PC, and is off by default.
+and RynthCore do. The option appears only when Decal is detected on the PC, and is off by default. When Decal is not
+detected, a "Get Decal" link to its download page is shown in its place.
 Decal is the player's own software: the launcher never bundles, downloads, installs, modifies or
 configures it. This is a narrow owner exemption to the project's no-injection rule, for this one
 purpose.
@@ -71,8 +72,10 @@ purpose.
   two command-line arguments, and reads the acclient argument string (which contains the password)
   **on stdin, never on its command line**. It prints the started process id on stdout. It validates
   its inputs before starting anything: the game folder must contain `acclient.exe`, the `Inject.dll`
-  argument must be an existing absolute path named `Inject.dll`, and neither may be a reparse point;
-  it starts nothing but `<gameFolder>\acclient.exe`.
+  argument must be an existing absolute path named `Inject.dll`. Links are checked like this: the game
+  folder itself may be a link (a moved install), but `acclient.exe` may not be one, and the `Inject.dll`
+  path and every folder above it, below the drive root, may not be a link. The helper starts nothing but
+  `<gameFolder>\acclient.exe`.
 - **Sequence.** The helper creates acclient suspended, loads the player's `Inject.dll` into it and
   calls that library's documented `DecalStartup` entry point, then resumes the client. If any
   injection step fails it still resumes the client (fail-open), so the player gets a plain client

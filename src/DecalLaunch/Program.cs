@@ -26,7 +26,8 @@ namespace DreamWeave.DecalLaunch
                 return Fail(DecalLaunchResult.ExitBadUsage, DecalLaunchResult.TokenBadUsage);
             }
 
-            int validation = DecalLaunchInputs.Validate(args[0], args[1], out DecalLaunchInputs inputs, out string token);
+            // The Inject.dll argument must be the one in the folder Decal's own registry entry names.
+            int validation = DecalLaunchInputs.Validate(args[0], args[1], DecalAgentRegistry.ReadAgentPath, out DecalLaunchInputs inputs, out string token);
             if (validation != DecalLaunchResult.ExitSuccess)
             {
                 return Fail(validation, token);
@@ -41,9 +42,10 @@ namespace DreamWeave.DecalLaunch
             {
                 pid = NativeDecalInjector.Launch(inputs, acclientArgs, out injectionFailed);
             }
-            catch (Win32Exception)
+            catch (Win32Exception ex)
             {
-                return Fail(DecalLaunchResult.ExitCreateProcessFailed, DecalLaunchResult.TokenCreateProcessFailed);
+                int exit = DecalLaunchResult.ForCreateProcessError(ex.NativeErrorCode, out string failure);
+                return Fail(exit, failure);
             }
 
             Console.Out.WriteLine(DecalLaunchResult.PidLine(pid));

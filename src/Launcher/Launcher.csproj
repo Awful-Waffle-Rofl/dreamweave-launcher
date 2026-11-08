@@ -38,6 +38,8 @@
       <DecalHelperOutput Include="$(MSBuildThisFileDirectory)..\DecalLaunch\bin\$(Configuration)\net48\DreamWeaveDecalLaunch.exe" />
       <DecalHelperOutput Include="$(MSBuildThisFileDirectory)..\DecalLaunch\bin\$(Configuration)\net48\DreamWeaveDecalLaunch.pdb" />
     </ItemGroup>
+    <!-- The helper builds first (ProjectReference above), so its exe is always present. Missing after a Release build means a broken build: fail loudly rather than ship a launcher without it. -->
+    <Error Condition="'$(Configuration)' == 'Release' And !Exists('$(MSBuildThisFileDirectory)..\DecalLaunch\bin\$(Configuration)\net48\DreamWeaveDecalLaunch.exe')" Text="DreamWeaveDecalLaunch.exe was not found after the build (src\DecalLaunch\bin\$(Configuration)\net48). The Decal helper must be built before the launcher is packaged." />
     <Copy SourceFiles="@(DecalHelperOutput)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="Exists('%(DecalHelperOutput.Identity)')" />
   </Target>
 </Project>

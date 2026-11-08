@@ -177,13 +177,14 @@ namespace DreamWeave.Launcher.UI
     /// <summary>The log-in-and-play screen. All decisions are the <see cref="LauncherPresenter"/>'s.</summary>
     internal sealed class LauncherScreen : Page
     {
-        /// <summary>The Decal download page (https only), shown beside the "Launch with Decal" box.</summary>
+        /// <summary>The Decal download page (https only), shown as a discovery link when Decal was not detected.</summary>
         internal const string DecalDownloadUrl = "https://www.decaldev.com/";
 
         private readonly LauncherPresenter _presenter;
         private readonly SlotRow[] _rows = new SlotRow[LauncherPresenter.SlotCount];
         private readonly ThemedCheckBox _remember;
         private readonly ThemedCheckBox _decal;
+        private readonly LinkLabel _decalLink;
         private readonly TintedBox _info;
         private readonly WrapLabel _status;
         private readonly FlatButton _playAll;
@@ -202,6 +203,9 @@ namespace DreamWeave.Launcher.UI
 
         /// <summary>The "Launch with Decal" box, or null when Decal was not detected (read by tests).</summary>
         internal ThemedCheckBox DecalBox => _decal;
+
+        /// <summary>The "Get Decal" discovery link, or null when Decal was detected (read by tests).</summary>
+        internal LinkLabel DecalLink => _decalLink;
 
         /// <summary>Raised when the player toggles "Launch with Decal"; the handler persists the choice.</summary>
         public event EventHandler DecalChanged;
@@ -260,18 +264,13 @@ namespace DreamWeave.Launcher.UI
                     _presenter.LaunchWithDecal = _decal.Checked;
                     DecalChanged?.Invoke(this, EventArgs.Empty);
                 };
-                LinkLabel decalLink = UiKit.Link(UiText.DecalGetItLink, () => WizardController.OpenUrl(DecalDownloadUrl));
-                var decalRow = new FlowLayoutPanel
-                {
-                    FlowDirection = FlowDirection.LeftToRight,
-                    AutoSize = true,
-                    WrapContents = false,
-                    BackColor = Color.Transparent,
-                    Margin = new Padding(0),
-                };
-                decalRow.Controls.Add(_decal);
-                decalRow.Controls.Add(decalLink);
-                Add(decalRow);
+                SetLeft(_decal);
+            }
+            else
+            {
+                // Decal was not detected: the box is hidden and a link points to where it can be had.
+                _decalLink = UiKit.Link(UiText.DecalGetItLink, () => WizardController.OpenUrl(DecalDownloadUrl));
+                Add(_decalLink);
             }
 
             _remember = new ThemedCheckBox { Text = UiText.RememberPasswords };

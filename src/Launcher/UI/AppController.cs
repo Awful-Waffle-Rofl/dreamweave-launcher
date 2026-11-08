@@ -153,7 +153,9 @@ namespace DreamWeave.Launcher.UI
             _launcherScreen.DecalChanged += (s, e) =>
             {
                 bool on = _presenter.LaunchWithDecal;
-                _ = _services.UpdateStateAsync(st => st.LaunchWithDecal = on);
+                _services.UpdateStateAsync(st => st.LaunchWithDecal = on).ContinueWith(
+                    t => new FileDownloadLog(_services.Paths.LogFile).Note("decal", "could not save the Launch with Decal choice type=" + (t.Exception?.GetBaseException().GetType().Name ?? "unknown")),
+                    System.Threading.Tasks.TaskContinuationOptions.OnlyOnFaulted);
             };
             _window.FormClosing -= OnLauncherClosing;
             _window.FormClosing += OnLauncherClosing;

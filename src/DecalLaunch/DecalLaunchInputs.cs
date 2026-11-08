@@ -31,12 +31,24 @@ namespace DreamWeave.DecalLaunch
         /// <summary>
         /// Validates the two arguments without starting anything. On success <paramref name="inputs"/>
         /// holds the checked paths and the method returns <see cref="DecalLaunchResult.ExitSuccess"/>;
-        /// otherwise it returns the matching exit code and sets <paramref name="token"/> to the stderr
-        /// token. The game folder must exist and contain acclient.exe; Inject.dll must be an existing
-        /// absolute path named Inject.dll; neither acclient.exe nor Inject.dll may be a reparse point.
+        /// otherwise it returns the matching exit code and sets <paramref name="token"/> to the stderr token.
+        /// <list type="bullet">
+        /// <item>The game folder must exist and contain acclient.exe. The game folder itself may be a link
+        /// (a moved install), but acclient.exe must not be a reparse point.</item>
+        /// <item>Inject.dll must be an absolute drive path named Inject.dll with no <c>..</c> segment, must
+        /// exist, and must be exactly the Inject.dll in the folder Decal's registry entry names
+        /// (<paramref name="readAgentPath"/>, which reads HKLM SOFTWARE\Decal\Agent AgentPath in the
+        /// 32-bit view), compared case-insensitively after full-path normalisation.</item>
+        /// <item>Neither Inject.dll nor any folder between the drive root and it may be a reparse point.</item>
+        /// </list>
         /// </summary>
-        public static int Validate(string gameFolder, string injectDllPath, out DecalLaunchInputs inputs, out string token)
+        public static int Validate(string gameFolder, string injectDllPath, Func<string> readAgentPath, out DecalLaunchInputs inputs, out string token)
         {
+            if (readAgentPath == null)
+            {
+                throw new ArgumentNullException(nameof(readAgentPath));
+            }
+
             inputs = null;
             token = null;
 
@@ -64,19 +76,16 @@ namespace DreamWeave.DecalLaunch
             }
 
             if (string.IsNullOrWhiteSpace(injectDllPath)
-                || !IsAbsolute(injectDllPath)
-                || !PathEndsWith(injectDllPath, InjectDllName))
+                || !IsAbsoluteDrivePath(injectDllPath)
+                || HasDotDotSegment(injectDllPath)
+                || !NameIs(injectDllPath, InjectDllName))
             {
                 token = DecalLaunchResult.TokenInjectPathInvalid;
                 return DecalLaunchResult.ExitInjectInvalid;
             }
 
-            string inject;
-            try
-            {
-                inject = Path.GetFullPath(injectDllPath);
-            }
-            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
+            string inject = FullPathOrNull(injectDllPath);
+            if (inject == null)
             {
                 token = DecalLaunchResult.TokenInjectPathInvalid;
                 return DecalLaunchResult.ExitInjectInvalid;
@@ -88,9 +97,22 @@ namespace DreamWeave.DecalLaunch
                 return DecalLaunchResult.ExitInjectInvalid;
             }
 
-            if (IsReparsePoint(acclient) || IsReparsePoint(inject))
+            string registered = RegisteredInjectDll(readAgentPath);
+            if (registered == null || !string.Equals(registered, inject, StringComparison.OrdinalIgnoreCase))
             {
-                token = DecalLaunchResult.TokenReparsePoint;
+                token = DecalLaunchResult.TokenInjectNotRegistered;
+                return DecalLaunchResult.ExitInjectInvalid;
+            }
+
+            if (IsReparsePoint(acclient))
+            {
+                token = DecalLaunchResult.TokenAcclientReparsePoint;
+                return DecalLaunchResult.ExitReparsePoint;
+            }
+
+            if (AnyReparsePointFromRoot(inject))
+            {
+                token = DecalLaunchResult.TokenInjectReparsePoint;
                 return DecalLaunchResult.ExitReparsePoint;
             }
 
@@ -98,15 +120,60 @@ namespace DreamWeave.DecalLaunch
             return DecalLaunchResult.ExitSuccess;
         }
 
-        private static bool IsAbsolute(string path)
+        /// <summary>The full Inject.dll path Decal's registry entry names, or null when it is absent or unusable.</summary>
+        private static string RegisteredInjectDll(Func<string> readAgentPath)
+        {
+            string agent;
+            try
+            {
+                agent = readAgentPath();
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrWhiteSpace(agent))
+            {
+                return null;
+            }
+
+            try
+            {
+                return FullPathOrNull(Path.Combine(agent.Trim(), InjectDllName));
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        private static bool IsAbsoluteDrivePath(string path)
+        {
+            return path.Length >= 3
+                && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'))
+                && path[1] == ':'
+                && (path[2] == '\\' || path[2] == '/');
+        }
+
+        private static bool HasDotDotSegment(string path)
+        {
+            foreach (string segment in path.Split('\\', '/'))
+            {
+                if (segment.Trim() == "..")
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool NameIs(string path, string fileName)
         {
             try
             {
-                return Path.IsPathRooted(path)
-                    && path.Length >= 3
-                    && ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z'))
-                    && path[1] == ':'
-                    && (path[2] == '\\' || path[2] == '/');
+                return string.Equals(Path.GetFileName(path), fileName, StringComparison.OrdinalIgnoreCase);
             }
             catch (ArgumentException)
             {
@@ -114,19 +181,16 @@ namespace DreamWeave.DecalLaunch
             }
         }
 
-        private static bool PathEndsWith(string path, string fileName)
+        private static string FullPathOrNull(string path)
         {
-            string name;
             try
             {
-                name = Path.GetFileName(path);
+                return Path.GetFullPath(path);
             }
-            catch (ArgumentException)
+            catch (Exception ex) when (ex is ArgumentException || ex is NotSupportedException || ex is PathTooLongException)
             {
-                return false;
+                return null;
             }
-
-            return string.Equals(name, fileName, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool DirectoryExistsSafe(string path)
@@ -151,6 +215,28 @@ namespace DreamWeave.DecalLaunch
             {
                 return false;
             }
+        }
+
+        /// <summary>True when any folder below the drive root, or the file itself, is a reparse point (fail closed on unreadable attributes).</summary>
+        private static bool AnyReparsePointFromRoot(string fullPath)
+        {
+            string root = Path.GetPathRoot(fullPath);
+            if (string.IsNullOrEmpty(root))
+            {
+                return true;
+            }
+
+            string current = root.TrimEnd('\\', '/');
+            foreach (string segment in fullPath.Substring(root.Length).Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                current = current + "\\" + segment;
+                if (IsReparsePoint(current))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool IsReparsePoint(string path)
