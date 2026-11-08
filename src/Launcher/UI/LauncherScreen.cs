@@ -274,7 +274,9 @@ namespace DreamWeave.Launcher.UI
                 Add(_decalLink);
             }
 
-            _remember = new ThemedCheckBox { Text = UiText.RememberPasswords };
+            // Checked by default so a returning player does not re-enter passwords. The state is not
+            // persisted: LoadRows re-ticks it for saved passwords and OnRowEdited unticks it.
+            _remember = new ThemedCheckBox { Text = UiText.RememberPasswords, Checked = true };
             SetLeft(_remember);
             _status = UiKit.Muted(string.Empty);
             Add(_status);
