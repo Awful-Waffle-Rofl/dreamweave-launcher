@@ -79,7 +79,9 @@ namespace DreamWeave.Launcher.Tests.App
                 Assert.IsNotNull(screen.DecalBox, "the box exists when Decal is detected");
                 Assert.IsTrue(screen.DecalBox.Checked, "it reflects the saved preference");
                 Assert.AreEqual(UiText.LaunchWithDecal, screen.DecalBox.Text);
-                Assert.IsNull(screen.DecalLink, "no discovery link when Decal is already detected");
+                Assert.IsNotNull(screen.RynthLink, "the Rynth alternative is offered even when Decal is detected");
+                Assert.AreEqual(UiText.TryRynthLink, screen.RynthLink.Text);
+                Assert.IsNotNull(screen.RynthLink.Parent, "the Rynth link is on the page");
                 Assert.IsNotNull(screen.DecalBox.Parent, "the box is on the page");
                 Assert.IsTrue(screen.DecalBox.Visible);
                 Assert.IsNotNull(screen.RememberBox.Parent, "adding the box must not displace the Remember box");
@@ -94,23 +96,23 @@ namespace DreamWeave.Launcher.Tests.App
             {
                 var screen = new LauncherScreen(Presenter(false, true), null);
                 Assert.IsNull(screen.DecalBox, "no box when Decal is not detected");
-                Assert.IsNotNull(screen.DecalLink, "the discovery link is shown when Decal is not detected");
-                Assert.AreEqual(UiText.DecalGetItLink, screen.DecalLink.Text);
-                Assert.IsTrue(screen.DecalLink.Visible);
-                Assert.IsNotNull(screen.DecalLink.Parent, "the link is on the page");
+                Assert.IsNotNull(screen.RynthLink, "the Rynth alternative is shown when Decal is not detected");
+                Assert.AreEqual(UiText.TryRynthLink, screen.RynthLink.Text);
+                Assert.IsTrue(screen.RynthLink.Visible);
+                Assert.IsNotNull(screen.RynthLink.Parent, "the link is on the page");
                 Assert.IsNotNull(screen.RememberBox.Parent);
                 screen.Dispose();
             });
         }
 
         [TestMethod]
-        public void DecalInstalledButHelperMissing_ShowsNeitherBoxNorGetLink()
+        public void DecalInstalledButHelperMissing_ShowsNoBox_ButStillOffersRynth()
         {
             RunSta(() =>
             {
                 var screen = new LauncherScreen(Presenter(new FakeDecal { Available = false }, true), null);
                 Assert.IsNull(screen.DecalBox, "no box without the helper");
-                Assert.IsNull(screen.DecalLink, "a player who has Decal is not told to get it");
+                Assert.IsNotNull(screen.RynthLink, "Rynth is offered to everyone, including a player who has Decal");
                 screen.Dispose();
             });
         }

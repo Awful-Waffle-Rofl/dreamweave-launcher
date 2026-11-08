@@ -177,14 +177,14 @@ namespace DreamWeave.Launcher.UI
     /// <summary>The log-in-and-play screen. All decisions are the <see cref="LauncherPresenter"/>'s.</summary>
     internal sealed class LauncherScreen : Page
     {
-        /// <summary>The Decal download page (https only), shown as a discovery link when Decal was not detected.</summary>
-        internal const string DecalDownloadUrl = "https://www.decaldev.com/";
+        /// <summary>Rynth's page (https only), shown as an alternative when Decal was not detected. We do not push Decal on players who do not already have it.</summary>
+        internal const string RynthUrl = "https://aelrynth.com/rynth.html";
 
         private readonly LauncherPresenter _presenter;
         private readonly SlotRow[] _rows = new SlotRow[LauncherPresenter.SlotCount];
         private readonly ThemedCheckBox _remember;
         private readonly ThemedCheckBox _decal;
-        private readonly LinkLabel _decalLink;
+        private readonly LinkLabel _rynthLink;
         private readonly TintedBox _info;
         private readonly WrapLabel _status;
         private readonly FlatButton _playAll;
@@ -204,8 +204,8 @@ namespace DreamWeave.Launcher.UI
         /// <summary>The "Launch with Decal" box, or null when Decal was not detected (read by tests).</summary>
         internal ThemedCheckBox DecalBox => _decal;
 
-        /// <summary>The "Get Decal" discovery link, or null when Decal was detected (read by tests).</summary>
-        internal LinkLabel DecalLink => _decalLink;
+        /// <summary>The "Try Rynth" alternative link, shown to every player regardless of Decal (read by tests).</summary>
+        internal LinkLabel RynthLink => _rynthLink;
 
         /// <summary>Raised when the player toggles "Launch with Decal"; the handler persists the choice.</summary>
         public event EventHandler DecalChanged;
@@ -256,6 +256,8 @@ namespace DreamWeave.Launcher.UI
                 Add(row);
             }
 
+            // The "Launch with Decal" box appears only when Decal is actually usable (installed and the
+            // injection helper is present). We never push Decal on a player who does not already have it.
             if (_presenter.DecalAvailable)
             {
                 _decal = new ThemedCheckBox { Text = UiText.LaunchWithDecal, Checked = _presenter.LaunchWithDecal };
@@ -266,13 +268,10 @@ namespace DreamWeave.Launcher.UI
                 };
                 Add(_decal);
             }
-            else if (!_presenter.DecalInstalled)
-            {
-                // Decal was not detected: the box is hidden and a link points to where it can be had.
-                // (Decal installed but the helper missing shows neither: the player already has Decal.)
-                _decalLink = UiKit.Link(UiText.DecalGetItLink, () => WizardController.OpenUrl(DecalDownloadUrl));
-                Add(_decalLink);
-            }
+
+            // Rynth is offered to everyone, whether or not they run Decal, as an alternative launcher/tool suite.
+            _rynthLink = UiKit.Link(UiText.TryRynthLink, () => WizardController.OpenUrl(RynthUrl));
+            Add(_rynthLink);
 
             // Checked by default so a returning player does not re-enter passwords. The state is not
             // persisted: LoadRows re-ticks it for saved passwords and OnRowEdited unticks it.
