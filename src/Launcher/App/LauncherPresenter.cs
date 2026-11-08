@@ -16,31 +16,56 @@ namespace DreamWeave.Launcher.App
     /// <summary>Starts the game client; the seam over <see cref="GameLauncher"/>.</summary>
     internal interface IGameStarter
     {
-        /// <summary>Starts acclient.exe from <paramref name="acFolder"/> with <paramref name="args"/>.</summary>
+        /// <summary>Starts acclient.exe from <paramref name="acFolder"/> with <paramref name="args"/>; returns its process id.</summary>
         /// <exception cref="LauncherException">As <see cref="GameLauncher.Launch"/>.</exception>
-        void Start(string acFolder, string args);
+        int Start(string acFolder, string args);
+
+        /// <summary>
+        /// Blocks until the client <paramref name="pid"/> (just returned by <see cref="Start"/>) has had its
+        /// single-instance lock released, or the release gave up. Never throws.
+        /// </summary>
+        ClientLockOutcome ReleaseLock(int pid);
     }
 
-    /// <summary><see cref="IGameStarter"/> over the real <see cref="GameLauncher"/>.</summary>
+    /// <summary><see cref="IGameStarter"/> over the real <see cref="GameLauncher"/> and <see cref="ClientLockReleaser"/>.</summary>
     internal sealed class GameStarter : IGameStarter
     {
         private readonly GameLauncher _launcher = new GameLauncher();
+        private readonly ClientLockReleaser _lock;
 
-        public void Start(string acFolder, string args)
+        /// <param name="log">Receives one launcher.log line per release (never credentials).</param>
+        public GameStarter(Action<string> log = null)
         {
-            _launcher.Launch(acFolder, args);
+            _lock = new ClientLockReleaser(log);
+        }
+
+        public int Start(string acFolder, string args)
+        {
+            return _launcher.Launch(acFolder, args);
+        }
+
+        public ClientLockOutcome ReleaseLock(int pid)
+        {
+            return _lock.Release(pid);
         }
     }
 
     /// <summary>The result of <see cref="LauncherPresenter.PlayAsync"/>.</summary>
     internal sealed class PlayResult
     {
-        public PlayResult(LauncherError error, string message, bool passwordNotSaved)
+        public PlayResult(LauncherError error, string message, bool passwordNotSaved, string notice = null)
         {
             Error = error;
             Message = message;
             PasswordNotSaved = passwordNotSaved;
+            Notice = notice;
         }
+
+        /// <summary>
+        /// For a started client: a plain note for its row (<see cref="UiText.SecondClientMayBeRefused"/>
+        /// when its single-instance lock could not be released), or null.
+        /// </summary>
+        public string Notice { get; }
 
         /// <summary><see cref="LauncherError.None"/> when the client was started.</summary>
         public LauncherError Error { get; }
@@ -325,6 +350,7 @@ namespace DreamWeave.Launcher.App
             {
                 LauncherManifest m = _manifest();
                 string folder = _acFolder();
+                ClientLockOutcome lockOutcome = ClientLockOutcome.Released;
                 bool passwordNotSaved = await Task.Run(() =>
                 {
                     string args = LaunchArgsBuilder.Build(m.Launch?.ArgTemplate ?? LaunchInfo.DefaultArgTemplate, user, password, m.Server.Host, m.Server.Port, m.Launch?.ExtraArgs);
@@ -333,12 +359,18 @@ namespace DreamWeave.Launcher.App
                         throw new LauncherException(LauncherError.ClientNotFound, "No game folder.");
                     }
 
-                    _starter.Start(folder, args);
-                    return !TryRemember(user, password, remember);
+                    int pid = _starter.Start(folder, args);
+                    bool saved = TryRemember(user, password, remember);
+
+                    // Awaited before this start completes, so Play all never starts the next client while
+                    // this one still holds the lock (the next client would be refused).
+                    lockOutcome = _starter.ReleaseLock(pid);
+                    return !saved;
                 }).ConfigureAwait(false);
 
                 _telemetry.Record(TelemetrySteps.Launch, TelemetryOutcome.Succeeded, LauncherError.None, clock.Elapsed);
-                return new PlayResult(LauncherError.None, UiText.GameStarted, passwordNotSaved);
+                string notice = lockOutcome == ClientLockOutcome.Released ? null : UiText.SecondClientMayBeRefused;
+                return new PlayResult(LauncherError.None, UiText.GameStarted, passwordNotSaved, notice);
             }
             catch (LauncherException ex)
             {

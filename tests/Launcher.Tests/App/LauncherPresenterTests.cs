@@ -138,7 +138,13 @@ namespace DreamWeave.Launcher.Tests.App
 
             public LauncherError Fail { get; set; }
 
-            public void Start(string acFolder, string args)
+            /// <summary>What <see cref="ReleaseLock"/> reports.</summary>
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome LockOutcome { get; set; } = DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
+
+            /// <summary>Process ids passed to <see cref="ReleaseLock"/>, in order.</summary>
+            public List<int> Released { get; } = new List<int>();
+
+            public int Start(string acFolder, string args)
             {
                 if (Fail != LauncherError.None)
                 {
@@ -146,6 +152,13 @@ namespace DreamWeave.Launcher.Tests.App
                 }
 
                 Starts.Add(new KeyValuePair<string, string>(acFolder, args));
+                return 1000 + Starts.Count;
+            }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(int pid)
+            {
+                Released.Add(pid);
+                return LockOutcome;
             }
         }
 

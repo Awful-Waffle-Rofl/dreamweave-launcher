@@ -35,7 +35,7 @@ namespace DreamWeave.Launcher.Tests.App
 
             public string FailFor { get; set; }
 
-            public void Start(string acFolder, string args)
+            public int Start(string acFolder, string args)
             {
                 if (FailFor != null && args.Contains(FailFor))
                 {
@@ -43,7 +43,10 @@ namespace DreamWeave.Launcher.Tests.App
                 }
 
                 Args.Add(args);
+                return Args.Count;
             }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(int pid) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
         }
 
         private static LauncherPresenter Presenter(IGameStarter starter, LauncherPresenterTests.MemoryCredentials creds, ISlotAccountStore slots)
@@ -347,7 +350,13 @@ namespace DreamWeave.Launcher.Tests.App
                 _onStart = onStart;
             }
 
-            public void Start(string acFolder, string args) => _onStart();
+            public int Start(string acFolder, string args)
+            {
+                _onStart();
+                return 1;
+            }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(int pid) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
         }
 
         [TestMethod]

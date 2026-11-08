@@ -403,6 +403,10 @@ namespace DreamWeave.Launcher.UI
                 {
                     started = true;
                     notSaved |= r.PasswordNotSaved;
+                    if (!string.IsNullOrEmpty(r.Notice))
+                    {
+                        _rows[result.Slot].SetLaunchError(r.Notice);
+                    }
                 }
                 else if (r.Error == LauncherError.Cancelled)
                 {

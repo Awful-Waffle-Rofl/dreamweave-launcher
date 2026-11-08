@@ -29,9 +29,12 @@ namespace DreamWeave.Launcher.Tests.App
 
         private sealed class NoStart : IGameStarter
         {
-            public void Start(string acFolder, string args)
+            public int Start(string acFolder, string args)
             {
+                return 1;
             }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(int pid) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
         }
 
         private static void RunSta(Action body)
