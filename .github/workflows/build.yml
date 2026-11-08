@@ -62,6 +62,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "assert-version failed for the right tag (exit $LASTEXITCODE)" }
           pwsh -NoProfile -File ./tools/release/assert-version.ps1 -Tag 'v9.9.9' -ExePath $env:EXE_PATH -SetupPath $found.FullName *> $null
           if ($LASTEXITCODE -eq 0) { throw 'assert-version accepted a wrong tag' }
+          # The wrong tag was meant to fail: do not let its exit code become the step's.
+          $global:LASTEXITCODE = 0
 
       - uses: actions/upload-artifact@v4
         with:
