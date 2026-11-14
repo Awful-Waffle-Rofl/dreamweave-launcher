@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
     <!-- The launcher's version: read at run time through the assembly informational version (LauncherInfo.Version). -->
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>DreamWeave Launcher</Product>
     <Company>DreamWeave</Company>
     <Copyright>Copyright (c) 2026 Awful-Waffle-Rofl</Copyright>

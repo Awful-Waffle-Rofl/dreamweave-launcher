@@ -211,37 +211,27 @@ namespace DreamWeave.Launcher.App
         public const string UninstallCredentialsLeft = "Some saved passwords could not be removed. Open Windows Credential Manager and remove entries starting with DreamWeave/.";
         public const string UninstallClientFailed = "The Asheron's Call client's uninstaller did not finish, so the client may still be installed.";
 
-        // ---- Memory leak fix line on the launcher window (DRAFT: awaiting owner review) ----
+        // ---- Memory leak fix line on the launcher window ----
 
-        // DRAFT
         /// <summary>The check mark shown beside <see cref="LeakFixInPlace"/> (U+2713, built from its code point so the source stays ASCII).</summary>
         public static readonly string LeakFixCheck = ((char)0x2713).ToString();
 
-        // DRAFT
         public const string LeakFixInPlace = "Memory leak fix in place";
 
-        // DRAFT
         public const string LeakFixApply = "Click here to apply the memory leak fix";
 
-        // DRAFT
         public const string LeakFixApplying = "Applying the memory leak fix...";
 
-        // DRAFT
         public const string LeakFixSourceFormat = "Optional, and applied only when you click. {0}.";
 
-        // DRAFT
         public const string LeakFixGameRunning = "Close Asheron's Call first, then click the link again. Nothing was changed.";
 
-        // DRAFT
         public const string LeakFixDeclined = "Administrator permission was declined, so nothing was changed. Click the link to try again and choose Yes.";
 
-        // DRAFT
         public const string LeakFixNeedsAdmin = "The game folder needs administrator permission to change. Click the link to try again and choose Yes when Windows asks.";
 
-        // DRAFT
         public const string LeakFixDiskFull = "There is not enough free disk space in the game folder to apply the fix. Free up some space, then click the link to try again.";
 
-        // DRAFT
         public const string LeakFixGeneric = "The memory leak fix could not be applied. Click the link to try again.";
     }
 }
