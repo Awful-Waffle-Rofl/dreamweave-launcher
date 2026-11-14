@@ -150,7 +150,8 @@ namespace DreamWeave.Launcher.UI
                 Update = _gate,
                 LaunchWithDecal = _services.State.Read(s => s.LaunchWithDecal),
             };
-            _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice);
+            var leakFix = new LeakFixPresenter(() => _services.Manifests.Manifest, () => _acFolder, InstallDependencies.From(_services));
+            _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice, leakFix);
             _launcherScreen.DecalChanged += (s, e) =>
             {
                 bool on = _presenter.LaunchWithDecal;
