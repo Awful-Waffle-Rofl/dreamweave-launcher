@@ -4,11 +4,14 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using DreamWeave.Launcher.App;
 using DreamWeave.Launcher.Core;
 using DreamWeave.Launcher.Core.Detection;
+using DreamWeave.Launcher.Core.Downloads;
 using DreamWeave.Launcher.Core.Install;
 using DreamWeave.Launcher.Core.Manifests;
 using DreamWeave.Launcher.Core.State;
@@ -367,6 +370,121 @@ namespace DreamWeave.Launcher.Tests.App
             }
         }
 
+        [TestMethod]
+        public void MessageFor_NamesItsOwnCause_AndOnlyClaimsNothingChangedWhereThatIsTrue()
+        {
+            StringAssert.Contains(LeakFixPresenter.MessageFor(LauncherError.DiskFull), "disk space");
+            StringAssert.Contains(LeakFixPresenter.MessageFor(LauncherError.ElevationDeclined), "declined");
+            StringAssert.Contains(LeakFixPresenter.MessageFor(LauncherError.ElevationRequired), "administrator");
+            Assert.AreEqual(LeakFixPresenter.MessageFor(LauncherError.ElevationRequired), LeakFixPresenter.MessageFor(LauncherError.ElevatedTaskInvalid));
+            Assert.AreEqual(UiText.LeakFixGameRunning, LeakFixPresenter.MessageFor(LauncherError.GameRunning));
+            Assert.AreNotEqual(LeakFixPresenter.MessageFor(LauncherError.DiskFull), LeakFixPresenter.MessageFor(LauncherError.ElevationDeclined));
+
+            // The final check can fail after the patch was written, so these must not say the file is untouched.
+            foreach (LauncherError code in new[] { LauncherError.GameFilesChanged, LauncherError.Unknown, LauncherError.PatchOutputMismatch, LauncherError.InstallerStillRunning })
+            {
+                string text = LeakFixPresenter.MessageFor(code);
+                Assert.IsFalse(text.IndexOf("nothing was changed", StringComparison.OrdinalIgnoreCase) >= 0, code + ": " + text);
+                Assert.AreEqual(UiText.LeakFixGeneric, text, code + " has no dedicated text");
+            }
+        }
+
+        [TestMethod]
+        public void ViewFor_AFailureMessageSurvivesAHiddenState()
+        {
+            ManifestComponent c = Manifest().Components.Single(x => x.Id == "palette-leak-fix");
+            foreach (ComponentState? state in new ComponentState?[] { null, ComponentState.NotApplicable, ComponentState.Unknown, ComponentState.NeedsRepair })
+            {
+                LeakFixView v = LeakFixPresenter.ViewFor(state, c, false, "failed text");
+                Assert.IsFalse(v.Visible, "the line stays hidden for " + state);
+                Assert.AreEqual("failed text", v.Message, "but the message to the click stays for " + state);
+            }
+
+            Assert.IsNull(LeakFixPresenter.ViewFor(ComponentState.NotApplicable, c, false, null).Message);
+        }
+
+        [TestMethod]
+        public void Apply_Failure_ThenTheFileChangesUnderneath_KeepsTheMessageVisible()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                f.Presenter.RefreshAsync().GetAwaiter().GetResult();
+                byte[] other = new byte[70];
+                using (FileStream held = InstallData.HoldLikeGame(f.Exe))
+                {
+                    // After the failed click and before the final look the file becomes one the fix does not fit.
+                    f.Presenter.BeforeRefresh = () =>
+                    {
+                        held.Position = 0;
+                        held.Write(other, 0, other.Length);
+                        held.Flush();
+                        return Task.FromResult(true);
+                    };
+                    Assert.AreEqual(LauncherError.GameRunning, f.Presenter.ApplyAsync().GetAwaiter().GetResult());
+                }
+
+                Assert.AreEqual(ComponentState.NotApplicable, f.Presenter.State);
+                LeakFixView v = f.Presenter.View;
+                Assert.IsFalse(v.Visible, "nothing to offer for this exe");
+                Assert.AreEqual(UiText.LeakFixGameRunning, v.Message, "but the player still sees why the click did nothing");
+            }
+        }
+
+        [TestMethod]
+        public void Apply_StaysBusyThroughTheFinalLook_SoASecondClickCannotStartASecondSession()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                f.Presenter.RefreshAsync().GetAwaiter().GetResult();
+                var entered = new TaskCompletionSource<bool>();
+                var release = new TaskCompletionSource<bool>();
+                f.Presenter.BeforeRefresh = async () =>
+                {
+                    entered.TrySetResult(true);
+                    await release.Task.ConfigureAwait(false);
+                };
+
+                Task<LauncherError> first = f.Presenter.ApplyAsync();
+                Assert.IsTrue(entered.Task.Wait(10000), "the first apply reached the final look");
+                Assert.IsTrue(f.Presenter.IsBusy, "still busy: the state has not been re-read yet");
+                Assert.AreEqual(ComponentState.Missing, f.Presenter.State, "the stale state a second click would have trusted");
+                Assert.AreEqual(CloseDecision.Block, f.Presenter.CloseDecision, "the window must not close before the line is current");
+
+                Task<LauncherError> second = f.Presenter.ApplyAsync();
+                Assert.IsTrue(second.Wait(10000));
+                Assert.AreEqual(1, Started(f), "the second click started no second session");
+
+                release.SetResult(true);
+                Assert.AreEqual(LauncherError.None, first.GetAwaiter().GetResult());
+                Assert.AreEqual(ComponentState.Satisfied, f.Presenter.State);
+                Assert.IsFalse(f.Presenter.IsBusy);
+                Assert.AreEqual(CloseDecision.Allow, f.Presenter.CloseDecision);
+                Assert.AreEqual(1, Started(f));
+            }
+        }
+
+        [TestMethod]
+        public void CloseDecision_IsBlock_WhileTheGameFolderIsBeingWritten_AndAllowOnceDone()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                var disk = new BlockingDisk();
+                f.Deps.Disk = disk;
+                f.Presenter.RefreshAsync().GetAwaiter().GetResult();
+                Assert.AreEqual(CloseDecision.Allow, f.Presenter.CloseDecision, "idle");
+                Assert.AreEqual(InstallPhase.Idle, f.Presenter.Phase);
+
+                Task<LauncherError> apply = f.Presenter.ApplyAsync();
+                Assert.IsTrue(disk.Entered.Wait(10000), "the patcher is mid-write (it checks free space after entering the critical phase)");
+                Assert.AreEqual(InstallPhase.Critical, f.Presenter.Phase);
+                Assert.AreEqual(CloseDecision.Block, f.Presenter.CloseDecision);
+
+                disk.Release.Set();
+                Assert.AreEqual(LauncherError.None, apply.GetAwaiter().GetResult());
+                Assert.AreEqual(InstallPhase.Idle, f.Presenter.Phase);
+                Assert.AreEqual(CloseDecision.Allow, f.Presenter.CloseDecision);
+            }
+        }
         private static void AssertNoLeak(string text, Fixture f)
         {
             Assert.IsFalse(text.Contains(f.Root), "no temp path");
@@ -438,9 +556,14 @@ namespace DreamWeave.Launcher.Tests.App
 
         private static void WithScreen(Fixture f, bool attach, Action<MainWindow, LauncherScreen> body)
         {
+            WithScreen(f, attach, new NoStart(), (w, s, p) => body(w, s));
+        }
+
+        private static void WithScreen(Fixture f, bool attach, IGameStarter starter, Action<MainWindow, LauncherScreen, LauncherPresenter> body)
+        {
             RunSta(() =>
             {
-                var presenter = new LauncherPresenter(new LauncherPresenterTests.MemoryCredentials(), new NoStart(), NullTelemetrySink.Instance, () => f.Manifest, () => f.Ac, new MemorySlots());
+                var presenter = new LauncherPresenter(new LauncherPresenterTests.MemoryCredentials(), starter, NullTelemetrySink.Instance, () => f.Manifest, () => f.Ac, new MemorySlots());
                 using (var window = new MainWindow())
                 {
                     window.StartPosition = FormStartPosition.Manual;
@@ -449,12 +572,52 @@ namespace DreamWeave.Launcher.Tests.App
                     var screen = new LauncherScreen(presenter, null, attach ? f.Presenter : null);
                     window.ShowScreen(screen);
                     Pump(() => screen.Loaded && (!attach || f.Presenter.State != null || f.Presenter.Component == null));
-                    body(window, screen);
+                    body(window, screen, presenter);
                     window.Close();
                 }
             });
         }
 
+        /// <summary>Raises the link's click handler the way a mouse click does (even when the link is disabled, to prove the handler guards itself).</summary>
+        private static void Click(LinkLabel link)
+        {
+            MethodInfo m = typeof(LinkLabel).GetMethod("OnLinkClicked", BindingFlags.Instance | BindingFlags.NonPublic);
+            m.Invoke(link, new object[] { new LinkLabelLinkClickedEventArgs(new LinkLabel.Link()) });
+        }
+
+        private sealed class BlockingStart : IGameStarter
+        {
+            public ManualResetEventSlim Release { get; } = new ManualResetEventSlim(false);
+
+            public DreamWeave.Launcher.Core.Launch.StartedClient Start(string acFolder, string args)
+            {
+                Release.Wait(10000);
+                return new DreamWeave.Launcher.Core.Launch.StartedClient(1, IntPtr.Zero);
+            }
+
+            public DreamWeave.Launcher.Core.Launch.ClientLockOutcome ReleaseLock(DreamWeave.Launcher.Core.Launch.StartedClient client, CancellationToken cancel) => DreamWeave.Launcher.Core.Launch.ClientLockOutcome.Released;
+        }
+
+        private sealed class BlockingDisk : IDiskSpace
+        {
+            public ManualResetEventSlim Entered { get; } = new ManualResetEventSlim(false);
+
+            public ManualResetEventSlim Release { get; } = new ManualResetEventSlim(false);
+
+            public long GetFreeBytes(string directory)
+            {
+                Entered.Set();
+                Release.Wait(10000);
+                return long.MaxValue / 4;
+            }
+        }
+
+        private static int Started(Fixture f)
+        {
+            return f.Sink.Lines.Count(l => l.StartsWith(TelemetrySteps.PaletteLeakFix + ":Started", StringComparison.Ordinal));
+        }
+
+        private static bool PlayAllEnabled(LauncherScreen s) => ((Control)s.DefaultButton).Enabled;
         [TestMethod]
         public void Screen_Unpatched_ShowsTheEnabledLink_AndStaysReachable()
         {
@@ -500,6 +663,155 @@ namespace DreamWeave.Launcher.Tests.App
                 {
                     Assert.IsFalse(s.LeakFixLink.Visible);
                     Assert.IsFalse(s.LeakFixText.Visible);
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_Click_PatchesTheExe_AndShowsTheCheckLine()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                WithScreen(f, true, (w, s) =>
+                {
+                    Assert.IsTrue(s.LeakFixLink.Visible);
+                    Click(s.LeakFixLink);
+                    Pump(() => !f.Presenter.IsBusy);
+
+                    CollectionAssert.AreEqual(Patched(), File.ReadAllBytes(f.Exe), "the click applied the fix");
+                    Assert.IsFalse(s.LeakFixLink.Visible);
+                    Assert.IsTrue(s.LeakFixText.Visible);
+                    Assert.AreEqual(UiText.LeakFixCheck + " " + UiText.LeakFixInPlace, s.LeakFixText.Text);
+                    Assert.IsTrue(PlayAllEnabled(s), "Play is back");
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_WhileApplying_BothPlayButtonsAndTheLinkAreDisabled()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                var entered = new TaskCompletionSource<bool>();
+                var release = new TaskCompletionSource<bool>();
+                WithScreen(f, true, (w, s) =>
+                {
+                    f.Presenter.BeforeRefresh = async () =>
+                    {
+                        entered.TrySetResult(true);
+                        await release.Task;
+                    };
+                    Assert.IsTrue(s.Rows.All(r => r.PlayEnabled) && PlayAllEnabled(s), "positive control: Play is enabled before the click");
+                    Click(s.LeakFixLink);
+                    Pump(() => entered.Task.IsCompleted);
+
+                    Assert.IsTrue(f.Presenter.IsBusy);
+                    Assert.IsTrue(s.Rows.All(r => !r.PlayEnabled), "the row Play buttons are disabled while the fix is written");
+                    Assert.IsFalse(PlayAllEnabled(s), "Play all is disabled while the fix is written");
+                    Assert.IsFalse(s.LeakFixLink.Enabled);
+                    Assert.AreEqual(UiText.LeakFixApplying, s.LeakFixLink.Text);
+
+                    release.SetResult(true);
+                    Pump(() => !f.Presenter.IsBusy);
+                    Assert.IsTrue(s.Rows.All(r => r.PlayEnabled) && PlayAllEnabled(s), "Play is back afterwards");
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_HeldExe_ShowsTheRedMessage_AndKeepsTheLinkEnabled()
+        {
+            using (var f = new Fixture(Original()))
+            using (InstallData.HoldLikeGame(f.Exe))
+            {
+                WithScreen(f, true, (w, s) =>
+                {
+                    Click(s.LeakFixLink);
+                    Pump(() => !f.Presenter.IsBusy);
+
+                    Assert.IsTrue(s.LeakFixText.Visible);
+                    Assert.AreEqual(UiText.LeakFixGameRunning, s.LeakFixText.Text);
+                    Assert.AreEqual(Theme.Err, s.LeakFixText.ForeColor);
+                    Assert.IsTrue(s.LeakFixLink.Visible);
+                    Assert.IsTrue(s.LeakFixLink.Enabled, "the player can try again");
+                    Assert.AreEqual(UiText.LeakFixApply, s.LeakFixLink.Text);
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_ExeTheFixDoesNotFit_HidesBothControls()
+        {
+            byte[] other = Original();
+            other[0] ^= 0xFF;
+            using (var f = new Fixture(other))
+            {
+                WithScreen(f, true, (w, s) =>
+                {
+                    Assert.IsFalse(s.LeakFixLink.Visible);
+                    Assert.IsFalse(s.LeakFixText.Visible);
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_DoubleClick_RecordsExactlyOneStartedStep()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                WithScreen(f, true, (w, s) =>
+                {
+                    Click(s.LeakFixLink);
+                    Click(s.LeakFixLink);
+                    Pump(() => !f.Presenter.IsBusy);
+
+                    Assert.AreEqual(1, Started(f));
+                    CollectionAssert.AreEqual(Patched(), File.ReadAllBytes(f.Exe));
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_WhileAClientIsStarting_TheLinkIsDisabled()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                var starter = new BlockingStart();
+                WithScreen(f, true, starter, (w, s, p) =>
+                {
+                    Assert.IsTrue(s.LeakFixLink.Enabled, "positive control");
+                    Task<SlotResult> play = p.PlaySlotAsync(0, new[] { new SlotInput("hero", "pw"), new SlotInput(string.Empty, string.Empty), new SlotInput(string.Empty, string.Empty) }, false);
+                    Pump(() => p.IsStarting);
+                    Assert.IsTrue(p.IsStarting);
+                    s.RefreshState();
+
+                    Assert.IsFalse(s.LeakFixLink.Enabled, "no write while a client is starting");
+                    starter.Release.Set();
+                    play.GetAwaiter().GetResult();
+                    s.RefreshState();
+                    Assert.IsTrue(s.LeakFixLink.Enabled);
+                });
+            }
+        }
+
+        [TestMethod]
+        public void Screen_ClickWhileAClientIsStarting_AppliesNothing()
+        {
+            using (var f = new Fixture(Original()))
+            {
+                var starter = new BlockingStart();
+                WithScreen(f, true, starter, (w, s, p) =>
+                {
+                    Task<SlotResult> play = p.PlaySlotAsync(0, new[] { new SlotInput("hero", "pw"), new SlotInput(string.Empty, string.Empty), new SlotInput(string.Empty, string.Empty) }, false);
+                    Pump(() => p.IsStarting);
+                    Click(s.LeakFixLink);
+                    Pump(() => false, 200);
+
+                    Assert.IsFalse(f.Presenter.IsBusy);
+                    Assert.AreEqual(0, Started(f), "the handler refused");
+                    CollectionAssert.AreEqual(Original(), File.ReadAllBytes(f.Exe), "the game's exe was not written while it starts");
+                    starter.Release.Set();
+                    play.GetAwaiter().GetResult();
                 });
             }
         }

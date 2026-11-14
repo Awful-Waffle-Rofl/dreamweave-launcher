@@ -55,6 +55,7 @@ namespace DreamWeave.Launcher.App
         private ComponentState? _state;
         private string _message;
         private int _busy;
+        private volatile InstallSession _session;
 
         public LeakFixPresenter(Func<LauncherManifest> manifest, Func<string> acFolder, InstallDependencies deps)
         {
@@ -68,6 +69,18 @@ namespace DreamWeave.Launcher.App
 
         /// <summary>True while a click is being applied.</summary>
         public bool IsBusy => Volatile.Read(ref _busy) != 0;
+
+        /// <summary>What the running session is doing, or Idle when none is running.</summary>
+        public InstallPhase Phase => _session?.Phase ?? InstallPhase.Idle;
+
+        /// <summary>
+        /// What closing the window should do: Block from the click until the line is current again (any running
+        /// phase, the write included, and the final look), otherwise Allow.
+        /// </summary>
+        public CloseDecision CloseDecision => IsBusy || Phase != InstallPhase.Idle ? CloseDecision.Block : CloseDecision.Allow;
+
+        /// <summary>Test seam: awaited at the start of every refresh, so a test can hold the final look after an apply.</summary>
+        internal Func<Task> BeforeRefresh { get; set; }
 
         /// <summary>The last evaluated state, or null when it has not been evaluated or could not be.</summary>
         public ComponentState? State => _state;
@@ -94,9 +107,14 @@ namespace DreamWeave.Launcher.App
         /// </summary>
         internal static LeakFixView ViewFor(ComponentState? state, ManifestComponent component, bool busy, string message)
         {
-            if (component == null || state == null)
+            if (component == null)
             {
                 return LeakFixView.Hidden;
+            }
+
+            if (state == null)
+            {
+                return HiddenWith(message);
             }
 
             switch (state.Value)
@@ -109,25 +127,38 @@ namespace DreamWeave.Launcher.App
                         : string.Format(System.Globalization.CultureInfo.InvariantCulture, UiText.LeakFixSourceFormat, component.SourceLabel.TrimEnd('.', ' '));
                     return new LeakFixView(true, busy ? UiText.LeakFixApplying : UiText.LeakFixApply, !busy, tooltip, busy ? null : message);
                 default:
-                    return LeakFixView.Hidden;
+                    return HiddenWith(message);
             }
+        }
+
+        // The line itself is gone, but the answer to the player's last click must not vanish with it.
+        private static LeakFixView HiddenWith(string message)
+        {
+            return message == null ? LeakFixView.Hidden : new LeakFixView(false, string.Empty, false, null, message);
         }
 
         /// <summary>
-        /// The player's text for a failed click. The wizard's messages say "Retry", a button this window
-        /// does not have, so those are replaced by one that points at the link.
+        /// The player's text for a failed click, per code. This window has no Retry button, so none of the
+        /// wizard's "click Retry" wording is reused. Only a code that is known to leave the file alone says
+        /// "nothing was changed": a failure from the final check can come after the patch was written.
         /// </summary>
         internal static string MessageFor(LauncherError code)
         {
-            if (code == LauncherError.GameRunning || code == LauncherError.InstallerStillRunning)
+            switch (code)
             {
-                return UiText.LeakFixGameRunning;
+                case LauncherError.GameRunning:
+                    return UiText.LeakFixGameRunning;
+                case LauncherError.ElevationDeclined:
+                    return UiText.LeakFixDeclined;
+                case LauncherError.ElevationRequired:
+                case LauncherError.ElevatedTaskInvalid:
+                    return UiText.LeakFixNeedsAdmin;
+                case LauncherError.DiskFull:
+                    return UiText.LeakFixDiskFull;
+                default:
+                    return UiText.LeakFixGeneric;
             }
-
-            string table = ErrorMessages.For(code);
-            return table.IndexOf("Retry", StringComparison.Ordinal) >= 0 ? UiText.LeakFixTryAgain : table;
         }
-
         /// <summary>Evaluates the component against the game folder (off the UI thread). Any failure to look hides the line.</summary>
         public async Task RefreshAsync()
         {
@@ -142,6 +173,12 @@ namespace DreamWeave.Launcher.App
 
             try
             {
+                Func<Task> hook = BeforeRefresh;
+                if (hook != null)
+                {
+                    await hook().ConfigureAwait(true);
+                }
+
                 ComponentStatus status = await Task.Run(() => _deps.Evaluator.Evaluate(c, m, folder, null, CancellationToken.None)).ConfigureAwait(true);
                 _state = status.State;
             }
@@ -180,24 +217,29 @@ namespace DreamWeave.Launcher.App
                     return LauncherError.None;
                 }
 
-                var session = new InstallSession(_deps, m, folder);
-                InstallRunResult result = await session.RunAsync(new[] { c }, new Progress<InstallEvent>(), CancellationToken.None).ConfigureAwait(true);
-                error = result.Error;
-                _message = error == LauncherError.None ? null : MessageFor(error);
-            }
-            catch (Exception ex) when (ex is LauncherException || ex is System.IO.IOException || ex is UnauthorizedAccessException)
-            {
-                error = ex is LauncherException le ? le.Code : LauncherError.Unknown;
-                _message = MessageFor(error);
+                try
+                {
+                    _session = new InstallSession(_deps, m, folder);
+                    InstallRunResult result = await _session.RunAsync(new[] { c }, new Progress<InstallEvent>(), CancellationToken.None).ConfigureAwait(true);
+                    error = result.Error;
+                    _message = error == LauncherError.None ? null : MessageFor(error);
+                }
+                catch (Exception ex) when (ex is LauncherException || ex is System.IO.IOException || ex is UnauthorizedAccessException)
+                {
+                    error = ex is LauncherException le ? le.Code : LauncherError.Unknown;
+                    _message = MessageFor(error);
+                }
+
+                // Whatever happened, the file is the truth: look again so the line matches it. Still busy
+                // until it has, so a second click cannot read the old state and start another session.
+                await RefreshAsync().ConfigureAwait(true);
+                return error;
             }
             finally
             {
+                _session = null;
                 Volatile.Write(ref _busy, 0);
             }
-
-            // Whatever happened, the file is the truth: look again so the line matches it.
-            await RefreshAsync().ConfigureAwait(true);
-            return error;
         }
     }
 }

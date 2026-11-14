@@ -233,6 +233,15 @@ namespace DreamWeave.Launcher.App
         public const string LeakFixGameRunning = "Close Asheron's Call first, then click the link again. Nothing was changed.";
 
         // DRAFT
-        public const string LeakFixTryAgain = "The fix could not be applied and nothing was changed. Close the game if it is running, then click the link to try again.";
+        public const string LeakFixDeclined = "Administrator permission was declined, so nothing was changed. Click the link to try again and choose Yes.";
+
+        // DRAFT
+        public const string LeakFixNeedsAdmin = "The game folder needs administrator permission to change. Click the link to try again and choose Yes when Windows asks.";
+
+        // DRAFT
+        public const string LeakFixDiskFull = "There is not enough free disk space in the game folder to apply the fix. Free up some space, then click the link to try again.";
+
+        // DRAFT
+        public const string LeakFixGeneric = "The memory leak fix could not be applied. Click the link to try again.";
     }
 }
