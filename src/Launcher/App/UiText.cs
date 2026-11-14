@@ -210,5 +210,28 @@ namespace DreamWeave.Launcher.App
         public const string CloseBlocked = "The game files are being written right now. Wait for this step to finish before closing.";
         public const string UninstallCredentialsLeft = "Some saved passwords could not be removed. Open Windows Credential Manager and remove entries starting with DreamWeave/.";
         public const string UninstallClientFailed = "The Asheron's Call client's uninstaller did not finish, so the client may still be installed.";
+
+        // ---- Memory leak fix line on the launcher window ----
+
+        /// <summary>The check mark shown beside <see cref="LeakFixInPlace"/> (U+2713, built from its code point so the source stays ASCII).</summary>
+        public static readonly string LeakFixCheck = ((char)0x2713).ToString();
+
+        public const string LeakFixInPlace = "Memory leak fix in place";
+
+        public const string LeakFixApply = "Click here to apply the memory leak fix";
+
+        public const string LeakFixApplying = "Applying the memory leak fix...";
+
+        public const string LeakFixSourceFormat = "Optional, and applied only when you click. {0}.";
+
+        public const string LeakFixGameRunning = "Close Asheron's Call first, then click the link again. Nothing was changed.";
+
+        public const string LeakFixDeclined = "Administrator permission was declined, so nothing was changed. Click the link to try again and choose Yes.";
+
+        public const string LeakFixNeedsAdmin = "The game folder needs administrator permission to change. Click the link to try again and choose Yes when Windows asks.";
+
+        public const string LeakFixDiskFull = "There is not enough free disk space in the game folder to apply the fix. Free up some space, then click the link to try again.";
+
+        public const string LeakFixGeneric = "The memory leak fix could not be applied. Click the link to try again.";
     }
 }

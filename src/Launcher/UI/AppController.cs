@@ -150,7 +150,12 @@ namespace DreamWeave.Launcher.UI
                 Update = _gate,
                 LaunchWithDecal = _services.State.Read(s => s.LaunchWithDecal),
             };
-            _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice);
+            var leakFix = new LeakFixPresenter(() => _services.Manifests.Manifest, () => _acFolder, InstallDependencies.From(_services));
+            _launcherScreen = new LauncherScreen(_presenter, _services.Manifests.Manifest?.Notice, leakFix);
+
+            // Closing mid-apply would leave a half-written acclient.exe or an orphaned elevated step: the window refuses
+            // (the same guard and text the wizard's install screen uses) until the fix has finished.
+            _window.CloseGuard = () => leakFix.CloseDecision;
             _launcherScreen.DecalChanged += (s, e) =>
             {
                 bool on = _presenter.LaunchWithDecal;

@@ -185,6 +185,10 @@ namespace DreamWeave.Launcher.UI
         private readonly ThemedCheckBox _remember;
         private readonly ThemedCheckBox _decal;
         private readonly LinkLabel _rynthLink;
+        private readonly LeakFixPresenter _leak;
+        private readonly LinkLabel _leakLink;
+        private readonly WrapLabel _leakText;
+        private readonly ToolTip _leakTip = new ToolTip();
         private readonly TintedBox _info;
         private readonly WrapLabel _status;
         private readonly FlatButton _playAll;
@@ -194,6 +198,7 @@ namespace DreamWeave.Launcher.UI
         private readonly FlatButton _later;
         private bool _laterClicked;
         private bool _loading = true;
+        private bool _leakLoaded;
 
         /// <summary>The three client rows (read by layout tests).</summary>
         internal IReadOnlyList<SlotRow> Rows => _rows;
@@ -207,18 +212,28 @@ namespace DreamWeave.Launcher.UI
         /// <summary>The "Try Rynth" alternative link, shown to every player regardless of Decal (read by tests).</summary>
         internal LinkLabel RynthLink => _rynthLink;
 
+        /// <summary>The memory leak fix link (read by tests); hidden unless the fix is offered.</summary>
+        internal LinkLabel LeakFixLink => _leakLink;
+
+        /// <summary>The memory leak fix status line (read by tests).</summary>
+        internal WrapLabel LeakFixText => _leakText;
+
         /// <summary>Raised when the player toggles "Launch with Decal"; the handler persists the choice.</summary>
         public event EventHandler DecalChanged;
+
+        /// <summary>True once the memory leak fix line has been drawn from its first evaluation (always true without a fix presenter).</summary>
+        internal bool LeakFixLoaded => _leakLoaded;
 
         /// <summary>True once the saved row names have been filled in.</summary>
         internal bool Loaded => !_loading;
 
         public override IButtonControl DefaultButton => _playAll;
 
-        public LauncherScreen(LauncherPresenter presenter, string notice)
+        public LauncherScreen(LauncherPresenter presenter, string notice, LeakFixPresenter leakFix = null)
             : base(ScreenArt.Launcher)
         {
             _presenter = presenter ?? throw new ArgumentNullException(nameof(presenter));
+            _leak = leakFix;
             _presenter.StatusChanged = ShowStatusFromWorker;
 
             TitleBlock title = UiKit.Heading(presenter.ServerName);
@@ -273,6 +288,15 @@ namespace DreamWeave.Launcher.UI
             _rynthLink = UiKit.Link(UiText.TryRynthLink, () => WizardController.OpenUrl(RynthUrl));
             Add(_rynthLink);
 
+            // The optional memory leak fix: a status line or a link, driven by the fix's evaluated state. Nothing here
+            // writes unless the player clicks the link, and both controls stay hidden when the manifest has no fix.
+            _leakLink = UiKit.Link(UiText.LeakFixApply, OnApplyLeakFix);
+            _leakLink.Visible = false;
+            Add(_leakLink);
+            _leakText = UiKit.Muted(string.Empty);
+            _leakText.Visible = false;
+            Add(_leakText);
+
             // Checked by default so a returning player does not re-enter passwords. The state is not
             // persisted: LoadRows re-ticks it for saved passwords and OnRowEdited unticks it.
             _remember = new ThemedCheckBox { Text = UiText.RememberPasswords, Checked = true };
@@ -286,6 +310,7 @@ namespace DreamWeave.Launcher.UI
 
             LoadRows();
             RefreshState();
+            LoadLeakFix();
         }
 
         public event EventHandler UpdateClicked;
@@ -301,7 +326,7 @@ namespace DreamWeave.Launcher.UI
             _bannerText.Text = gate.BannerText ?? string.Empty;
             _update.Visible = gate.OffersUpdate;
             _later.Visible = gate.OffersLater;
-            bool can = _presenter.CanPlay;
+            bool can = _presenter.CanPlay && !(_leak != null && _leak.IsBusy);
             foreach (SlotRow r in _rows)
             {
                 r.PlayEnabled = can;
@@ -310,6 +335,70 @@ namespace DreamWeave.Launcher.UI
             _playAll.Enabled = can;
             _playAll.Text = _presenter.IsStarting ? UiText.Starting : UiText.PlayAll;
             _info.Visible = !(_rows[0].Account.Length > 0 && _rows[0].Password.Length > 0);
+            RefreshLeakFix();
+        }
+
+        /// <summary>Evaluates the fix once off the UI thread, then shows the line that matches the game folder.</summary>
+        private async void LoadLeakFix()
+        {
+            if (_leak == null)
+            {
+                _leakLoaded = true;
+                return;
+            }
+
+            await _leak.RefreshAsync();
+            if (!IsDisposed)
+            {
+                RefreshLeakFix();
+                _leakLoaded = true;
+            }
+        }
+
+        /// <summary>Shows, hides or enables the fix line from the presenter's view.</summary>
+        private void RefreshLeakFix()
+        {
+            if (_leak == null)
+            {
+                return;
+            }
+
+            LeakFixView view = _leak.View;
+            bool inPlace = view.Visible && !view.Clickable && !_leak.IsBusy;
+            bool offered = view.Visible && !inPlace;
+            _leakLink.Text = view.Text;
+            _leakLink.Visible = offered;
+            _leakLink.Enabled = view.Clickable && !_presenter.IsStarting;
+            _leakTip.SetToolTip(_leakLink, view.Tooltip ?? string.Empty);
+            _leakText.ForeColor = view.Message != null ? Theme.Err : Theme.Muted;
+            _leakText.Text = inPlace ? view.Text : view.Message ?? string.Empty;
+            _leakText.Visible = inPlace || view.Message != null;
+        }
+
+        private async void OnApplyLeakFix()
+        {
+            if (_leak == null || _presenter.IsStarting)
+            {
+                return;
+            }
+
+            Task<LauncherError> apply = _leak.ApplyAsync();
+            RefreshState();
+            await apply;
+            if (!IsDisposed)
+            {
+                RefreshState();
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _leakTip.Dispose();
+            }
+
+            base.Dispose(disposing);
         }
 
         /// <summary>Shows a status line (plain text).</summary>
