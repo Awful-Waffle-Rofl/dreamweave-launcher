@@ -198,6 +198,7 @@ namespace DreamWeave.Launcher.UI
         private readonly FlatButton _later;
         private bool _laterClicked;
         private bool _loading = true;
+        private bool _leakLoaded;
 
         /// <summary>The three client rows (read by layout tests).</summary>
         internal IReadOnlyList<SlotRow> Rows => _rows;
@@ -219,6 +220,9 @@ namespace DreamWeave.Launcher.UI
 
         /// <summary>Raised when the player toggles "Launch with Decal"; the handler persists the choice.</summary>
         public event EventHandler DecalChanged;
+
+        /// <summary>True once the memory leak fix line has been drawn from its first evaluation (always true without a fix presenter).</summary>
+        internal bool LeakFixLoaded => _leakLoaded;
 
         /// <summary>True once the saved row names have been filled in.</summary>
         internal bool Loaded => !_loading;
@@ -339,6 +343,7 @@ namespace DreamWeave.Launcher.UI
         {
             if (_leak == null)
             {
+                _leakLoaded = true;
                 return;
             }
 
@@ -346,6 +351,7 @@ namespace DreamWeave.Launcher.UI
             if (!IsDisposed)
             {
                 RefreshLeakFix();
+                _leakLoaded = true;
             }
         }
 
