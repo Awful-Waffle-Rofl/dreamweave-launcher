@@ -41,7 +41,7 @@ jobs:
       - name: Assert version (right tag passes, wrong tag fails)
         shell: pwsh
         run: |
-          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup-*.exe' | Select-Object -First 1
+          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup.exe' | Select-Object -First 1
           if (-not $found) { throw 'No setup exe found in setup-out' }
           [xml]$props = Get-Content -LiteralPath Directory.Build.props -Raw
           $ver = $props.SelectSingleNode('//Version').InnerText.Trim()
@@ -62,7 +62,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: DreamWeaveLauncher-Setup
-          path: setup-out/DreamWeaveLauncher-Setup-*.exe
+          path: setup-out/DreamWeaveLauncher-Setup.exe
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4

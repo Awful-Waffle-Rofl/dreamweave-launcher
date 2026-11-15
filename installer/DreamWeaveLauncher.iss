@@ -51,7 +51,7 @@ WizardStyle=modern dark
 ; The DreamWeave logo in the progress window header. Several sizes; Setup picks the best fit for the DPI
 ; (58, 77, 97, 116, 124, 143 and 159 px are the image-area sizes at 100% to 250%).
 WizardSmallImageFile=wizard-small-58.png,wizard-small-77.png,wizard-small-97.png,wizard-small-116.png,wizard-small-124.png,wizard-small-143.png,wizard-small-159.png
-OutputBaseFilename=DreamWeaveLauncher-Setup-{#AppVersion}
+OutputBaseFilename=DreamWeaveLauncher-Setup
 Compression=lzma2
 SolidCompression=yes
 VersionInfoVersion={#AppVersion}.0
