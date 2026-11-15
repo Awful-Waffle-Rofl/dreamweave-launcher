@@ -1,4 +1,4 @@
-# Builds the per-user Inno Setup installer: <OutDir>\DreamWeaveLauncher-Setup-<version>.exe.
+# Builds the per-user Inno Setup installer: <OutDir>\DreamWeaveLauncher-Setup.exe (a fixed name, so releases/latest/download/ always resolves).
 # The version is read from <Version> in Directory.Build.props, the same way assert-version.ps1 does.
 # Needs Inno Setup 6.6 or newer (WizardStyle=modern dark; preinstalled on GitHub's Windows runners). Fails clearly when it is missing;
 # it never installs anything.
@@ -76,7 +76,7 @@ if (([int]$Matches[1] -lt 6) -or (([int]$Matches[1] -eq 6) -and ([int]$Matches[2
     exit 1
 }
 
-$setup = Join-Path $outAbs "DreamWeaveLauncher-Setup-$version.exe"
+$setup = Join-Path $outAbs "DreamWeaveLauncher-Setup.exe"
 if (-not (Test-Path -LiteralPath $setup)) { Write-Error "Expected output not found: $setup"; exit 1 }
 $setupInfo = Get-Item -LiteralPath $setup
 Write-Host "Built $($setupInfo.FullName) ($($setupInfo.Length) bytes), product version $($setupInfo.VersionInfo.ProductVersion)"

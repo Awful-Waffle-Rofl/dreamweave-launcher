@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 
 if (-not (Test-Path -LiteralPath $SetupPath)) { Write-Error "Setup not found: $SetupPath"; exit 1 }
 $name = Split-Path -Leaf $SetupPath
-if ($name -notmatch '^DreamWeaveLauncher-Setup-\d+\.\d+\.\d+\.exe$') {
+if ($name -notmatch '^DreamWeaveLauncher-Setup\.exe$') {
     Write-Error "Unexpected setup file name '$name'"
     exit 1
 }
