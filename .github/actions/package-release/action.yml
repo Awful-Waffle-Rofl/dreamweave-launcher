@@ -1,73 +1,82 @@
 name: Package release
 description: >
-  Builds the setup from the staged launcher files and packages the release assets. With sign=true it Authenticode-signs
-  the three binaries BEFORE the setup is built (the setup packs them) and the setup AFTER it is built, then verifies all
-  four signatures. With sign=false nothing is signed and assert-signed.ps1 prints an UNSIGNED warning. Called only by
-  .github/workflows/release.yml, which owns the job-level environment and permissions.
+  Builds the setup from the staged launcher files and packages the release assets. With sign=true it submits the three
+  binaries to SignPath BEFORE the setup is built (the setup packs them) and the setup AFTER it is built, then verifies
+  all four signatures. With sign=false nothing is signed and assert-signed.ps1 prints an UNSIGNED warning. Called only
+  by .github/workflows/release.yml, which owns the job-level environment, permissions and the secret.
 
 inputs:
   sign:
-    description: "'true' to sign (Artifact Signing configured), 'false' to ship unsigned"
+    description: "'true' to sign (SignPath configured), 'false' to ship unsigned"
     required: true
   tag:
     description: Release tag, for example v1.0.0
     required: true
-  azure-client-id:
+  signpath-api-token:
+    description: SignPath API token; a composite action cannot read secrets, so package-signed passes it in
     required: false
     default: ''
-  azure-tenant-id:
+  signpath-organization-id:
     required: false
     default: ''
-  azure-subscription-id:
+  signpath-project-slug:
     required: false
     default: ''
-  signing-endpoint:
+  signpath-signing-policy-slug:
     required: false
     default: ''
-  signing-account:
+  signpath-artifact-config-binaries:
+    description: SignPath artifact configuration slug for the three binaries
     required: false
     default: ''
-  signing-profile:
+  signpath-artifact-config-setup:
+    description: SignPath artifact configuration slug for the setup installer
     required: false
     default: ''
 
 runs:
   using: composite
   steps:
-    # ---- Pass 1: the three binaries the setup packs. Never any third-party file. ----
-    - name: Azure login (OIDC)
+    # ---- Pass 1: only the three binaries the setup packs. Never any third-party file. ----
+    - name: Stage the binaries to sign
       if: inputs.sign == 'true'
-      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-      with:
-        client-id: ${{ inputs.azure-client-id }}
-        tenant-id: ${{ inputs.azure-tenant-id }}
-        subscription-id: ${{ inputs.azure-subscription-id }}
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path sign-in-binaries | Out-Null
+        foreach ($n in 'DreamWeaveLauncher.exe', 'Launcher.Core.dll', 'DreamWeaveDecalLaunch.exe') {
+          Copy-Item -LiteralPath (Join-Path 'launcher-bin' $n) -Destination sign-in-binaries -Force
+        }
 
-    - name: Sign launcher binaries (Artifact Signing)
+    # upload-artifact zips by default, so the SignPath artifact configuration for this pass has a <zip-file> root.
+    - name: Upload the unsigned binaries
       if: inputs.sign == 'true'
-      uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+      id: upload-binaries
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        endpoint: ${{ inputs.signing-endpoint }}
-        signing-account-name: ${{ inputs.signing-account }}
-        certificate-profile-name: ${{ inputs.signing-profile }}
-        files: |
-          ${{ github.workspace }}\launcher-bin\DreamWeaveLauncher.exe
-          ${{ github.workspace }}\launcher-bin\Launcher.Core.dll
-          ${{ github.workspace }}\launcher-bin\DreamWeaveDecalLaunch.exe
-        file-digest: SHA256
-        timestamp-rfc3161: http://timestamp.acs.microsoft.com
-        timestamp-digest: SHA256
-        cache-dependencies: 'false'
-        exclude-environment-credential: true
-        exclude-workload-identity-credential: true
-        exclude-managed-identity-credential: true
-        exclude-shared-token-cache-credential: true
-        exclude-visual-studio-credential: true
-        exclude-visual-studio-code-credential: true
-        exclude-azure-cli-credential: false
-        exclude-azure-powershell-credential: true
-        exclude-azure-developer-cli-credential: true
-        exclude-interactive-browser-credential: true
+        name: unsigned-binaries
+        path: sign-in-binaries
+        if-no-files-found: error
+
+    # The timeout covers a human approving the request in SignPath (SignPath Foundation requires a manual approval
+    # per release); the default of 600 seconds would fail the job while it waits. The job's timeout-minutes matches.
+    - name: Sign launcher binaries (SignPath)
+      if: inputs.sign == 'true'
+      uses: SignPath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+      with:
+        api-token: ${{ inputs.signpath-api-token }}
+        organization-id: ${{ inputs.signpath-organization-id }}
+        project-slug: ${{ inputs.signpath-project-slug }}
+        signing-policy-slug: ${{ inputs.signpath-signing-policy-slug }}
+        artifact-configuration-slug: ${{ inputs.signpath-artifact-config-binaries }}
+        github-artifact-id: ${{ steps.upload-binaries.outputs.artifact-id }}
+        wait-for-completion: true
+        wait-for-completion-timeout-in-seconds: 3600
+        output-artifact-directory: signed-binaries
+
+    - name: Replace the binaries with the signed ones
+      if: inputs.sign == 'true'
+      shell: pwsh
+      run: ./tools/release/apply-signed.ps1 -SignedDir signed-binaries -TargetDir launcher-bin -Name DreamWeaveLauncher.exe, Launcher.Core.dll, DreamWeaveDecalLaunch.exe
 
     # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
     - name: Build setup installer
@@ -75,28 +84,33 @@ runs:
       run: ./tools/release/build-setup.ps1 -ExePath launcher-bin/DreamWeaveLauncher.exe -OutDir setup-out
 
     # ---- Pass 2: the setup itself. Its embedded uninstaller is not signed (see Docs/code-signing-policy.md). ----
-    - name: Sign setup installer (Artifact Signing)
+    - name: Upload the unsigned setup
       if: inputs.sign == 'true'
-      uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+      id: upload-setup
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        endpoint: ${{ inputs.signing-endpoint }}
-        signing-account-name: ${{ inputs.signing-account }}
-        certificate-profile-name: ${{ inputs.signing-profile }}
-        files: ${{ github.workspace }}\setup-out\DreamWeaveLauncher-Setup.exe
-        file-digest: SHA256
-        timestamp-rfc3161: http://timestamp.acs.microsoft.com
-        timestamp-digest: SHA256
-        cache-dependencies: 'false'
-        exclude-environment-credential: true
-        exclude-workload-identity-credential: true
-        exclude-managed-identity-credential: true
-        exclude-shared-token-cache-credential: true
-        exclude-visual-studio-credential: true
-        exclude-visual-studio-code-credential: true
-        exclude-azure-cli-credential: false
-        exclude-azure-powershell-credential: true
-        exclude-azure-developer-cli-credential: true
-        exclude-interactive-browser-credential: true
+        name: unsigned-setup
+        path: setup-out/DreamWeaveLauncher-Setup.exe
+        if-no-files-found: error
+
+    - name: Sign setup installer (SignPath)
+      if: inputs.sign == 'true'
+      uses: SignPath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+      with:
+        api-token: ${{ inputs.signpath-api-token }}
+        organization-id: ${{ inputs.signpath-organization-id }}
+        project-slug: ${{ inputs.signpath-project-slug }}
+        signing-policy-slug: ${{ inputs.signpath-signing-policy-slug }}
+        artifact-configuration-slug: ${{ inputs.signpath-artifact-config-setup }}
+        github-artifact-id: ${{ steps.upload-setup.outputs.artifact-id }}
+        wait-for-completion: true
+        wait-for-completion-timeout-in-seconds: 3600
+        output-artifact-directory: signed-setup
+
+    - name: Replace the setup with the signed one
+      if: inputs.sign == 'true'
+      shell: pwsh
+      run: ./tools/release/apply-signed.ps1 -SignedDir signed-setup -TargetDir setup-out -Name DreamWeaveLauncher-Setup.exe
 
     - name: Assert signatures (or warn that the release is unsigned)
       shell: pwsh

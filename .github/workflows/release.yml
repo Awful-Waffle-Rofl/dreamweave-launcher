@@ -3,10 +3,11 @@ name: release
 # Tag push v*.*.* builds the exe and the setup installer and creates a DRAFT GitHub Release (never published by CI).
 # workflow_dispatch is a dry run: it runs every check and builds the assets, but creates no release.
 #
-# Code signing (Azure Artifact Signing) is inert until the repo variable ARTIFACT_SIGNING_ACCOUNT is set; see
+# Code signing (SignPath Foundation) is inert until the repo variable SIGNPATH_ORGANIZATION_ID is set; see
 # Docs/release-runbook.md ("Code signing setup") and Docs/code-signing-policy.md. Exactly one of package-unsigned and
-# package-signed runs. Only package-signed uses the GitHub environment `signing` (owner approval per run) and the
-# OIDC token, so an unconfigured repo never needs the environment and keeps producing unsigned releases.
+# package-signed runs. Only package-signed uses the GitHub environment `signing`, which holds the SIGNPATH_API_TOKEN
+# secret, so an unconfigured repo never needs the environment and keeps producing unsigned releases. SignPath itself
+# enforces the manual approval of every signing request.
 on:
   push:
     tags: ['v*.*.*']
@@ -76,7 +77,7 @@ jobs:
   package-unsigned:
     needs: [build, verify-tag]
     if: >-
-      vars.ARTIFACT_SIGNING_ACCOUNT == '' && !cancelled() && needs.build.result == 'success'
+      vars.SIGNPATH_ORGANIZATION_ID == '' && !cancelled() && needs.build.result == 'success'
       && (needs.verify-tag.result == 'success' || needs.verify-tag.result == 'skipped')
     runs-on: windows-latest
     env:
@@ -99,15 +100,17 @@ jobs:
   package-signed:
     needs: [build, verify-tag]
     if: >-
-      vars.ARTIFACT_SIGNING_ACCOUNT != '' && !cancelled() && needs.build.result == 'success'
+      vars.SIGNPATH_ORGANIZATION_ID != '' && !cancelled() && needs.build.result == 'success'
       && (needs.verify-tag.result == 'success' || needs.verify-tag.result == 'skipped')
     runs-on: windows-latest
-    # The environment `signing` has the owner as required reviewer: every signing run waits for approval, and the
-    # Azure federated credential trusts only this environment's subject.
+    # The environment `signing` holds the SIGNPATH_API_TOKEN secret, so only this job can read it. SignPath requires a
+    # human to approve each request and the action waits for that (up to 3600 s per pass, two passes), so the job
+    # timeout must outlast two approvals.
     environment: signing
+    timeout-minutes: 150
     permissions:
+      actions: read
       contents: read
-      id-token: write
     env:
       TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     steps:
@@ -124,12 +127,12 @@ jobs:
         with:
           sign: 'true'
           tag: ${{ env.TAG }}
-          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
-          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          signing-endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          signing-profile: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          signpath-api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          signpath-organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          signpath-project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signpath-signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          signpath-artifact-config-binaries: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_BINARIES }}
+          signpath-artifact-config-setup: ${{ vars.SIGNPATH_ARTIFACT_CONFIG_SETUP }}
 
   draft-release:
     needs: [package-unsigned, package-signed]
@@ -178,4 +181,4 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" release-assets/DreamWeaveLauncher-Setup.exe release-assets/SHA256SUMS \
             --draft --verify-tag --title "DreamWeave Launcher $TAG" \
-            --notes "Draft. Follow Docs/release-runbook.md before publishing: verify SHA256SUMS, update and sign the manifest, then publish."
+            --notes "Draft. Follow Docs/release-runbook.md before publishing: verify SHA256SUMS, update and sign the manifest, then publish. Code signing policy: https://github.com/Awful-Waffle-Rofl/dreamweave-launcher/blob/main/Docs/code-signing-policy.md"

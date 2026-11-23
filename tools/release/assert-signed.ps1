@@ -1,7 +1,7 @@
 # Verifies the Authenticode signatures of the release binaries and the setup.
 # -Enabled 'true'  : every -Path file must have a Valid signature AND a timestamp, otherwise this throws.
 # -Enabled anything else : prints a loud UNSIGNED warning (GitHub annotation) and passes, so an unconfigured
-#                          Artifact Signing setup still produces the unsigned releases the project ships today.
+#                          SignPath setup still produces the unsigned releases the project ships today.
 param(
     [Parameter(Mandatory = $true)][string]$Enabled,
     [Parameter(Mandatory = $true)][string[]]$Path
@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if ($Enabled -ne 'true') {
-    Write-Host '::warning::Release is UNSIGNED (Artifact Signing not configured)'
+    Write-Host '::warning::Release is UNSIGNED (SignPath not configured)'
     exit 0
 }
 
