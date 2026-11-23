@@ -6,6 +6,8 @@ Windows setup program (no administrator rights needed).
 
 **Not affiliated with WB Games or Turbine.** This is a community project.
 
+[Code signing policy](Docs/code-signing-policy.md) | [Privacy](Docs/privacy.md)
+
 ## What it is
 
 The player runs `DreamWeaveLauncher-Setup.exe` from the GitHub Releases
@@ -40,8 +42,9 @@ DreamWeave.
   and is never distributed.
 - It installs and uninstalls through a normal Inno Setup program. Telemetry, if any is ever added, will be opt-in with a
   published privacy policy.
-- Everything in this repository is under the MIT license. Code signing is
-  planned through SignPath Foundation, with public CI builds.
+- Everything in this repository is under the MIT license. Releases are built
+  in public CI and are to be signed through the SignPath Foundation (application pending; until approved they ship
+  unsigned). See the [Code signing policy](Docs/code-signing-policy.md).
 
 No Asheron's Call logos or artwork are used in this repository.
 
@@ -82,7 +85,7 @@ compiler; install Inno Setup 6.6 or newer locally to run it).
 ## Docs
 
 - [`Docs/release-runbook.md`](Docs/release-runbook.md) - maintainer release procedure, key setup and rotation.
-- [`Docs/code-signing-policy.md`](Docs/code-signing-policy.md) - code signing policy (pending approval).
+- [`Docs/code-signing-policy.md`](Docs/code-signing-policy.md) - code signing policy (SignPath Foundation, application pending).
 - [`Docs/privacy.md`](Docs/privacy.md) - privacy statement.
 
 ## License
