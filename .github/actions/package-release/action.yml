@@ -1,0 +1,128 @@
+name: Package release
+description: >
+  Builds the setup from the staged launcher files and packages the release assets. With sign=true it Authenticode-signs
+  the three binaries BEFORE the setup is built (the setup packs them) and the setup AFTER it is built, then verifies all
+  four signatures. With sign=false nothing is signed and assert-signed.ps1 prints an UNSIGNED warning. Called only by
+  .github/workflows/release.yml, which owns the job-level environment and permissions.
+
+inputs:
+  sign:
+    description: "'true' to sign (Artifact Signing configured), 'false' to ship unsigned"
+    required: true
+  tag:
+    description: Release tag, for example v1.0.0
+    required: true
+  azure-client-id:
+    required: false
+    default: ''
+  azure-tenant-id:
+    required: false
+    default: ''
+  azure-subscription-id:
+    required: false
+    default: ''
+  signing-endpoint:
+    required: false
+    default: ''
+  signing-account:
+    required: false
+    default: ''
+  signing-profile:
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # ---- Pass 1: the three binaries the setup packs. Never any third-party file. ----
+    - name: Azure login (OIDC)
+      if: inputs.sign == 'true'
+      uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - name: Sign launcher binaries (Artifact Signing)
+      if: inputs.sign == 'true'
+      uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+      with:
+        endpoint: ${{ inputs.signing-endpoint }}
+        signing-account-name: ${{ inputs.signing-account }}
+        certificate-profile-name: ${{ inputs.signing-profile }}
+        files: |
+          ${{ github.workspace }}\launcher-bin\DreamWeaveLauncher.exe
+          ${{ github.workspace }}\launcher-bin\Launcher.Core.dll
+          ${{ github.workspace }}\launcher-bin\DreamWeaveDecalLaunch.exe
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-shared-token-cache-credential: true
+        exclude-visual-studio-credential: true
+        exclude-visual-studio-code-credential: true
+        exclude-azure-cli-credential: false
+        exclude-azure-powershell-credential: true
+        exclude-azure-developer-cli-credential: true
+        exclude-interactive-browser-credential: true
+
+    # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
+    - name: Build setup installer
+      shell: pwsh
+      run: ./tools/release/build-setup.ps1 -ExePath launcher-bin/DreamWeaveLauncher.exe -OutDir setup-out
+
+    # ---- Pass 2: the setup itself. Its embedded uninstaller is not signed (see Docs/code-signing-policy.md). ----
+    - name: Sign setup installer (Artifact Signing)
+      if: inputs.sign == 'true'
+      uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+      with:
+        endpoint: ${{ inputs.signing-endpoint }}
+        signing-account-name: ${{ inputs.signing-account }}
+        certificate-profile-name: ${{ inputs.signing-profile }}
+        files: ${{ github.workspace }}\setup-out\DreamWeaveLauncher-Setup.exe
+        file-digest: SHA256
+        timestamp-rfc3161: http://timestamp.acs.microsoft.com
+        timestamp-digest: SHA256
+        exclude-environment-credential: true
+        exclude-workload-identity-credential: true
+        exclude-managed-identity-credential: true
+        exclude-shared-token-cache-credential: true
+        exclude-visual-studio-credential: true
+        exclude-visual-studio-code-credential: true
+        exclude-azure-cli-credential: false
+        exclude-azure-powershell-credential: true
+        exclude-azure-developer-cli-credential: true
+        exclude-interactive-browser-credential: true
+
+    - name: Assert signatures (or warn that the release is unsigned)
+      shell: pwsh
+      env:
+        SIGN: ${{ inputs.sign }}
+      run: |
+        ./tools/release/assert-signed.ps1 -Enabled $env:SIGN -Path `
+          launcher-bin/DreamWeaveLauncher.exe, launcher-bin/Launcher.Core.dll, launcher-bin/DreamWeaveDecalLaunch.exe, setup-out/DreamWeaveLauncher-Setup.exe
+
+    - name: Assert tag equals assembly and setup version
+      shell: pwsh
+      env:
+        TAG: ${{ inputs.tag }}
+      run: |
+        $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup.exe' | Select-Object -First 1
+        if (-not $found) { throw 'No setup exe found in setup-out' }
+        ./tools/release/assert-version.ps1 -Tag $env:TAG -ExePath launcher-bin/DreamWeaveLauncher.exe -SetupPath $found.FullName
+
+    # SHA256SUMS is computed here, after the setup is signed, so it covers the signed file.
+    - name: Package release assets
+      shell: pwsh
+      run: |
+        $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup.exe' | Select-Object -First 1
+        if (-not $found) { throw 'No setup exe found in setup-out' }
+        ./tools/release/package-release.ps1 -SetupPath $found.FullName -OutDir release-assets
+
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: release-assets
+        path: release-assets
+        if-no-files-found: error

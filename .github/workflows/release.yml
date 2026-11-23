@@ -2,6 +2,11 @@ name: release
 
 # Tag push v*.*.* builds the exe and the setup installer and creates a DRAFT GitHub Release (never published by CI).
 # workflow_dispatch is a dry run: it runs every check and builds the assets, but creates no release.
+#
+# Code signing (Azure Artifact Signing) is inert until the repo variable ARTIFACT_SIGNING_ACCOUNT is set; see
+# Docs/release-runbook.md ("Code signing setup") and Docs/code-signing-policy.md. Exactly one of package-unsigned and
+# package-signed runs. Only package-signed uses the GitHub environment `signing` (owner approval per run) and the
+# OIDC token, so an unconfigured repo never needs the environment and keeps producing unsigned releases.
 on:
   push:
     tags: ['v*.*.*']
@@ -18,8 +23,6 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    env:
-      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -38,49 +41,75 @@ jobs:
       - name: Test
         run: dotnet test DreamWeaveLauncher.sln -c Release --no-build
 
+      # Stages exactly the shipped files (never the pdbs) for the package jobs.
       - name: Check build output against installer/shipped-files.txt
         shell: pwsh
-        run: ./tools/release/check-build-output.ps1
-
-      # Inno Setup 6 is preinstalled on the Windows runners; the script logs the exact version it used.
-      - name: Build setup installer
-        shell: pwsh
-        run: ./tools/release/build-setup.ps1 -ExePath $env:EXE_PATH -OutDir setup-out
-
-      - name: Assert tag equals assembly and setup version
-        shell: pwsh
-        run: |
-          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup.exe' | Select-Object -First 1
-          if (-not $found) { throw 'No setup exe found in setup-out' }
-          $setup = $found.FullName
-          ./tools/release/assert-version.ps1 -Tag $env:TAG -ExePath $env:EXE_PATH -SetupPath $setup
-
-      - name: Package release assets
-        shell: pwsh
-        run: |
-          $found = Get-ChildItem setup-out -Filter 'DreamWeaveLauncher-Setup.exe' | Select-Object -First 1
-          if (-not $found) { throw 'No setup exe found in setup-out' }
-          $setup = $found.FullName
-          ./tools/release/package-release.ps1 -SetupPath $setup -OutDir release-assets
-
-      # Code signing is not done in v1: the launcher ships UNSIGNED. Signing is planned through
-      # SignPath Foundation (https://signpath.org/) once the application is approved; see
-      # Docs/code-signing-policy.md. When approved, sign here, BEFORE build-setup.ps1 (the setup
-      # packs the exe, Launcher.Core.dll and DreamWeaveDecalLaunch.exe, so they must already be signed) and so SHA256SUMS covers the signed setup installer. Do not add any manifest-signing key to CI.
-      #
-      # - name: Sign with SignPath
-      #   uses: signpath/github-action-submit-signing-request@<full commit sha>
-      #   with: { ... }
+        run: ./tools/release/check-build-output.ps1 -StageDir launcher-bin
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-assets
-          path: release-assets
+          name: launcher-bin
+          path: launcher-bin
           if-no-files-found: error
 
-  draft-release:
+  package-unsigned:
     needs: build
-    if: github.event_name == 'push'
+    if: vars.ARTIFACT_SIGNING_ACCOUNT == ''
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: launcher-bin
+          path: launcher-bin
+
+      - uses: ./.github/actions/package-release
+        with:
+          sign: 'false'
+          tag: ${{ env.TAG }}
+
+  package-signed:
+    needs: build
+    if: vars.ARTIFACT_SIGNING_ACCOUNT != ''
+    runs-on: windows-latest
+    # The environment `signing` has the owner as required reviewer: every signing run waits for approval, and the
+    # Azure federated credential trusts only this environment's subject.
+    environment: signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: launcher-bin
+          path: launcher-bin
+
+      - uses: ./.github/actions/package-release
+        with:
+          sign: 'true'
+          tag: ${{ env.TAG }}
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          signing-endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          signing-profile: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+
+  draft-release:
+    needs: [package-unsigned, package-signed]
+    # Exactly one package job ran; the other was skipped. A failed or rejected signing run blocks the release.
+    if: github.event_name == 'push' && !failure() && !cancelled()
     runs-on: ubuntu-latest
     permissions:
       contents: write

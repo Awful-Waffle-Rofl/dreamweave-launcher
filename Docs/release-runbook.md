@@ -18,7 +18,7 @@ Commands below use `dotnet run --project tools/ManifestTool -c Release --` as `M
 8. **Verify.** `ManifestTool verify --pub <keyId:X:Y or public key file> --manifest <path to manifest.json>` must print `OK` with the serial you expect.
 9. **Push the manifest.** Commit `manifest.json` and `manifest.json.sig` together to the `manifest` branch and push it. Confirm both raw URLs serve the new bytes (CDN caching can lag a few minutes; the launcher retries once with a cache-bust).
 
-v1 ships unsigned (no Authenticode); see `Docs/code-signing-policy.md`.
+Releases are Authenticode-signed by CI once Artifact Signing is configured (see "Code signing setup" below and `Docs/code-signing-policy.md`). When it is not configured the release is unsigned and the workflow prints an UNSIGNED warning. When it is configured, the signing job waits for your approval in the `signing` environment: approve it in the Actions run after checking the tag.
 
 Launchers built before `downloadPage` existed ignore it; the only way to reach them is to raise `minVersion` (they then show the "download again from the website" banner). Never publish a build of the current code as a bare exe at `launcher.url`: an old launcher would swap it in and start it with `--updated`, which the current launcher rejects and exits silently. See `Docs/manifest-compat.md`.
 
@@ -59,6 +59,23 @@ Use this when the key may be compromised or on a schedule. Keep a second keypair
 4. Generate a fresh backup key and store it offline.
 
 If the signing key is lost with no backup, no manifest can be accepted by existing launchers, and a new launcher build with a new key must be distributed by hand.
+
+## Code signing setup (once)
+
+CI signs with Azure Artifact Signing. Everything here is the owner's one-time work; until step 7 is done the workflow ships unsigned exactly as before. Nothing here is a secret: the six values go in repository VARIABLES, not secrets.
+
+1. **Create the account.** In the Azure portal create an Artifact Signing account (Basic tier) in a region that supports it, and note the account name and the region's endpoint URI (for example `https://eus.codesigning.azure.net/` for East US). The endpoint must match the region of the account and certificate profile.
+2. **Identity validation.** In the account, start identity validation with the Public Trust type (individual or organization, whichever you are) and finish it. Microsoft must approve it before a certificate profile can be created; this can take days.
+3. **Certificate profile.** Create a Public Trust certificate profile from the validated identity and note its name.
+4. **Entra app registration.** Create an app registration (Microsoft Entra ID) with a service principal. Under Certificates and secrets, Federated credentials, add a credential for GitHub Actions with organization `Awful-Waffle-Rofl`, repository `dreamweave-launcher`, entity type Environment, name `signing`; the subject must read `repo:Awful-Waffle-Rofl/dreamweave-launcher:environment:signing`. Create no client secret. Note the application (client) ID, the directory (tenant) ID and the subscription ID.
+5. **Role.** On the Artifact Signing account, Access control (IAM), add the role "Artifact Signing Certificate Profile Signer" (the name the action's README gives at tag v2.0.0) and assign it to the service principal from step 4.
+6. **GitHub environment.** In the repository, Settings, Environments, create `signing`. Add yourself as Required reviewer. Under Deployment branches and tags choose Selected branches and tags and add the tag rule `v*.*.*` (the real releases) and the branch rule `main`. The `main` rule exists only so a workflow_dispatch rehearsal started from `main` is allowed (a dispatch runs on the branch ref, not on a tag); the rehearsal still needs your approval. Drop the `main` rule if you do not want rehearsals to sign.
+7. **Repository variables.** Settings, Secrets and variables, Actions, Variables tab: add `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID` (step 4), `ARTIFACT_SIGNING_ENDPOINT` and `ARTIFACT_SIGNING_ACCOUNT` (step 1) and `ARTIFACT_SIGNING_PROFILE` (step 3). Setting `ARTIFACT_SIGNING_ACCOUNT` is what switches signing on; deleting it switches it off again.
+8. **Rehearse.** Actions, release, Run workflow from `main` with an existing tag name such as `v1.0.0`. The `package-signed` job appears and waits; approve it. When it finishes, open the "Assert signatures" step: it must list all four files as Valid and timestamped. Download the `release-assets` artifact and check the setup's Properties, Digital Signatures tab.
+
+What this does not cover: the uninstaller that Inno Setup embeds in the setup stays unsigned. It is written on the player's PC without the downloaded-from-the-internet mark, so SmartScreen does not check it, and signing it would need Inno's SignTool hook plus the Artifact Signing client library. See `Docs/code-signing-policy.md`.
+
+If signing fails in a real release run, no draft release is created (the failure blocks it). Fix the cause and re-run the failed jobs. Do not delete `ARTIFACT_SIGNING_ACCOUNT` just to get a release out unless you intend to ship unsigned.
 
 ## Never
 

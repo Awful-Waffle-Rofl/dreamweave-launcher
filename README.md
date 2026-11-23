@@ -40,8 +40,9 @@ DreamWeave.
   and is never distributed.
 - It installs and uninstalls through a normal Inno Setup program. Telemetry, if any is ever added, will be opt-in with a
   published privacy policy.
-- Everything in this repository is under the MIT license. Code signing is
-  planned through SignPath Foundation, with public CI builds.
+- Everything in this repository is under the MIT license. Releases are built
+  in public CI and signed with Azure Artifact Signing once the maintainer has set it up (until then they ship
+  unsigned); a SignPath Foundation application is pending. See `Docs/code-signing-policy.md`.
 
 No Asheron's Call logos or artwork are used in this repository.
 

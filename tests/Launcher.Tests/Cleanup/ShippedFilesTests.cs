@@ -143,6 +143,52 @@ namespace DreamWeave.Launcher.Tests.Cleanup
         }
 
         [TestMethod]
+        public void ReleaseSigning_SignsBinariesBeforeTheSetupIsBuilt_AndTheSetupBeforePackaging()
+        {
+            string a = ReadRepoFile(".github", "actions", "package-release", "action.yml").Replace("\r\n", "\n");
+            int pass1 = a.IndexOf("name: Sign launcher binaries", StringComparison.Ordinal);
+            int build = a.IndexOf("./tools/release/build-setup.ps1", StringComparison.Ordinal);
+            int pass2 = a.IndexOf("name: Sign setup installer", StringComparison.Ordinal);
+            int verify = a.IndexOf("./tools/release/assert-signed.ps1", StringComparison.Ordinal);
+            int version = a.IndexOf("./tools/release/assert-version.ps1", StringComparison.Ordinal);
+            int package = a.IndexOf("./tools/release/package-release.ps1", StringComparison.Ordinal);
+            Assert.IsTrue(pass1 >= 0 && build >= 0 && pass2 >= 0 && verify >= 0 && version >= 0 && package >= 0, "a signing or packaging step is missing");
+            Assert.IsTrue(pass1 < build, "the binaries must be signed BEFORE build-setup.ps1 packs them");
+            Assert.IsTrue(build < pass2, "the setup is signed after it is built");
+            Assert.IsTrue(pass2 < verify && verify < version && version < package, "the setup must be signed and verified before assert-version and package-release (SHA256SUMS covers the signed setup)");
+
+            string pass1Block = a.Substring(pass1, build - pass1);
+            foreach (string name in new[] { "DreamWeaveLauncher.exe", "Launcher.Core.dll", "DreamWeaveDecalLaunch.exe" })
+            {
+                StringAssert.Contains(pass1Block, "launcher-bin\\" + name);
+            }
+
+            Assert.IsFalse(a.Contains("Newtonsoft"), "third-party files must never be signed or named in the signing steps");
+            Assert.IsFalse(pass1Block.Contains("files-folder"), "sign the three named files, not a folder");
+            StringAssert.Contains(a.Substring(pass2, verify - pass2), "setup-out" + "\\" + "DreamWeaveLauncher-Setup.exe");
+            Assert.AreEqual(3, Regex.Matches(a, "if: inputs[.]sign == 'true'").Count, "azure login and both signing steps are gated on inputs.sign");
+        }
+
+        [TestMethod]
+        public void ReleaseWorkflow_UsesTheSigningEnvironmentOnlyOnTheSignedJob()
+        {
+            string yml = ReadRepoFile(".github", "workflows", "release.yml").Replace("\r\n", "\n");
+            int unsigned = yml.IndexOf("  package-unsigned:", StringComparison.Ordinal);
+            int signed = yml.IndexOf("  package-signed:", StringComparison.Ordinal);
+            int draft = yml.IndexOf("  draft-release:", StringComparison.Ordinal);
+            Assert.IsTrue(unsigned > 0 && signed > unsigned && draft > signed, "expected build, package-unsigned, package-signed, draft-release in that order");
+            string unsignedJob = yml.Substring(unsigned, signed - unsigned);
+            string signedJob = yml.Substring(signed, draft - signed);
+            StringAssert.Contains(unsignedJob, "vars.ARTIFACT_SIGNING_ACCOUNT == ''");
+            StringAssert.Contains(signedJob, "vars.ARTIFACT_SIGNING_ACCOUNT != ''");
+            StringAssert.Contains(signedJob, "environment: signing");
+            StringAssert.Contains(signedJob, "id-token: write");
+            Assert.IsFalse(unsignedJob.Contains("environment:"), "the unsigned job must not need the signing environment");
+            Assert.IsFalse(unsignedJob.Contains("id-token"), "the unsigned job must not get an OIDC token");
+            Assert.IsFalse(yml.Substring(0, unsigned).Contains("id-token"), "the build job must not get an OIDC token");
+        }
+
+        [TestMethod]
         public void BuildOutput_MatchesTheList_WhenTheLauncherIsBuilt()
         {
             // The test assembly sits in tests/Launcher.Tests/bin/<Configuration>/<tfm>; the launcher in
