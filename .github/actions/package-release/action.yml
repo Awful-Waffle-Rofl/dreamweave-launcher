@@ -57,6 +57,7 @@ runs:
         file-digest: SHA256
         timestamp-rfc3161: http://timestamp.acs.microsoft.com
         timestamp-digest: SHA256
+        cache-dependencies: 'false'
         exclude-environment-credential: true
         exclude-workload-identity-credential: true
         exclude-managed-identity-credential: true
@@ -85,6 +86,7 @@ runs:
         file-digest: SHA256
         timestamp-rfc3161: http://timestamp.acs.microsoft.com
         timestamp-digest: SHA256
+        cache-dependencies: 'false'
         exclude-environment-credential: true
         exclude-workload-identity-credential: true
         exclude-managed-identity-credential: true

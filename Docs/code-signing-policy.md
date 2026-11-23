@@ -14,7 +14,7 @@ Every release binary is built by this repository's GitHub Actions workflow (`.gi
 
 ## Who approves
 
-The repository owner (Awful-Waffle-Rofl) is committer, reviewer and release approver. Signing runs in the `package-signed` job, which uses the GitHub environment `signing`. That environment lists the owner as its required reviewer, so each signing request is approved manually by the owner after checking that the run came from the expected tag. The environment only accepts `v*.*.*` tags (and `main` for rehearsal runs), and the Azure federated credential trusts only that environment, so no other workflow, branch or fork can sign. When more maintainers join, they will be listed here with their roles.
+The repository owner (Awful-Waffle-Rofl) is committer, reviewer and release approver. Signing runs in the `package-signed` job, which uses the GitHub environment `signing`. That environment lists the owner as its required reviewer, so each signing request is approved manually by the owner after checking that the run came from the expected tag. A tag push is first checked, in a `verify-tag` job that runs before the approval prompt can appear, to point at a commit already on `main`; a tag that is not on `main` fails there and never reaches the environment. The control is the owner-configured rules on the `signing` environment (required reviewer, and deployment only from `main` or `v*.*.*` tags) together with the Azure federated credential, which trusts only that environment. Only a run that targets the `signing` environment, from `main` or from a `v*.*.*` tag already on `main`, and that the owner approves, can sign. When more maintainers join, they will be listed here with their roles.
 
 ## What is signed
 

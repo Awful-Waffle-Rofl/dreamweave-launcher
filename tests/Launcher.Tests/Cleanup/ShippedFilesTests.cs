@@ -163,6 +163,13 @@ namespace DreamWeave.Launcher.Tests.Cleanup
                 StringAssert.Contains(pass1Block, "launcher-bin\\" + name);
             }
 
+            int verifyEnd = a.IndexOf("name: Assert tag equals", StringComparison.Ordinal);
+            string verifyBlock = a.Substring(verify, verifyEnd - verify);
+            foreach (string path in new[] { "launcher-bin/DreamWeaveLauncher.exe", "launcher-bin/Launcher.Core.dll", "launcher-bin/DreamWeaveDecalLaunch.exe", "setup-out/DreamWeaveLauncher-Setup.exe" })
+            {
+                StringAssert.Contains(verifyBlock, path, "assert-signed.ps1 must be given every signed file");
+            }
+
             Assert.IsFalse(a.Contains("Newtonsoft"), "third-party files must never be signed or named in the signing steps");
             Assert.IsFalse(pass1Block.Contains("files-folder"), "sign the three named files, not a folder");
             StringAssert.Contains(a.Substring(pass2, verify - pass2), "setup-out" + "\\" + "DreamWeaveLauncher-Setup.exe");
@@ -183,9 +190,27 @@ namespace DreamWeave.Launcher.Tests.Cleanup
             StringAssert.Contains(signedJob, "vars.ARTIFACT_SIGNING_ACCOUNT != ''");
             StringAssert.Contains(signedJob, "environment: signing");
             StringAssert.Contains(signedJob, "id-token: write");
+            StringAssert.Contains(signedJob, "sign: 'true'");
+            StringAssert.Contains(unsignedJob, "sign: 'false'");
+            Assert.IsFalse(unsignedJob.Contains("sign: 'true'"), "the unsigned job must not sign");
+            Assert.IsFalse(signedJob.Contains("sign: 'false'"), "the signed job must sign");
             Assert.IsFalse(unsignedJob.Contains("environment:"), "the unsigned job must not need the signing environment");
-            Assert.IsFalse(unsignedJob.Contains("id-token"), "the unsigned job must not get an OIDC token");
-            Assert.IsFalse(yml.Substring(0, unsigned).Contains("id-token"), "the build job must not get an OIDC token");
+            Assert.AreEqual(1, Regex.Matches(yml, "id-token").Count, "only the package-signed job may have id-token");
+            Assert.IsTrue(yml.IndexOf("id-token", StringComparison.Ordinal) > signed && yml.IndexOf("id-token", StringComparison.Ordinal) < draft, "id-token must sit inside the package-signed job");
+
+            // The tag must be on main before any signing approval prompt can appear.
+            int verify = yml.IndexOf("  verify-tag:", StringComparison.Ordinal);
+            Assert.IsTrue(verify > 0 && verify < unsigned, "verify-tag job missing or misplaced");
+            StringAssert.Contains(yml.Substring(verify, unsigned - verify), "merge-base --is-ancestor");
+            StringAssert.Contains(signedJob, "needs: [build, verify-tag]");
+            StringAssert.Contains(unsignedJob, "needs: [build, verify-tag]");
+
+            // draft-release needs an explicit success from a package job.
+            string draftJob = yml.Substring(draft);
+            StringAssert.Contains(draftJob, "needs: [package-unsigned, package-signed]");
+            StringAssert.Contains(draftJob, "needs.package-signed.result == 'success'");
+            StringAssert.Contains(draftJob, "needs.package-unsigned.result == 'success'");
+            Assert.IsFalse(draftJob.Contains("!failure()"), "draft-release must gate on an explicit success, not on !failure()");
         }
 
         [TestMethod]
